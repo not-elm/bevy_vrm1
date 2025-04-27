@@ -3,6 +3,7 @@ use crate::vrm::Vrm;
 use crate::vrma::retarget::CurrentRetargeting;
 use crate::vrma::{RetargetSource, Vrma, VrmaEntity};
 use bevy::app::{App, Plugin};
+use bevy::log::info;
 use bevy::prelude::{Children, Commands, Entity, Event, Query, Reflect, Trigger, With, Without};
 
 /// The trigger event to play the Vrma's animation.
@@ -86,9 +87,10 @@ fn observe_stop_animation(
     vrma: Query<Entity, With<Vrma>>,
     entities: Query<(Option<&Children>, Option<&RetargetSource>), Without<Vrm>>,
 ) {
-    let Ok(children) = children.get(trigger.observer()) else {
+    let Ok(children) = children.get(trigger.target()) else {
         return;
     };
+
     for child in children {
         let Ok(vrma_entity) = vrma.get(*child) else {
             continue;

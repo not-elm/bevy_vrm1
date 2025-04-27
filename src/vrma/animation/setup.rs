@@ -1,8 +1,7 @@
 use crate::vrma::animation::{AnimationPlayerEntityTo, VrmAnimationGraph};
 use bevy::app::{App, Update};
-use bevy::hierarchy::Parent;
 use bevy::prelude::{
-    Added, AnimationGraphHandle, AnimationPlayer, Entity, ParallelCommands, Plugin, Query,
+    Added, AnimationGraphHandle, AnimationPlayer, ChildOf, Entity, ParallelCommands, Plugin, Query,
 };
 
 /// At the timing when the spawn of the Vrma's animation player is completed,
@@ -23,7 +22,7 @@ pub(crate) fn setup_vrma_player(
     par_commands: ParallelCommands,
     vrma: Query<(Entity, &VrmAnimationGraph)>,
     players: Query<Entity, Added<AnimationPlayer>>,
-    parents: Query<&Parent>,
+    parents: Query<&ChildOf>,
 ) {
     players.par_iter().for_each(|player_entity| {
         let mut entity = player_entity;
@@ -40,8 +39,8 @@ pub(crate) fn setup_vrma_player(
                 break;
             }
 
-            if let Ok(parent) = parents.get(entity) {
-                entity = parent.get();
+            if let Ok(child_of) = parents.get(entity) {
+                entity = child_of.parent();
             } else {
                 break;
             }
@@ -56,7 +55,7 @@ mod tests {
     use crate::vrma::animation::{AnimationPlayerEntityTo, VrmAnimationGraph};
 
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::prelude::{AnimationPlayer, BuildChildren, Commands};
+    use bevy::prelude::{AnimationPlayer, Commands};
 
     #[test]
     fn setup_animation_player() -> TestResult {
@@ -70,7 +69,7 @@ mod tests {
         assert!(app
             .world_mut()
             .query::<&AnimationPlayerEntityTo>()
-            .get_single(app.world_mut())
+            .single(app.world_mut())
             .is_ok());
         Ok(())
     }

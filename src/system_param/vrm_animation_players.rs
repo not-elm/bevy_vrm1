@@ -81,14 +81,14 @@ mod tests {
 
         app.world_mut().run_system_once(
             |mut players: VrmaPlayer, entity: Query<Entity, With<AnimationPlayerEntityTo>>| {
-                players.play(VrmaEntity(entity.single()), false);
+                players.play(VrmaEntity(entity.single().unwrap()), false);
             },
         )?;
         app.update();
 
         app.world_mut()
             .run_system_once(|target: Query<&AnimationPlayer, With<Target>>| {
-                assert!(!target.single().all_finished());
+                assert!(!target.single().unwrap().all_finished());
             })?;
         success!()
     }
@@ -111,21 +111,21 @@ mod tests {
 
         app.world_mut().run_system_once(
             |mut players: VrmaPlayer, entity: Query<Entity, With<AnimationPlayerEntityTo>>| {
-                players.play(VrmaEntity(entity.single()), false);
+                players.play(VrmaEntity(entity.single().unwrap()), false);
             },
         )?;
         app.update();
 
         app.world_mut().run_system_once(
             |mut players: VrmaPlayer, entity: Query<Entity, With<AnimationPlayerEntityTo>>| {
-                players.stop(VrmaEntity(entity.single()));
+                players.stop(VrmaEntity(entity.single().unwrap()));
             },
         )?;
         app.update();
 
         app.world_mut()
             .run_system_once(|target: Query<&AnimationPlayer, With<Target>>| {
-                assert!(target.single().all_finished());
+                assert!(target.single().unwrap().all_finished());
             })?;
         success!()
     }

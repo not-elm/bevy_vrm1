@@ -42,7 +42,7 @@ fn observe_play_animation(
     vrma: Query<Entity, With<Vrma>>,
     entities: Query<(Option<&Children>, Option<&RetargetSource>), Without<Vrm>>,
 ) {
-    let Ok(children) = children.get(trigger.entity()) else {
+    let Ok(children) = children.get(trigger.target()) else {
         return;
     };
     for child in children.iter() {
@@ -86,9 +86,10 @@ fn observe_stop_animation(
     vrma: Query<Entity, With<Vrma>>,
     entities: Query<(Option<&Children>, Option<&RetargetSource>), Without<Vrm>>,
 ) {
-    let Ok(children) = children.get(trigger.entity()) else {
+    let Ok(children) = children.get(trigger.target()) else {
         return;
     };
+
     for child in children {
         let Ok(vrma_entity) = vrma.get(*child) else {
             continue;
@@ -96,7 +97,7 @@ fn observe_stop_animation(
         vrma_player.stop(VrmaEntity(vrma_entity));
         foreach_children(
             &mut commands,
-            trigger.entity(),
+            trigger.observer(),
             &entities,
             &|commands, entity, retargeting_marker| {
                 if retargeting_marker.is_some() {
@@ -133,10 +134,7 @@ mod tests {
     use crate::vrma::animation::VrmAnimationGraph;
     use crate::vrma::{Vrma, VrmaEntity};
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::hierarchy::ChildBuild;
-    use bevy::prelude::{
-        AnimationClip, AnimationPlayer, BuildChildren, Commands, Component, Entity, Query, With,
-    };
+    use bevy::prelude::*;
     use bevy::utils::default;
 
     #[derive(Component)]
@@ -174,8 +172,8 @@ mod tests {
             |mut commands: Commands,
              vrm: Query<Entity, With<Vrm>>,
              vrma: Query<Entity, With<Vrma>>| {
-                commands.entity(vrm.single()).trigger(PlayVrma {
-                    vrma: VrmaEntity(vrma.single()),
+                commands.entity(vrm.single().unwrap()).trigger(PlayVrma {
+                    vrma: VrmaEntity(vrma.single().unwrap()),
                     repeat: false,
                 });
             },
@@ -185,7 +183,7 @@ mod tests {
         assert!(!app
             .world_mut()
             .query::<&AnimationPlayer>()
-            .single(app.world())
+            .single(app.world())?
             .all_finished());
         Ok(())
     }
@@ -222,8 +220,8 @@ mod tests {
             |mut commands: Commands,
              vrm: Query<Entity, With<Vrm>>,
              vrma: Query<Entity, With<Vrma1>>| {
-                commands.entity(vrm.single()).trigger(PlayVrma {
-                    vrma: VrmaEntity(vrma.single()),
+                commands.entity(vrm.single().unwrap()).trigger(PlayVrma {
+                    vrma: VrmaEntity(vrma.single().unwrap()),
                     repeat: false,
                 });
             },
@@ -232,8 +230,8 @@ mod tests {
             |mut commands: Commands,
              vrm: Query<Entity, With<Vrm>>,
              vrma: Query<Entity, With<Vrma2>>| {
-                commands.entity(vrm.single()).trigger(PlayVrma {
-                    vrma: VrmaEntity(vrma.single()),
+                commands.entity(vrm.single().unwrap()).trigger(PlayVrma {
+                    vrma: VrmaEntity(vrma.single().unwrap()),
                     repeat: false,
                 });
             },
@@ -243,12 +241,12 @@ mod tests {
         assert!(app
             .world_mut()
             .query_filtered::<&AnimationPlayer, With<AnimationPlayer1>>()
-            .single(app.world())
+            .single(app.world())?
             .all_finished());
         assert!(!app
             .world_mut()
             .query_filtered::<&AnimationPlayer, With<AnimationPlayer2>>()
-            .single(app.world())
+            .single(app.world())?
             .all_finished());
         Ok(())
     }
@@ -274,15 +272,15 @@ mod tests {
             |mut commands: Commands,
              vrm: Query<Entity, With<Vrm>>,
              vrma: Query<Entity, With<Vrma>>| {
-                commands.entity(vrm.single()).trigger(PlayVrma {
-                    vrma: VrmaEntity(vrma.single()),
+                commands.entity(vrm.single().unwrap()).trigger(PlayVrma {
+                    vrma: VrmaEntity(vrma.single().unwrap()),
                     repeat: false,
                 });
             },
         )?;
         app.world_mut().run_system_once(
             |mut commands: Commands, vrm: Query<Entity, With<Vrm>>| {
-                commands.entity(vrm.single()).trigger(StopVrma);
+                commands.entity(vrm.single().unwrap()).trigger(StopVrma);
             },
         )?;
         app.update();
@@ -290,7 +288,7 @@ mod tests {
         assert!(app
             .world_mut()
             .query_filtered::<&AnimationPlayer, With<AnimationPlayer1>>()
-            .single(app.world())
+            .single(app.world())?
             .all_finished());
         Ok(())
     }

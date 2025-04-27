@@ -5,12 +5,8 @@ use crate::vrma::retarget::{CurrentRetargeting, RetargetBindingSystemSet};
 use crate::vrma::spawn::VrmaExpressionNames;
 use crate::vrma::{RetargetSource, RetargetTo};
 use bevy::app::{App, Update};
-use bevy::hierarchy::Children;
 use bevy::log::debug;
-use bevy::prelude::{
-    Added, Changed, Commands, Component, Entity, IntoSystemConfigs, MorphWeights, Plugin, Query,
-    Reflect, Transform, With,
-};
+use bevy::prelude::*;
 
 pub struct VrmaRetargetExpressionsPlugin;
 

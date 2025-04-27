@@ -3,10 +3,9 @@ use crate::vrm::extensions::VrmExtensions;
 use crate::vrm::VrmExpression;
 use bevy::app::Plugin;
 use bevy::asset::{Assets, Handle};
-use bevy::core::Name;
 use bevy::gltf::GltfNode;
-use bevy::prelude::{Component, Deref, Reflect};
-use bevy::utils::HashMap;
+use bevy::platform::collections::HashMap;
+use bevy::prelude::*;
 
 #[derive(Reflect, Debug, Clone)]
 pub struct ExpressionNode {

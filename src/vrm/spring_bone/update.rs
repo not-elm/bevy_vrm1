@@ -2,9 +2,7 @@ use crate::vrm::extensions::vrmc_spring_bone::ColliderShape;
 use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
 use bevy::app::{App, PostUpdate};
 use bevy::math::Vec3;
-use bevy::prelude::{
-    Entity, GlobalTransform, Parent, Plugin, Quat, Query, Res, Transform, Without,
-};
+use bevy::prelude::*;
 use bevy::time::Time;
 
 pub struct SpringBoneUpdatePlugin;
@@ -20,7 +18,7 @@ impl Plugin for SpringBoneUpdatePlugin {
 
 fn update_spring_bones(
     mut transforms: Query<(&mut Transform, &mut GlobalTransform)>,
-    mut joints: Query<(&Parent, &mut SpringJointState, &SpringJointProps), Without<SpringRoot>>,
+    mut joints: Query<(&ChildOf, &mut SpringJointState, &SpringJointProps), Without<SpringRoot>>,
     spring_roots: Query<&SpringRoot>,
     colliders: Query<&ColliderShape>,
     time: Res<Time>,
@@ -28,11 +26,11 @@ fn update_spring_bones(
     let delta_time = time.delta_secs();
     for spring_root in spring_roots.iter() {
         for joint in spring_root.joints.iter().copied() {
-            let Ok((parent, mut state, props)) = joints.get_mut(joint) else {
+            let Ok((child_of, mut state, props)) = joints.get_mut(joint) else {
                 continue;
             };
             let parent_gtf = transforms
-                .get(parent.get())
+                .get(child_of.parent())
                 .map(|(_, gtf)| *gtf)
                 .unwrap_or_default();
             let Ok(joint_global_pos) = transforms.get(joint).map(|(_, gtf)| gtf.translation())

@@ -1,11 +1,10 @@
 use bevy::prelude::*;
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_vrma::vrm::loader::VrmHandle;
 use bevy_vrma::vrm::VrmPlugin;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, WorldInspectorPlugin::default(), VrmPlugin))
+        .add_plugins((DefaultPlugins, VrmPlugin))
         .add_systems(Startup, (spawn_camera, spawn_vrm))
         .run();
 }

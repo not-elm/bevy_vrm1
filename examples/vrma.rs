@@ -1,5 +1,5 @@
+use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_vrma::vrm::loader::VrmHandle;
 use bevy_vrma::vrm::{Vrm, VrmPlugin};
 use bevy_vrma::vrma::animation::play::PlayVrma;
@@ -8,12 +8,7 @@ use bevy_vrma::vrma::{VrmaDuration, VrmaEntity, VrmaHandle, VrmaPlugin};
 
 fn main() {
     App::new()
-        .add_plugins((
-            DefaultPlugins,
-            WorldInspectorPlugin::default(),
-            VrmPlugin,
-            VrmaPlugin,
-        ))
+        .add_plugins((DefaultPlugins, VrmPlugin, VrmaPlugin))
         .add_event::<ChangeAnimation>()
         .add_systems(Startup, (spawn_camera, spawn_vrm))
         .add_systems(
@@ -52,7 +47,7 @@ fn spawn_vrm(
     asset_server: Res<AssetServer>,
 ) {
     let mut animations = Animations::default();
-    let mut vrma = |index: usize, cmd: &mut ChildBuilder| {
+    let mut vrma = |index: usize, cmd: &mut RelatedSpawnerCommands<ChildOf>| {
         let entity = cmd
             .spawn(VrmaHandle(
                 asset_server.load(format!("vrma/VRMA_0{index}.vrma")),
@@ -85,7 +80,10 @@ fn change_animation(
     let Ok(duration) = vrma.get(current) else {
         return;
     };
-    commands.entity(vrm.single()).trigger(PlayVrma {
+    let Ok(vrm_entity) = vrm.single() else {
+        return;
+    };
+    commands.entity(vrm_entity).trigger(PlayVrma {
         vrma: VrmaEntity(current),
         repeat: true,
     });

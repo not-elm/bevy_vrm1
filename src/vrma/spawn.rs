@@ -7,13 +7,9 @@ use crate::vrma::{RetargetTo, Vrma, VrmaDuration, VrmaHandle, VrmaPath};
 use bevy::animation::AnimationClip;
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::Assets;
-use bevy::core::Name;
 use bevy::gltf::GltfNode;
 use bevy::log::error;
-use bevy::prelude::{
-    AnimationGraph, Commands, Component, Deref, Entity, GlobalTransform, Handle, Parent, Query,
-    Reflect, Res, ResMut, With,
-};
+use bevy::prelude::*;
 use bevy::scene::SceneRoot;
 use std::time::Duration;
 
@@ -52,12 +48,12 @@ fn spawn_vrma(
     vrma_assets: Res<Assets<VrmaAsset>>,
     node_assets: Res<Assets<GltfNode>>,
     clip_assets: Res<Assets<AnimationClip>>,
-    vrma_handles: Query<(Entity, &VrmaHandle, &Parent)>,
+    vrma_handles: Query<(Entity, &VrmaHandle, &ChildOf)>,
     complements: Query<Entity, With<HumanoidBonesAttached>>,
     global_transform: Query<&GlobalTransform>,
 ) {
-    for (handle_entity, handle, parent) in vrma_handles.iter() {
-        let vrm_entity = parent.get();
+    for (handle_entity, handle, child_of) in vrma_handles.iter() {
+        let vrm_entity = child_of.parent();
         if complements.get(vrm_entity).is_err() {
             continue;
         }
@@ -90,7 +86,7 @@ fn spawn_vrma(
         commands.entity(handle_entity).insert((
             Vrma,
             Name::new(name),
-            RetargetTo(parent.get()),
+            RetargetTo(child_of.parent()),
             SceneRoot(scene_root),
             VrmaDuration(obtain_vrma_duration(&clip_assets, &vrma.gltf.animations)),
             VrmaPath(vrma_path),

@@ -4,11 +4,10 @@ use crate::vrm::extensions::vrmc_spring_bone::{
 use crate::vrm::spring_bone::SpringJointProps;
 use bevy::app::App;
 use bevy::asset::{Assets, Handle};
-use bevy::core::Name;
 use bevy::gltf::GltfNode;
 use bevy::math::Vec3;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy::utils::HashMap;
 
 pub struct SpringBoneRegistryPlugin;
 

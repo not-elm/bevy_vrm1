@@ -175,7 +175,7 @@ mod tests {
         assert!(app
             .world_mut()
             .query::<&RetargetedHumanBones>()
-            .get_single(app.world())
+            .single(app.world())
             .is_ok());
         Ok(())
     }

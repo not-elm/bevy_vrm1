@@ -3,10 +3,9 @@ use crate::vrm::extensions::VrmNode;
 use crate::vrm::{BoneRestGlobalTransform, BoneRestTransform, VrmBone, VrmHipsBoneTo};
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Assets, Handle};
-use bevy::core::Name;
 use bevy::gltf::GltfNode;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy::utils::HashMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Reflect, Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]

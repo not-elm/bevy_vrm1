@@ -1,5 +1,5 @@
 use crate::vrm::extensions::VrmNode;
-use bevy::utils::HashMap;
+use bevy::platform::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]

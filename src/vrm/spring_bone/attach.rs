@@ -196,10 +196,9 @@ mod tests {
     };
     use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
     use bevy::app::App;
-    use bevy::core::Name;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::math::Vec3;
-    use bevy::prelude::{BuildChildren, Commands, Entity, Transform};
+    use bevy::prelude::*;
     use bevy::utils::default;
 
     #[test]
@@ -351,7 +350,7 @@ mod tests {
         assert!(app
             .world_mut()
             .query::<&AttachedJointProps>()
-            .get_single(app.world())
+            .single(app.world())
             .is_ok());
 
         Ok(())
@@ -366,7 +365,7 @@ mod tests {
         assert!(app
             .world_mut()
             .query::<&AttachedColliderShapes>()
-            .get_single(app.world())
+            .single(app.world())
             .is_ok());
 
         Ok(())
@@ -381,7 +380,7 @@ mod tests {
         assert!(app
             .world_mut()
             .query::<&AttachedSpringRoots>()
-            .get_single(app.world())
+            .single(app.world())
             .is_ok());
 
         Ok(())

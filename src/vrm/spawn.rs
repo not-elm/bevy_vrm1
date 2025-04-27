@@ -6,10 +6,9 @@ use crate::vrm::spring_bone::registry::*;
 use crate::vrm::{Vrm, VrmPath};
 use bevy::app::{App, Update};
 use bevy::asset::Assets;
-use bevy::core::Name;
 use bevy::gltf::GltfNode;
 use bevy::log::error;
-use bevy::prelude::{Commands, Entity, Plugin, Query, Res};
+use bevy::prelude::*;
 use bevy::scene::SceneRoot;
 
 pub struct VrmSpawnPlugin;

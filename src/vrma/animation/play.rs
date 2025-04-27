@@ -3,7 +3,6 @@ use crate::vrm::Vrm;
 use crate::vrma::retarget::CurrentRetargeting;
 use crate::vrma::{RetargetSource, Vrma, VrmaEntity};
 use bevy::app::{App, Plugin};
-use bevy::log::info;
 use bevy::prelude::{Children, Commands, Entity, Event, Query, Reflect, Trigger, With, Without};
 
 /// The trigger event to play the Vrma's animation.

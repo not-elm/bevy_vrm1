@@ -1,14 +1,10 @@
 use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, HumanoidBonesAttached};
 use crate::vrm::VrmExpression;
 use crate::vrma::animation::VrmAnimationGraph;
-use crate::vrma::extensions::VrmaExtensions;
+use crate::vrma::gltf::extensions::VrmaExtensions;
 use crate::vrma::loader::VrmaAsset;
 use crate::vrma::{RetargetTo, Vrma, VrmaDuration, VrmaHandle, VrmaPath};
-use bevy::animation::AnimationClip;
-use bevy::app::{App, Plugin, Update};
-use bevy::asset::Assets;
 use bevy::gltf::GltfNode;
-use bevy::log::error;
 use bevy::prelude::*;
 use bevy::scene::SceneRoot;
 use std::time::Duration;
@@ -41,7 +37,6 @@ impl VrmaExpressionNames {
         )
     }
 }
-
 fn spawn_vrma(
     mut commands: Commands,
     mut animation_graphs: ResMut<Assets<AnimationGraph>>,
@@ -72,13 +67,15 @@ fn spawn_vrma(
         commands.entity(handle_entity).remove::<VrmaHandle>();
 
         let Some(scene_root) = vrma.gltf.scenes.first().cloned() else {
+            #[cfg(feature = "log")]
             error!("[VRMA] Not found vrma scene in {name}");
             continue;
         };
         let extensions = match VrmaExtensions::from_gltf(&vrma.gltf) {
             Ok(extensions) => extensions,
-            Err(e) => {
-                error!("[VRMA] Not found vrma extensions in {name}:\n{e}");
+            Err(_e) => {
+                #[cfg(feature = "log")]
+                error!("[VRMA] Not found vrma extensions in {name}:\n{_e}");
                 continue;
             }
         };

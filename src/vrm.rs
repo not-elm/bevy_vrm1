@@ -1,12 +1,12 @@
 pub mod expressions;
-pub mod extensions;
+pub mod gltf;
 pub mod humanoid_bone;
 pub mod loader;
+mod mtoon;
 mod spawn;
 mod spring_bone;
 
 use crate::new_type;
-use crate::vrm::expressions::VrmExpressionPlugin;
 use crate::vrm::humanoid_bone::VrmHumanoidBonePlugin;
 use crate::vrm::loader::{VrmAsset, VrmLoaderPlugin};
 use crate::vrm::spawn::VrmSpawnPlugin;
@@ -14,6 +14,9 @@ use crate::vrm::spring_bone::VrmSpringBonePlugin;
 use bevy::app::{App, Plugin};
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
+use bevy_mod_outline::OutlinePlugin;
+use expressions::VrmExpressionPlugin;
+use mtoon::MtoonMaterialPlugin;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -81,6 +84,8 @@ impl Plugin for VrmPlugin {
                 VrmSpringBonePlugin,
                 VrmHumanoidBonePlugin,
                 VrmExpressionPlugin,
+                MtoonMaterialPlugin,
+                OutlinePlugin,
             ));
     }
 }

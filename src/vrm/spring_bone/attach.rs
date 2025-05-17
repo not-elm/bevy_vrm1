@@ -185,7 +185,7 @@ fn init_spring_joint_states(
 mod tests {
     use crate::success;
     use crate::tests::{test_app, TestResult};
-    use crate::vrm::extensions::vrmc_spring_bone::ColliderShape;
+    use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
     use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
     use crate::vrm::spring_bone::attach::{
         attach_collider_shapes, attach_joint_props, attach_spring_roots, init_spring_joint_states,

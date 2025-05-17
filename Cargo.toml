@@ -1,5 +1,5 @@
 [package]
-name = "bevy_vrma"
+name = "bevy_vrm1"
 version = "0.1.0"
 edition = "2021"
 authors = ["notelm <elmprograminfo@gmail.com>"]
@@ -17,14 +17,18 @@ bevy = { version = "0.16", default-features = false, features = [
     "bevy_asset",
     "bevy_gltf",
     "animation",
-    "bevy_log",
+    "bevy_log"
 ] }
+bevy_mod_outline = "0.10.0"
 serde = "1"
 serde_json = "1"
 anyhow = "1"
+bitflags = { version = "2.9" }
+nonmax = "0.5.5"
 
 [dev-dependencies]
 bevy = { version = "0.16.0" }
+bevy_panorbit_camera = "0.26.0"
 
 [lints.clippy]
 type_complexity = "allow"
@@ -34,6 +38,12 @@ undocumented_unsafe_blocks = "warn"
 redundant_else = "warn"
 match_same_arms = "warn"
 semicolon_if_nothing_returned = "warn"
+
+[features]
+default = []
+reflect = []
+develop = []
+log = ["bevy/bevy_log"]
 
 #[lints.rust]
 #missing_docs = "warn"

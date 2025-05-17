@@ -5,7 +5,6 @@ use crate::vrma::retarget::{CurrentRetargeting, RetargetBindingSystemSet};
 use crate::vrma::spawn::VrmaExpressionNames;
 use crate::vrma::{RetargetSource, RetargetTo};
 use bevy::app::{App, Update};
-use bevy::log::debug;
 use bevy::prelude::*;
 
 pub struct VrmaRetargetExpressionsPlugin;
@@ -50,11 +49,17 @@ fn retarget_expressions_to_mascot(
             let Some(vrma_expression_entity) =
                 searcher.find_from_name(vrma_entity, expression_name)
             else {
-                debug!("[Expressions] expression entity not found: {expression_name}");
+                #[cfg(feature = "log")]
+                {
+                    debug!("[Expressions] expression entity not found: {expression_name}");
+                }
                 continue;
             };
             let Some(nodes) = vrm_expressions.get(expression_name) else {
-                debug!("[Expressions] expression nodes not found: {expression_name}");
+                #[cfg(feature = "log")]
+                {
+                    debug!("[Expressions] expression nodes not found: {expression_name}");
+                }
                 continue;
             };
             let binds = nodes

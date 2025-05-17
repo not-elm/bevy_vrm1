@@ -1,6 +1,6 @@
-use crate::vrm::extensions::vrmc_spring_bone::ColliderShape;
+use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
 use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
-use bevy::app::{App, PostUpdate};
+use bevy::app::App;
 use bevy::math::Vec3;
 use bevy::prelude::*;
 use bevy::time::Time;

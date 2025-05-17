@@ -160,12 +160,12 @@ pub struct Capsule {
 mod tests {
     use crate::success;
     use crate::tests::TestResult;
-    use crate::vrm::extensions::vrmc_spring_bone::VRMCSpringBone;
+    use crate::vrm::gltf::extensions::vrmc_spring_bone::VRMCSpringBone;
 
     #[test]
     fn deserialize_vrmc_spring_bone() -> TestResult {
         let _spring_bone: VRMCSpringBone =
-            serde_json::from_str(include_str!("./vrmc_spring_bone.json"))?;
+            serde_json::from_str(include_str!("vrmc_spring_bone.json"))?;
         success!()
     }
 }

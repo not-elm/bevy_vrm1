@@ -1,5 +1,5 @@
 pub mod animation;
-mod extensions;
+pub mod gltf;
 mod loader;
 pub mod retarget;
 pub mod spawn;

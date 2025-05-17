@@ -4,7 +4,6 @@ use crate::vrm::humanoid_bone::{Hips, HumanoidBoneRegistry, HumanoidBonesAttache
 use crate::vrm::{BoneRestGlobalTransform, VrmHipsBoneTo};
 use crate::vrma::retarget::{CurrentRetargeting, RetargetBindingSystemSet};
 use crate::vrma::{RetargetSource, RetargetTo};
-use bevy::log::error;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -40,7 +39,7 @@ pub fn retarget_bones_to_vrm(
         (Without<RetargetedHumanBones>, With<HumanoidBonesAttached>),
     >,
     hips: Query<&VrmHipsBoneTo>,
-    names: Query<&Name>,
+    _names: Query<&Name>,
     searcher: ChildSearcher,
 ) {
     bones
@@ -54,8 +53,11 @@ pub fn retarget_bones_to_vrm(
                     continue;
                 };
                 let Some(dist_bone_entity) = searcher.find_from_bone_name(dist_hips.0, bone) else {
-                    let dist_name = names.get(retarget.0).unwrap();
-                    error!("[Bone] {dist_name}'s {bone} not found");
+                    #[cfg(feature = "log")]
+                    {
+                        let dist_name = _names.get(retarget.0).unwrap();
+                        error!("[Bone] {dist_name}'s {bone} not found");
+                    }
                     continue;
                 };
                 par_commands.command_scope(|mut commands| {

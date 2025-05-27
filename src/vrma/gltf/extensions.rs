@@ -1,5 +1,5 @@
 use crate::error::AppResult;
-use crate::vrm::extensions::{obtain_extensions, obtain_vrmc_vrm, VrmNode};
+use crate::vrm::gltf::extensions::{obtain_extensions, obtain_vrmc_vrm, VrmNode};
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-use crate::vrm::extensions::vrmc_spring_bone::{
+use crate::vrm::gltf::extensions::vrmc_spring_bone::{
     Collider, ColliderShape, Spring, SpringJoint, VRMCSpringBone,
 };
 use crate::vrm::spring_bone::SpringJointProps;

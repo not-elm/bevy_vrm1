@@ -1,8 +1,8 @@
 use bevy::app::{App, Plugin};
 use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, Handle, LoadContext};
-use bevy::gltf::{Gltf, GltfError, GltfLoader, GltfLoaderSettings};
-use bevy::image::CompressedImageFormats;
+use bevy::gltf::{Gltf, GltfAssetLabel, GltfError, GltfLoader, GltfLoaderSettings};
+use bevy::image::{CompressedImageFormats, Image};
 use bevy::prelude::{AssetApp, Component, TypePath};
 use bevy::render::renderer::RenderDevice;
 use bevy::utils::default;
@@ -38,6 +38,7 @@ pub struct VrmHandle(pub Handle<VrmAsset>);
 #[derive(Debug, Asset, TypePath)]
 pub struct VrmAsset {
     pub(crate) gltf: Gltf,
+    pub(crate) images: Vec<Handle<Image>>,
 }
 
 struct VrmLoader(GltfLoader);
@@ -57,7 +58,18 @@ impl AssetLoader for VrmLoader {
             ..default()
         };
         let gltf = self.0.load(reader, &settings, load_context).await?;
-        Ok(VrmAsset { gltf })
+        Ok(VrmAsset {
+            images: gltf
+                .source
+                .as_ref()
+                .unwrap()
+                .textures()
+                .map(|tex| {
+                    load_context.get_label_handle(GltfAssetLabel::Texture(tex.index()).to_string())
+                })
+                .collect(),
+            gltf,
+        })
     }
 
     fn extensions(&self) -> &[&str] {

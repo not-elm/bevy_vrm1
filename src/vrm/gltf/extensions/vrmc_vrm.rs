@@ -1,4 +1,4 @@
-use crate::vrm::extensions::VrmNode;
+use crate::vrm::gltf::extensions::VrmNode;
 use bevy::platform::collections::HashMap;
 use serde::{Deserialize, Serialize};
 

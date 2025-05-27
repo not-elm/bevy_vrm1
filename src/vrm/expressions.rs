@@ -1,5 +1,5 @@
-use crate::vrm::extensions::vrmc_vrm::MorphTargetBind;
-use crate::vrm::extensions::VrmExtensions;
+use crate::vrm::gltf::extensions::vrmc_vrm::MorphTargetBind;
+use crate::vrm::gltf::extensions::VrmExtensions;
 use crate::vrm::VrmExpression;
 use bevy::app::Plugin;
 use bevy::asset::{Assets, Handle};

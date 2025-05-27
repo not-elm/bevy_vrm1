@@ -2,8 +2,8 @@ pub mod vrmc_spring_bone;
 pub mod vrmc_vrm;
 
 use crate::error::AppResult;
-use crate::vrm::extensions::vrmc_spring_bone::VRMCSpringBone;
-use crate::vrm::extensions::vrmc_vrm::VrmcVrm;
+use crate::vrm::gltf::extensions::vrmc_spring_bone::VRMCSpringBone;
+use crate::vrm::gltf::extensions::vrmc_vrm::VrmcVrm;
 use anyhow::Context;
 use bevy::gltf::Gltf;
 use serde::{Deserialize, Serialize};

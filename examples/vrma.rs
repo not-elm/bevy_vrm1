@@ -1,10 +1,10 @@
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
-use bevy_vrma::vrm::loader::VrmHandle;
-use bevy_vrma::vrm::{Vrm, VrmPlugin};
-use bevy_vrma::vrma::animation::play::PlayVrma;
-use bevy_vrma::vrma::animation::AnimationPlayerEntityTo;
-use bevy_vrma::vrma::{VrmaDuration, VrmaEntity, VrmaHandle, VrmaPlugin};
+use bevy_vrm1::vrm::loader::VrmHandle;
+use bevy_vrm1::vrm::{Vrm, VrmPlugin};
+use bevy_vrm1::vrma::animation::play::PlayVrma;
+use bevy_vrm1::vrma::animation::AnimationPlayerEntityTo;
+use bevy_vrm1::vrma::{VrmaDuration, VrmaEntity, VrmaHandle, VrmaPlugin};
 
 fn main() {
     App::new()

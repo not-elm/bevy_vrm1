@@ -53,8 +53,6 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
         vertex.instance_index
     );
 #else // SKINNED
-    // Use vertex_no_morph.instance_index instead of vertex.instance_index to work around a wgpu dx12 bug.
-    // See https://github.com/gfx-rs/naga/issues/2416
     let world_from_local = get_world_from_local(vertex.instance_index);
 #endif // SKINNED
     var world_position = mesh_position_local_to_world(world_from_local, vec4(vertex.position, 1.0));

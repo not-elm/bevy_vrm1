@@ -229,12 +229,12 @@ fn calc_mtoon_lighting_shading(
 ) -> f32 {
     let light = &lights.directional_lights[light_id];
     let NdotL = saturate(dot(normalize(input.world_normal), normalize((*light).direction_to_light)));
-    let shade_shift = calc_mtoon_lighting_reflecetance_shading_shift(input);
+    let shade_shift = calc_mtoon_lighting_reflectance_shading_shift(input);
     let shade_input = mix(-1., 1., mtoon_linearstep(-1., 1., NdotL));
     return mtoon_linearstep(-1.0 + material.shading_toony_factor, 1.0 - material.shading_toony_factor, shade_input + shade_shift);
 }
 
-fn calc_mtoon_lighting_reflecetance_shading_shift(
+fn calc_mtoon_lighting_reflectance_shading_shift(
     input: MToonInput,
 ) -> f32 {
     if((material.flags & SHADING_SHIFT_TEXTURE) != 0u) {

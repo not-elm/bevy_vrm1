@@ -26,7 +26,7 @@ impl Plugin for MtoonMaterialPlugin {
         #[cfg(feature = "reflect")]
         {
             app.register_type::<MToonMaterial>()
-                .register_type::<MToonOutline>()
+                .register_type::<crate::vrm::mtoon::outline::MToonOutline>()
                 .register_type::<VrmcMaterialRegistry>();
         }
 

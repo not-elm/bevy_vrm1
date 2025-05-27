@@ -1,5 +1,5 @@
-mod shade;
 mod rim_lighting;
+mod shade;
 mod uv_animation;
 
 use crate::vrm::mtoon::MTOON_SHADER_HANDLE;
@@ -7,7 +7,10 @@ use bevy::pbr::{MaterialPipeline, MaterialPipelineKey, OpaqueRendererMethod};
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
 use bevy::render::render_asset::RenderAssets;
-use bevy::render::render_resource::{AsBindGroup, AsBindGroupShaderType, Face, RenderPipelineDescriptor, ShaderRef, ShaderType, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{
+    AsBindGroup, AsBindGroupShaderType, Face, RenderPipelineDescriptor, ShaderRef, ShaderType,
+    SpecializedMeshPipelineError,
+};
 use bevy::render::texture::GpuImage;
 use bitflags::bitflags;
 pub use rim_lighting::RimLighting;
@@ -135,7 +138,7 @@ impl From<&MToonMaterial> for MToonMaterialKey {
 
 impl Default for MToonMaterial {
     fn default() -> Self {
-        Self{
+        Self {
             base_color_texture: None,
             shading_shift_texture: None,
             shade_multiply_texture: None,
@@ -206,10 +209,7 @@ impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
             MtoonFlags::BASE_COLOR_TEXTURE,
             self.base_color_texture.is_some(),
         );
-        flags.set(
-            MtoonFlags::DOUBLE_SIDED,
-            self.double_sided,
-        );
+        flags.set(MtoonFlags::DOUBLE_SIDED, self.double_sided);
         flags.set(
             MtoonFlags::SHADING_SHIFT_TEXTURE,
             self.shading_shift_texture.is_some(),
@@ -226,10 +226,7 @@ impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
             MtoonFlags::UV_ANIMATION_MASK_TEXTURE,
             self.uv_animation_mask_texture.is_some(),
         );
-        flags.set(
-            MtoonFlags::MATCAP_TEXTURE,
-            self.matcap_texture.is_some(),
-        );
+        flags.set(MtoonFlags::MATCAP_TEXTURE, self.matcap_texture.is_some());
         flags.set(
             MtoonFlags::ALPHA_MODE_MASK,
             matches!(self.alpha_mode, AlphaMode::Mask(_)),

@@ -5,16 +5,16 @@ use crate::vrm::gltf::materials::VrmcMaterialsExtensitions;
 use crate::vrm::mtoon::outline::pipeline::MToonOutlinePipeline;
 use crate::vrm::mtoon::outline::render_command::{DrawOutline, OutlineBindGroups};
 use bevy::asset::{load_internal_asset, weak_handle};
-use bevy::render::render_resource::{BindGroupEntry, BufferUsages, ShaderType, StoreOp, UniformBuffer};
+use bevy::render::render_resource::{
+    BindGroupEntry, BufferUsages, ShaderType, StoreOp, UniformBuffer,
+};
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::view::ViewDepthTexture;
 use bevy::{
     core_pipeline::core_3d::graph::{Core3d, Node3d},
     ecs::query::QueryItem,
     math::FloatOrd,
-    pbr::{
-        MeshPipeline, MeshPipelineKey, RenderMeshInstances,
-    },
+    pbr::{MeshPipeline, MeshPipelineKey, RenderMeshInstances},
     platform::collections::HashSet,
     prelude::*,
     render::{
@@ -31,19 +31,17 @@ use bevy::{
             SortedRenderPhasePlugin, ViewSortedRenderPhases,
         },
         render_resource::{
-            CachedRenderPipelineId, PipelineCache, RenderPassDescriptor,
-            SpecializedMeshPipelines,
+            CachedRenderPipelineId, PipelineCache, RenderPassDescriptor, SpecializedMeshPipelines,
         },
         renderer::RenderContext,
         sync_world::MainEntity,
         view::{ExtractedView, RenderVisibleEntities, RetainedViewEntity, ViewTarget},
-        Extract, Render, RenderApp, RenderDebugFlags, RenderSet
+        Extract, Render, RenderApp, RenderDebugFlags, RenderSet,
     },
 };
 use std::ops::Range;
 
-const OUTLINE_SHADER_HANDLE: Handle<Shader> =
-    weak_handle!("fd53b589-5a4c-6f4d-9318-18db0f44db85");
+const OUTLINE_SHADER_HANDLE: Handle<Shader> = weak_handle!("fd53b589-5a4c-6f4d-9318-18db0f44db85");
 
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 #[cfg_attr(not(feature = "reflect"), derive(TypePath))]
@@ -61,10 +59,10 @@ pub struct MToonOutline {
     pub lighting_mix_factor: f32,
 }
 
-impl From<&VrmcMaterialsExtensitions> for MToonOutline{
+impl From<&VrmcMaterialsExtensitions> for MToonOutline {
     fn from(value: &VrmcMaterialsExtensitions) -> Self {
         let color = value.outline_color_factor;
-        Self{
+        Self {
             width_factor: value.outline_width_factor,
             lighting_mix_factor: value.outline_lighting_mix_factor,
             color: LinearRgba::rgb(color[0], color[1], color[2]),
@@ -106,11 +104,21 @@ impl From<&MToonOutline> for MToonOutlineUniform {
 pub struct MToonOutlinePlugin;
 
 impl Plugin for MToonOutlinePlugin {
-    fn build(&self, app: &mut App) {
-        load_internal_asset!(app, OUTLINE_SHADER_HANDLE, "outline.wgsl", Shader::from_wgsl);
+    fn build(
+        &self,
+        app: &mut App,
+    ) {
+        load_internal_asset!(
+            app,
+            OUTLINE_SHADER_HANDLE,
+            "outline.wgsl",
+            Shader::from_wgsl
+        );
         app.add_plugins((
             ExtractComponentPlugin::<MToonOutline>::default(),
-            SortedRenderPhasePlugin::<OutlinePhaseItem, MeshPipeline>::new(RenderDebugFlags::default()),
+            SortedRenderPhasePlugin::<OutlinePhaseItem, MeshPipeline>::new(
+                RenderDebugFlags::default(),
+            ),
         ));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -137,7 +145,10 @@ impl Plugin for MToonOutlinePlugin {
             .add_render_graph_edges(Core3d, (Node3d::MainOpaquePass, OutlineDrawPassLabel));
     }
 
-    fn finish(&self, app: &mut App) {
+    fn finish(
+        &self,
+        app: &mut App,
+    ) {
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
@@ -256,8 +267,8 @@ fn queue_outlines(
             continue;
         };
         let draw_function_id = draw_functions.read().id::<DrawOutline>();
-        let view_key = MeshPipelineKey::from_msaa_samples(msaa.samples()) |
-            MeshPipelineKey::from_hdr(view.hdr);
+        let view_key = MeshPipelineKey::from_msaa_samples(msaa.samples())
+            | MeshPipelineKey::from_hdr(view.hdr);
 
         let rangefinder = view.rangefinder3d();
         for (render_entity, visible_entity) in visible_entities.iter::<Mesh3d>() {
@@ -274,20 +285,16 @@ fn queue_outlines(
             let mut buffer = UniformBuffer::from(MToonOutlineUniform::from(outline));
             buffer.add_usages(BufferUsages::STORAGE);
             buffer.write_buffer(&render_device, &render_queue);
-            let Some(binding) = buffer.binding() else{
+            let Some(binding) = buffer.binding() else {
                 continue;
             };
             let mut mesh_key = view_key;
             mesh_key |= MeshPipelineKey::from_primitive_topology(mesh.primitive_topology());
-            if mesh.morph_targets.is_some(){
+            if mesh.morph_targets.is_some() {
                 mesh_key |= MeshPipelineKey::MORPH_TARGETS;
             }
-            let pipeline_id = pipelines.specialize(
-                &pipeline_cache,
-                &outline_pipeline,
-                mesh_key,
-                &mesh.layout,
-            );
+            let pipeline_id =
+                pipelines.specialize(&pipeline_cache, &outline_pipeline, mesh_key, &mesh.layout);
             let pipeline_id = match pipeline_id {
                 Ok(id) => id,
                 Err(err) => {
@@ -305,16 +312,17 @@ fn queue_outlines(
                 extra_index: PhaseItemExtraIndex::None,
                 indexed: mesh.indexed(),
             });
-            bindgroups.insert(*visible_entity, render_device.create_bind_group(
-                "outline_bind_group",
-                &outline_pipeline.outline_unifrom_layout,
-                &[
-                    BindGroupEntry {
+            bindgroups.insert(
+                *visible_entity,
+                render_device.create_bind_group(
+                    "outline_bind_group",
+                    &outline_pipeline.outline_unifrom_layout,
+                    &[BindGroupEntry {
                         binding: 0,
                         resource: binding,
-                    },
-                ],
-            ));
+                    }],
+                ),
+            );
         }
     }
 }
@@ -339,7 +347,8 @@ impl ViewNode for OutlineDrawNode {
         (camera, view, target, depth_texture): QueryItem<'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
-        let Some(outline_phases) = world.get_resource::<ViewSortedRenderPhases<OutlinePhaseItem>>() else {
+        let Some(outline_phases) = world.get_resource::<ViewSortedRenderPhases<OutlinePhaseItem>>()
+        else {
             return Ok(());
         };
         let view_entity = graph.view_entity();

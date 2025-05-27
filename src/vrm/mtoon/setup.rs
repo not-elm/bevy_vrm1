@@ -38,8 +38,7 @@ fn turn_to_mtoon_material(
             return;
         };
         let mut cmd = commands.entity(entity);
-        cmd
-            .remove::<MeshMaterial3d<StandardMaterial>>()
+        cmd.remove::<MeshMaterial3d<StandardMaterial>>()
             .insert(MeshMaterial3d(
                 mtoon_materials.add(MToonMaterial {
                     base_color_texture: base.base_color_texture.clone(),
@@ -77,7 +76,7 @@ fn turn_to_mtoon_material(
                     emissive_texture: base.emissive_texture.clone(),
                 }),
             ));
-        if extension.outline_width_mode != "none"{
+        if extension.outline_width_mode != "none" {
             cmd.insert(MToonOutline::from(extension));
         }
     });

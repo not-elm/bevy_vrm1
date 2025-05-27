@@ -32,7 +32,7 @@ impl From<&VrmcMaterialsExtensitions> for RimLighting {
 
 impl Default for RimLighting {
     fn default() -> Self {
-        Self{
+        Self {
             color: LinearRgba::BLACK,
             fresnel_power: 5.0,
             lift_factor: 0.0,

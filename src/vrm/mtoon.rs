@@ -1,6 +1,6 @@
-mod setup;
-mod outline;
 mod material;
+mod outline;
+mod setup;
 
 use crate::vrm::gltf::materials::VrmcMaterialsExtensitions;
 use crate::vrm::mtoon::outline::MToonOutlinePlugin;

@@ -37,9 +37,9 @@ impl From<&VrmcMaterialsExtensitions> for Shade {
     }
 }
 
-impl Default for Shade{
+impl Default for Shade {
     fn default() -> Self {
-        Self{
+        Self {
             color: LinearRgba::BLACK,
             shading_shift_factor: 0.0,
             texture_offset: 0.0,

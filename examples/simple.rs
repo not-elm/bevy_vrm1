@@ -10,9 +10,7 @@ fn main() {
         .run();
 }
 
-fn spawn_directional_light(
-    mut commands: Commands,
-) {
+fn spawn_directional_light(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
             shadows_enabled: true,

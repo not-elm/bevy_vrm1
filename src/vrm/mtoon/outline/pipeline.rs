@@ -4,16 +4,27 @@ use bevy::ecs::system::lifetimeless::SRes;
 use bevy::ecs::system::SystemParamItem;
 use bevy::log::error;
 use bevy::math::UVec2;
-use bevy::pbr::{setup_morph_and_skinning_defs, skins_use_uniform_buffers, MeshInputUniform, MeshPipeline, MeshPipelineKey, MeshPipelineViewLayoutKey, MeshUniform, RenderMeshInstances};
+use bevy::pbr::{
+    setup_morph_and_skinning_defs, skins_use_uniform_buffers, MeshInputUniform, MeshPipeline,
+    MeshPipelineKey, MeshPipelineViewLayoutKey, MeshUniform, RenderMeshInstances,
+};
 use bevy::prelude::*;
-use bevy::render::batching::gpu_preprocessing::{IndirectParametersCpuMetadata, UntypedPhaseIndirectParametersBuffers};
+use bevy::render::batching::gpu_preprocessing::{
+    IndirectParametersCpuMetadata, UntypedPhaseIndirectParametersBuffers,
+};
 use bevy::render::batching::{GetBatchData, GetFullBatchData};
 use bevy::render::mesh::allocator::MeshAllocator;
 use bevy::render::mesh::{MeshVertexBufferLayoutRef, RenderMesh};
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::binding_types::uniform_buffer_sized;
 use bevy::render::render_resource::ShaderType;
-use bevy::render::render_resource::{BindGroupLayout, BindGroupLayoutEntries, BlendState, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState, Face, FragmentState, FrontFace, MultisampleState, PolygonMode, PrimitiveState, RenderPipelineDescriptor, ShaderStages, SpecializedMeshPipeline, SpecializedMeshPipelineError, StencilState, TextureFormat, VertexState};
+use bevy::render::render_resource::{
+    BindGroupLayout, BindGroupLayoutEntries, BlendState, ColorTargetState, ColorWrites,
+    CompareFunction, DepthBiasState, DepthStencilState, Face, FragmentState, FrontFace,
+    MultisampleState, PolygonMode, PrimitiveState, RenderPipelineDescriptor, ShaderStages,
+    SpecializedMeshPipeline, SpecializedMeshPipelineError, StencilState, TextureFormat,
+    VertexState,
+};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::sync_world::MainEntity;
 use nonmax::NonMaxU32;
@@ -32,7 +43,7 @@ impl FromWorld for MToonOutlinePipeline {
         Self {
             mesh_pipeline: world.resource::<MeshPipeline>().clone(),
             shader_handle: OUTLINE_SHADER_HANDLE,
-            outline_unifrom_layout:  render_device.create_bind_group_layout(
+            outline_unifrom_layout: render_device.create_bind_group_layout(
                 "outline_uniform_layout",
                 &BindGroupLayoutEntries::single(
                     ShaderStages::VERTEX_FRAGMENT,
@@ -103,14 +114,14 @@ impl SpecializedMeshPipeline for MToonOutlinePipeline {
                 topology: key.primitive_topology(),
                 strip_index_format: None,
             },
-            depth_stencil: Some(DepthStencilState{
+            depth_stencil: Some(DepthStencilState {
                 depth_compare: CompareFunction::Greater,
                 depth_write_enabled: true,
                 format: TextureFormat::Depth32Float,
                 stencil: StencilState::default(),
                 bias: DepthBiasState::default(),
             }),
-            multisample: MultisampleState{
+            multisample: MultisampleState {
                 count: key.msaa_samples(),
                 mask: !0,
                 alpha_to_coverage_enabled: false,

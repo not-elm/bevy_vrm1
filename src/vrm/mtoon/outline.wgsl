@@ -19,11 +19,7 @@ struct OutlineUniform{
 @group(2) @binding(0) var<uniform> outline: OutlineUniform;
 
 struct Vertex {
-    // This is needed if you are using batching and/or gpu preprocessing
-    // It's a built in so you don't need to define it in the vertex layout
     @builtin(instance_index) instance_index: u32,
-    // Like we defined for the vertex layout
-    // position is at location 0
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     #ifdef SKINNED
@@ -32,7 +28,6 @@ struct Vertex {
     #endif
 };
 
-// This is the output of the vertex shader and we also use it as the input for the fragment shader
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_position: vec4<f32>,

@@ -27,7 +27,6 @@ impl Plugin for MtoonMaterialPlugin {
         {
             app.register_type::<MToonMaterial>()
                 .register_type::<MToonOutline>()
-                .register_type::<OutlineWidthMode>()
                 .register_type::<VrmcMaterialRegistry>();
         }
 

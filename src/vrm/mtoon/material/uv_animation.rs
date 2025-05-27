@@ -1,6 +1,6 @@
 use crate::vrm::gltf::materials::VrmcMaterialsExtensitions;
 use bevy::math::Vec2;
-use bevy::prelude::TypePath;
+use bevy::prelude::*;
 
 /// [VRMC_materials_mtoon-1.0](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#uv-animation)
 #[cfg_attr(feature = "reflect", derive(Reflect))]

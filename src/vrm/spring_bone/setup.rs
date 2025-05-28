@@ -241,7 +241,7 @@ mod tests {
             (
                 head,
                 &SpringRoot {
-                    joints: vec![head, ],
+                    joints: vec![head,],
                     ..default()
                 }
             )
@@ -287,7 +287,7 @@ mod tests {
                 head,
                 &SpringRoot {
                     center_node: Some(center),
-                    joints: vec![head, ],
+                    joints: vec![head,],
                     ..default()
                 }
             )

@@ -1,3 +1,4 @@
+use crate::vrm::mtoon::outline::MToonOutline;
 use crate::vrm::mtoon::{MToonMaterial, RimLighting, Shade, UVAnimation, VrmcMaterialRegistry};
 use bevy::app::{App, Plugin};
 use bevy::asset::Assets;
@@ -76,7 +77,7 @@ fn turn_to_mtoon_material(
                 }),
             ));
         if extension.outline_width_mode != "none" {
-            // cmd.insert(MToonOutline::from(extension));
+            cmd.insert(MToonOutline::from(extension));
         }
     });
 }

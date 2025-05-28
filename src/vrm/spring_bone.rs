@@ -1,9 +1,9 @@
-mod attach;
 pub mod registry;
+mod setup;
 mod update;
 
-use crate::vrm::spring_bone::attach::SpringBoneAttachPlugin;
 use crate::vrm::spring_bone::registry::SpringBoneRegistryPlugin;
+use crate::vrm::spring_bone::setup::SpringBoneSetupPlugin;
 use crate::vrm::spring_bone::update::SpringBoneUpdatePlugin;
 use bevy::app::App;
 use bevy::math::{Mat4, Quat, Vec3};
@@ -56,7 +56,7 @@ impl Plugin for VrmSpringBonePlugin {
         app: &mut App,
     ) {
         app.add_plugins((
-            SpringBoneAttachPlugin,
+            SpringBoneSetupPlugin,
             SpringBoneRegistryPlugin,
             SpringBoneUpdatePlugin,
         ));

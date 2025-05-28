@@ -33,6 +33,7 @@ fn update_spring_bones(
                 .get(child_of.parent())
                 .map(|(_, gtf)| *gtf)
                 .unwrap_or_default();
+            let parent_global_rotation = parent_gtf.to_scale_rotation_translation().1;
             let Ok(joint_global_pos) = transforms.get(joint).map(|(_, gtf)| gtf.translation())
             else {
                 continue;
@@ -40,7 +41,7 @@ fn update_spring_bones(
 
             let inertia = (state.current_tail - state.prev_tail) * (1. - props.drag_force);
             let stiffness = delta_time
-                * (parent_gtf.rotation()
+                * (parent_global_rotation
                     * state.initial_local_rotation
                     * state.bone_axis
                     * props.stiffness);
@@ -56,7 +57,7 @@ fn update_spring_bones(
             collision(
                 &mut next_tail,
                 spring_root.colliders.iter().copied(),
-                joint,
+                props.hit_radius,
                 &transforms,
                 &colliders,
             );
@@ -80,22 +81,19 @@ fn update_spring_bones(
 fn collision(
     next_tail: &mut Vec3,
     collider_entities: impl Iterator<Item = Entity>,
-    joint_entity: Entity,
+    joint_radius: f32,
     transforms: &Query<(&mut Transform, &mut GlobalTransform)>,
     colliders: &Query<&ColliderShape>,
 ) {
-    let Ok(joint_shape) = colliders.get(joint_entity) else {
-        return;
-    };
     for collider in collider_entities {
         let Ok(collider_shape) = colliders.get(collider) else {
             continue;
         };
+        println!("{collider_shape:?}");
         let Ok((_, collider_gtf)) = transforms.get(collider) else {
             continue;
         };
-        let (dir, distance) =
-            collider_shape.calc_collision(*next_tail, collider_gtf, joint_shape.radius());
+        let (dir, distance) = collider_shape.calc_collision(*next_tail, collider_gtf, joint_radius);
         if distance < 0. {
             *next_tail += dir * distance;
         }

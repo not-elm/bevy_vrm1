@@ -6,13 +6,12 @@ use crate::vrm::spring_bone::registry::{
 };
 use crate::vrm::spring_bone::{SpringJointState, SpringRoot};
 use bevy::app::{App, Update};
-use bevy::math::NormedVectorSpace;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub struct SpringBoneAttachPlugin;
+pub struct SpringBoneSetupPlugin;
 
-impl Plugin for SpringBoneAttachPlugin {
+impl Plugin for SpringBoneSetupPlugin {
     fn build(
         &self,
         app: &mut App,
@@ -158,6 +157,7 @@ fn init_spring_joint_states(
     par_commands: ParallelCommands,
     spring_roots: Query<(Entity, &SpringRoot), Added<SpringRoot>>,
     joints: Query<&Transform>,
+    global_transforms: Query<&GlobalTransform>,
 ) {
     spring_roots.par_iter().for_each(|(root_entity, root)| {
         let mut parent = root_entity;
@@ -165,13 +165,19 @@ fn init_spring_joint_states(
             let Ok(tf) = joints.get(*joint_entity) else {
                 continue;
             };
+            let Ok(parent_gtf) = global_transforms.get(parent) else {
+                continue;
+            };
+            let Ok(parent_tf) = joints.get(parent) else {
+                continue;
+            };
             let state = SpringJointState {
-                prev_tail: tf.translation,
-                current_tail: tf.translation,
+                prev_tail: parent_gtf.translation(),
+                current_tail: parent_gtf.translation(),
                 bone_axis: tf.translation.normalize(),
-                bone_length: tf.translation.norm(),
-                initial_local_matrix: tf.compute_matrix(),
-                initial_local_rotation: tf.rotation,
+                bone_length: tf.translation.length(),
+                initial_local_matrix: parent_tf.compute_matrix(),
+                initial_local_rotation: parent_tf.rotation,
             };
             par_commands.command_scope(|mut commands| {
                 commands.entity(parent).insert(state);
@@ -187,12 +193,12 @@ mod tests {
     use crate::tests::{test_app, TestResult};
     use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
     use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
-    use crate::vrm::spring_bone::attach::{
-        attach_collider_shapes, attach_joint_props, attach_spring_roots, init_spring_joint_states,
-        AttachedColliderShapes, AttachedJointProps, AttachedSpringRoots,
-    };
     use crate::vrm::spring_bone::registry::{
         SpringColliderRegistry, SpringJointPropsRegistry, SpringNode, SpringNodeRegistry,
+    };
+    use crate::vrm::spring_bone::setup::{
+        attach_collider_shapes, attach_joint_props, attach_spring_roots, init_spring_joint_states,
+        AttachedColliderShapes, AttachedJointProps, AttachedSpringRoots,
     };
     use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
     use bevy::app::App;

@@ -67,14 +67,12 @@ fn spawn_vrma(
         commands.entity(handle_entity).remove::<VrmaHandle>();
 
         let Some(scene_root) = vrma.gltf.scenes.first().cloned() else {
-            #[cfg(feature = "log")]
             error!("[VRMA] Not found vrma scene in {name}");
             continue;
         };
         let extensions = match VrmaExtensions::from_gltf(&vrma.gltf) {
             Ok(extensions) => extensions,
             Err(_e) => {
-                #[cfg(feature = "log")]
                 error!("[VRMA] Not found vrma extensions in {name}:\n{_e}");
                 continue;
             }

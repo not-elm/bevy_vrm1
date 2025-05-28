@@ -192,10 +192,10 @@ fn calc_uv_time(uv: vec2<f32>) -> f32{
 
 fn apply_mtoon_lighting(in: MToonInput) -> vec4<f32> {
     let direct = apply_directional_lights(in);
-    let in_direct = calc_global_illumination(in);
+    let in_direct = apply_global_illumination(in);
     let emissive = apply_emissive_light(in);
     let rim = apply_rim_lighting(in.pbr, in.uv, direct);
-    return vec4<f32>(direct + emissive + rim, in.lit_color.a);
+    return vec4<f32>(direct + in_direct + emissive + rim, in.lit_color.a);
 }
 
 fn apply_directional_lights(in: MToonInput) -> vec3<f32>{
@@ -244,7 +244,9 @@ fn calc_mtoon_lighting_reflectance_shading_shift(
     }
 }
 
-fn calc_global_illumination(
+//FIXME: This code is likely an incomplete implementation.
+// https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#lighting
+fn apply_global_illumination(
     in: MToonInput,
 ) -> vec3<f32> {
     let base_color = in.lit_color.rgb;
@@ -263,11 +265,7 @@ fn calc_global_illumination(
         in.pbr.material.perceptual_roughness,
         in.pbr.diffuse_occlusion,
     );
-//    let up = vec3<f32>(0.0, 1.0, 0.0);
-//    let down = vec3<f32>(0.0, -1.0, 0.0);
-//    //TODO: ちゃんと均一化する
-//    let uniformed_gi = (up + down) * 0.5;
-    return in_direct_light;
+    return view_bindings::view.exposure * in_direct_light;
 }
 
 fn calc_shade_color_term(in: MToonInput) -> vec3<f32>{

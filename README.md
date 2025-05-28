@@ -1,4 +1,4 @@
-# bevy_vrma
+# bevy_vrm1
 
 > [!CAUTION]
 > This crate is in an early stage of development and may undergo breaking changes.

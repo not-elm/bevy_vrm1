@@ -241,7 +241,7 @@ mod tests {
             (
                 head,
                 &SpringRoot {
-                    joints: vec![head,],
+                    joints: vec![head, ],
                     ..default()
                 }
             )
@@ -287,7 +287,7 @@ mod tests {
                 head,
                 &SpringRoot {
                     center_node: Some(center),
-                    joints: vec![head,],
+                    joints: vec![head, ],
                     ..default()
                 }
             )
@@ -335,11 +335,11 @@ mod tests {
             vec![(
                 head,
                 &SpringJointState {
-                    current_tail: Vec3::new(0.0, 2.0, 0.0),
-                    prev_tail: Vec3::new(0.0, 2.0, 0.0),
+                    current_tail: Vec3::new(0.0, 0.0, 0.0),
+                    prev_tail: Vec3::new(0.0, 0.0, 0.0),
                     bone_axis: Vec3::new(0.0, 2.0, 0.0).normalize(),
                     bone_length: 2.0,
-                    initial_local_matrix: Transform::from_xyz(0.0, 2.0, 0.0).compute_matrix(),
+                    initial_local_matrix: Transform::from_xyz(0.0, 0.0, 0.0).compute_matrix(),
                     ..default()
                 },
             )]

@@ -18,7 +18,7 @@ impl Plugin for SpringBoneUpdatePlugin {
 
 fn update_spring_bones(
     mut transforms: Query<(&mut Transform, &mut GlobalTransform)>,
-    mut joints: Query<(&ChildOf, &mut SpringJointState, &SpringJointProps), Without<SpringRoot>>,
+    mut joints: Query<(&ChildOf, &mut SpringJointState, &SpringJointProps)>,
     spring_roots: Query<&SpringRoot>,
     colliders: Query<&ColliderShape>,
     time: Res<Time>,
@@ -33,14 +33,15 @@ fn update_spring_bones(
                 .get(child_of.parent())
                 .map(|(_, gtf)| *gtf)
                 .unwrap_or_default();
-            let Ok(joint_global_pos) = transforms.get(joint).map(|(_, gtf)| gtf.translation())
+            let parent_global_rotation = parent_gtf.to_scale_rotation_translation().1;
+            let Ok(head_global_pos) = transforms.get(joint).map(|(_, gtf)| gtf.translation())
             else {
                 continue;
             };
 
             let inertia = (state.current_tail - state.prev_tail) * (1. - props.drag_force);
             let stiffness = delta_time
-                * (parent_gtf.rotation()
+                * (parent_global_rotation
                     * state.initial_local_rotation
                     * state.bone_axis
                     * props.stiffness);
@@ -48,18 +49,20 @@ fn update_spring_bones(
 
             let next_tail = state.current_tail + inertia + stiffness + external;
             let mut next_tail =
-                joint_global_pos + (next_tail - joint_global_pos).normalize() * state.bone_length;
-
-            state.prev_tail = state.current_tail;
-            state.current_tail = next_tail;
+                head_global_pos + (next_tail - head_global_pos).normalize() * state.bone_length;
 
             collision(
                 &mut next_tail,
                 spring_root.colliders.iter().copied(),
-                joint,
+                props.hit_radius,
+                head_global_pos,
+                state.bone_length,
                 &transforms,
                 &colliders,
             );
+
+            state.prev_tail = state.current_tail;
+            state.current_tail = next_tail;
 
             let to = (parent_gtf.compute_matrix() * state.initial_local_matrix)
                 .inverse()
@@ -80,13 +83,12 @@ fn update_spring_bones(
 fn collision(
     next_tail: &mut Vec3,
     collider_entities: impl Iterator<Item = Entity>,
-    joint_entity: Entity,
+    joint_radius: f32,
+    head_global_pos: Vec3,
+    bone_length: f32,
     transforms: &Query<(&mut Transform, &mut GlobalTransform)>,
     colliders: &Query<&ColliderShape>,
 ) {
-    let Ok(joint_shape) = colliders.get(joint_entity) else {
-        return;
-    };
     for collider in collider_entities {
         let Ok(collider_shape) = colliders.get(collider) else {
             continue;
@@ -94,10 +96,12 @@ fn collision(
         let Ok((_, collider_gtf)) = transforms.get(collider) else {
             continue;
         };
-        let (dir, distance) =
-            collider_shape.calc_collision(*next_tail, collider_gtf, joint_shape.radius());
-        if distance < 0. {
-            *next_tail += dir * distance;
-        }
+        collider_shape.calc_collision(
+            next_tail,
+            collider_gtf,
+            head_global_pos,
+            joint_radius,
+            bone_length,
+        );
     }
 }

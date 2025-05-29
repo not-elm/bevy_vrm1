@@ -63,11 +63,8 @@ impl VrmcMaterialRegistry {
                 let extensions = m.extensions()?;
                 match serde_json::from_value(extensions.get("VRMC_materials_mtoon")?.clone()) {
                     Ok(properties) => Some((asset_id, properties)),
-                    Err(_e) => {
-                        #[cfg(feature = "log")]
-                        {
-                            bevy::log::error!("Failed to parse VRMC_materials_mtoon: {_e}");
-                        }
+                    Err(e) => {
+                        error!("Failed to parse VRMC_materials_mtoon: {e}");
                         None
                     }
                 }

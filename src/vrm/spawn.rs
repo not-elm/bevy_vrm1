@@ -40,7 +40,6 @@ fn spawn_vrm(
         let extensions = match VrmExtensions::from_gltf(&vrm.gltf) {
             Ok(extensions) => extensions,
             Err(_e) => {
-                #[cfg(feature = "log")]
                 error!("Failed to load VRM extensions: {_e}");
                 continue;
             }

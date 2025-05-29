@@ -4,15 +4,16 @@ use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
 use crate::vrm::spring_bone::registry::{
     SpringColliderRegistry, SpringJointPropsRegistry, SpringNodeRegistry,
 };
-use crate::vrm::spring_bone::{SpringJointState, SpringRoot};
+use crate::vrm::spring_bone::{
+    SpringCenterNode, SpringColliders, SpringJointState, SpringJoints, SpringRoot,
+};
 use bevy::app::{App, Update};
-use bevy::math::NormedVectorSpace;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub struct SpringBoneAttachPlugin;
+pub struct SpringBoneSetupPlugin;
 
-impl Plugin for SpringBoneAttachPlugin {
+impl Plugin for SpringBoneSetupPlugin {
     fn build(
         &self,
         app: &mut App,
@@ -125,20 +126,28 @@ fn attach_spring_roots(
             }
 
             for spring_root in registry.0.iter().map(|spring| SpringRoot {
-                center_node: spring
-                    .center
-                    .as_ref()
-                    .and_then(|center| child_searcher.find_from_name(entity, center.as_str())),
-                joints: spring
-                    .joints
-                    .iter()
-                    .filter_map(|joint| child_searcher.find_from_name(entity, joint.as_str()))
-                    .collect(),
-                colliders: spring
-                    .colliders
-                    .iter()
-                    .filter_map(|collider| child_searcher.find_from_name(entity, collider.as_str()))
-                    .collect(),
+                center_node: SpringCenterNode(
+                    spring
+                        .center
+                        .as_ref()
+                        .and_then(|center| child_searcher.find_from_name(entity, center.as_str())),
+                ),
+                joints: SpringJoints(
+                    spring
+                        .joints
+                        .iter()
+                        .filter_map(|joint| child_searcher.find_from_name(entity, joint.as_str()))
+                        .collect(),
+                ),
+                colliders: SpringColliders(
+                    spring
+                        .colliders
+                        .iter()
+                        .filter_map(|collider| {
+                            child_searcher.find_from_name(entity, collider.as_str())
+                        })
+                        .collect(),
+                ),
             }) {
                 let Some(root) = spring_root.joints.first() else {
                     continue;
@@ -156,27 +165,34 @@ fn attach_spring_roots(
 
 fn init_spring_joint_states(
     par_commands: ParallelCommands,
-    spring_roots: Query<(Entity, &SpringRoot), Added<SpringRoot>>,
+    spring_roots: Query<&SpringRoot, Added<SpringRoot>>,
     joints: Query<&Transform>,
+    global_transforms: Query<&GlobalTransform>,
 ) {
-    spring_roots.par_iter().for_each(|(root_entity, root)| {
-        let mut parent = root_entity;
-        for joint_entity in root.joints.iter() {
-            let Ok(tf) = joints.get(*joint_entity) else {
+    spring_roots.par_iter().for_each(|root| {
+        for w in root.joints.windows(2) {
+            let head_entity = w[0];
+            let joint_entity = w[1];
+            let Ok(head_tf) = joints.get(head_entity) else {
+                continue;
+            };
+            let Ok(tail_tf) = joints.get(joint_entity) else {
+                continue;
+            };
+            let Ok(tail_gtf) = global_transforms.get(joint_entity) else {
                 continue;
             };
             let state = SpringJointState {
-                prev_tail: tf.translation,
-                current_tail: tf.translation,
-                bone_axis: tf.translation.normalize(),
-                bone_length: tf.translation.norm(),
-                initial_local_matrix: tf.compute_matrix(),
-                initial_local_rotation: tf.rotation,
+                prev_tail: tail_gtf.translation(),
+                current_tail: tail_gtf.translation(),
+                bone_axis: tail_tf.translation.normalize(),
+                bone_length: tail_tf.translation.length(),
+                initial_local_matrix: head_tf.compute_matrix(),
+                initial_local_rotation: head_tf.rotation,
             };
             par_commands.command_scope(|mut commands| {
-                commands.entity(parent).insert(state);
+                commands.entity(head_entity).insert(state);
             });
-            parent = *joint_entity;
         }
     });
 }
@@ -187,14 +203,16 @@ mod tests {
     use crate::tests::{test_app, TestResult};
     use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
     use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
-    use crate::vrm::spring_bone::attach::{
-        attach_collider_shapes, attach_joint_props, attach_spring_roots, init_spring_joint_states,
-        AttachedColliderShapes, AttachedJointProps, AttachedSpringRoots,
-    };
     use crate::vrm::spring_bone::registry::{
         SpringColliderRegistry, SpringJointPropsRegistry, SpringNode, SpringNodeRegistry,
     };
-    use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
+    use crate::vrm::spring_bone::setup::{
+        attach_collider_shapes, attach_joint_props, attach_spring_roots, init_spring_joint_states,
+        AttachedColliderShapes, AttachedJointProps, AttachedSpringRoots,
+    };
+    use crate::vrm::spring_bone::{
+        SpringCenterNode, SpringJointProps, SpringJointState, SpringJoints, SpringRoot,
+    };
     use bevy::app::App;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::math::Vec3;
@@ -235,7 +253,7 @@ mod tests {
             (
                 head,
                 &SpringRoot {
-                    joints: vec![head,],
+                    joints: SpringJoints(vec![head,]),
                     ..default()
                 }
             )
@@ -280,8 +298,8 @@ mod tests {
             (
                 head,
                 &SpringRoot {
-                    center_node: Some(center),
-                    joints: vec![head,],
+                    center_node: SpringCenterNode(Some(center)),
+                    joints: SpringJoints(vec![head,]),
                     ..default()
                 }
             )
@@ -329,11 +347,11 @@ mod tests {
             vec![(
                 head,
                 &SpringJointState {
-                    current_tail: Vec3::new(0.0, 2.0, 0.0),
-                    prev_tail: Vec3::new(0.0, 2.0, 0.0),
+                    current_tail: Vec3::new(0.0, 0.0, 0.0),
+                    prev_tail: Vec3::new(0.0, 0.0, 0.0),
                     bone_axis: Vec3::new(0.0, 2.0, 0.0).normalize(),
                     bone_length: 2.0,
-                    initial_local_matrix: Transform::from_xyz(0.0, 2.0, 0.0).compute_matrix(),
+                    initial_local_matrix: Transform::from_xyz(0.0, 0.0, 0.0).compute_matrix(),
                     ..default()
                 },
             )]

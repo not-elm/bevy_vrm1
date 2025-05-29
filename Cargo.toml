@@ -11,7 +11,6 @@ readme = "README.md"
 
 [dependencies]
 bevy = { version = "0.16", default-features = false, features = [
-    "serialize",
     "bevy_render",
     "bevy_window",
     "bevy_asset",
@@ -41,9 +40,8 @@ semicolon_if_nothing_returned = "warn"
 
 [features]
 default = []
-reflect = []
+reflect = ["bevy/serialize"]
 develop = []
-log = ["bevy/bevy_log"]
 
 #[lints.rust]
 #missing_docs = "warn"

@@ -106,22 +106,29 @@ impl ColliderShape {
     /// Returns the collision vector from the collider to the target position.
     pub fn calc_collision(
         &self,
-        next_tail: Vec3,
+        next_tail: &mut Vec3,
         collider: &GlobalTransform,
+        head_global_pos: Vec3,
         joint_radius: f32,
-    ) -> (Vec3, f32) {
+        bone_length: f32,
+    ) {
+        let (scale, _, translation) = collider.to_scale_rotation_translation();
+
+        let max_collider_scale = scale.x.max(scale.y).max(scale.z);
         match self {
             Self::Sphere(sphere) => {
-                let offset = collider
-                    .compute_matrix()
-                    .transform_point3(Vec3::from(sphere.offset));
-                let delta = next_tail - offset;
-                let distance = delta.norm() - sphere.radius - joint_radius;
-                (delta.normalize(), distance)
+                let translation = translation + Vec3::from(sphere.offset);
+                let r = joint_radius + sphere.radius * max_collider_scale;
+                let delta = *next_tail - translation;
+                if delta.norm_squared() <= r * r {
+                    let dir = delta.normalize();
+                    let pos_from_collider = translation + dir * r;
+                    *next_tail = head_global_pos
+                        + (pos_from_collider - head_global_pos).normalize() * bone_length;
+                }
             }
             Self::Capsule(_) => {
-                //TODO: In UniVRM, only SphereCollider is implemented, so it seems to be postponed
-                (Vec3::ZERO, 1.)
+                //TODO: Not supported yet
             }
         }
     }

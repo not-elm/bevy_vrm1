@@ -18,7 +18,7 @@ impl Plugin for SpringBoneUpdatePlugin {
 
 fn update_spring_bones(
     mut transforms: Query<(&mut Transform, &mut GlobalTransform)>,
-    mut joints: Query<(&ChildOf, &mut SpringJointState, &SpringJointProps), Without<SpringRoot>>,
+    mut joints: Query<(&ChildOf, &mut SpringJointState, &SpringJointProps)>,
     spring_roots: Query<&SpringRoot>,
     colliders: Query<&ColliderShape>,
     time: Res<Time>,
@@ -34,7 +34,7 @@ fn update_spring_bones(
                 .map(|(_, gtf)| *gtf)
                 .unwrap_or_default();
             let parent_global_rotation = parent_gtf.to_scale_rotation_translation().1;
-            let Ok(joint_global_pos) = transforms.get(joint).map(|(_, gtf)| gtf.translation())
+            let Ok(head_global_pos) = transforms.get(joint).map(|(_, gtf)| gtf.translation())
             else {
                 continue;
             };
@@ -49,12 +49,14 @@ fn update_spring_bones(
 
             let next_tail = state.current_tail + inertia + stiffness + external;
             let mut next_tail =
-                joint_global_pos + (next_tail - joint_global_pos).normalize() * state.bone_length;
+                head_global_pos + (next_tail - head_global_pos).normalize() * state.bone_length;
 
             collision(
                 &mut next_tail,
                 spring_root.colliders.iter().copied(),
                 props.hit_radius,
+                head_global_pos,
+                state.bone_length,
                 &transforms,
                 &colliders,
             );
@@ -82,6 +84,8 @@ fn collision(
     next_tail: &mut Vec3,
     collider_entities: impl Iterator<Item=Entity>,
     joint_radius: f32,
+    head_global_pos: Vec3,
+    bone_length: f32,
     transforms: &Query<(&mut Transform, &mut GlobalTransform)>,
     colliders: &Query<&ColliderShape>,
 ) {
@@ -92,9 +96,12 @@ fn collision(
         let Ok((_, collider_gtf)) = transforms.get(collider) else {
             continue;
         };
-        let (dir, distance) = collider_shape.calc_collision(*next_tail, collider_gtf, joint_radius);
-        if distance < 0. {
-            *next_tail += dir * distance;
-        }
+        collider_shape.calc_collision(
+            next_tail,
+            collider_gtf,
+            head_global_pos,
+            joint_radius,
+            bone_length,
+        );
     }
 }

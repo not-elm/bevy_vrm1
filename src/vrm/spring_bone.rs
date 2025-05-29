@@ -25,18 +25,30 @@ pub struct SpringJointState {
 }
 
 #[derive(Component, Reflect, Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Default)]
-#[reflect(Component, Serialize, Deserialize)]
+#[reflect(Component, Serialize, Deserialize, Default)]
 pub struct SpringRoot {
     /// Represents a list of entity of spring joints belonging to the spring chain.
     /// This component is inserted into the root entity of the chain.
-    pub joints: Vec<Entity>,
+    pub joints: SpringJoints,
 
-    pub colliders: Vec<Entity>,
+    pub colliders: SpringColliders,
 
     /// If the spring chain has a center node,
-    /// the inertia of the spring bone is evaluated in the [`Center Space`](https://github.com/vrm-c/vrm-specification/tree/master/specification/VRMC_springBone-1.0#center-space).
-    pub center_node: Option<Entity>,
+    /// The inertia of the spring bone is evaluated in the [`Center Space`](https://github.com/vrm-c/vrm-specification/tree/master/specification/VRMC_springBone-1.0#center-space).
+    pub center_node: SpringCenterNode,
 }
+
+#[derive(Reflect, Eq, PartialEq, Debug, Serialize, Deserialize, Clone, Default, Deref)]
+#[reflect(Serialize, Deserialize, Default)]
+pub struct SpringJoints(pub Vec<Entity>);
+
+#[derive(Reflect, Eq, PartialEq, Debug, Serialize, Deserialize, Clone, Default, Deref)]
+#[reflect(Serialize, Deserialize, Default)]
+pub struct SpringColliders(pub Vec<Entity>);
+
+#[derive(Reflect, Eq, PartialEq, Debug, Serialize, Deserialize, Clone, Default, Deref)]
+#[reflect(Serialize, Deserialize, Default)]
+pub struct SpringCenterNode(pub Option<Entity>);
 
 #[derive(Component, Reflect, Debug, Serialize, Deserialize, Copy, Clone, Default)]
 #[reflect(Component, Serialize, Deserialize)]
@@ -55,10 +67,12 @@ impl Plugin for VrmSpringBonePlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_plugins((
-            SpringBoneSetupPlugin,
-            SpringBoneRegistryPlugin,
-            SpringBoneUpdatePlugin,
-        ));
+        app.register_type::<SpringRoot>()
+            .register_type::<SpringJointState>()
+            .add_plugins((
+                SpringBoneSetupPlugin,
+                SpringBoneRegistryPlugin,
+                SpringBoneUpdatePlugin,
+            ));
     }
 }

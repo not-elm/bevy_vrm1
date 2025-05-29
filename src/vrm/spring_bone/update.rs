@@ -42,9 +42,9 @@ fn update_spring_bones(
             let inertia = (state.current_tail - state.prev_tail) * (1. - props.drag_force);
             let stiffness = delta_time
                 * (parent_global_rotation
-                * state.initial_local_rotation
-                * state.bone_axis
-                * props.stiffness);
+                    * state.initial_local_rotation
+                    * state.bone_axis
+                    * props.stiffness);
             let external = delta_time * props.gravity_dir * props.gravity_power;
 
             let next_tail = state.current_tail + inertia + stiffness + external;
@@ -82,7 +82,7 @@ fn update_spring_bones(
 
 fn collision(
     next_tail: &mut Vec3,
-    collider_entities: impl Iterator<Item=Entity>,
+    collider_entities: impl Iterator<Item = Entity>,
     joint_radius: f32,
     head_global_pos: Vec3,
     bone_length: f32,

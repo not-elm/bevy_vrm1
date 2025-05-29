@@ -50,18 +50,21 @@ impl VrmPath {
 }
 
 /// The bone's initial transform.
-#[derive(Debug, Reflect, Copy, Clone, Component, Serialize, Deserialize)]
-#[reflect(Component, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct BoneRestTransform(pub Transform);
 
 /// The bone's initial global transform.
-#[derive(Debug, Reflect, Copy, Clone, Component, Serialize, Deserialize)]
-#[reflect(Component, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct BoneRestGlobalTransform(pub GlobalTransform);
 
 /// Holds the entity of the hips bone.
-#[derive(Debug, Reflect, Copy, Clone, Component, Serialize, Deserialize)]
-#[reflect(Component, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct VrmHipsBoneTo(pub Entity);
 
 pub struct VrmPlugin;
@@ -71,21 +74,24 @@ impl Plugin for VrmPlugin {
         &self,
         app: &mut App,
     ) {
-        app.init_asset::<VrmAsset>()
-            .register_type::<Vrm>()
-            .register_type::<VrmPath>()
-            .register_type::<BoneRestTransform>()
-            .register_type::<BoneRestGlobalTransform>()
-            .register_type::<VrmHipsBoneTo>()
-            .register_type::<VrmBone>()
-            .add_plugins((
-                VrmLoaderPlugin,
-                VrmSpawnPlugin,
-                VrmSpringBonePlugin,
-                VrmHumanoidBonePlugin,
-                VrmExpressionPlugin,
-                MtoonMaterialPlugin,
-                OutlinePlugin,
-            ));
+        app.init_asset::<VrmAsset>().add_plugins((
+            VrmLoaderPlugin,
+            VrmSpawnPlugin,
+            VrmSpringBonePlugin,
+            VrmHumanoidBonePlugin,
+            VrmExpressionPlugin,
+            MtoonMaterialPlugin,
+            OutlinePlugin,
+        ));
+
+        #[cfg(feature = "reflect")]
+        {
+            app.register_type::<Vrm>()
+                .register_type::<VrmPath>()
+                .register_type::<BoneRestTransform>()
+                .register_type::<BoneRestGlobalTransform>()
+                .register_type::<VrmHipsBoneTo>()
+                .register_type::<VrmBone>();
+        }
     }
 }

@@ -53,11 +53,8 @@ pub fn retarget_bones_to_vrm(
                     continue;
                 };
                 let Some(dist_bone_entity) = searcher.find_from_bone_name(dist_hips.0, bone) else {
-                    #[cfg(feature = "log")]
-                    {
-                        let dist_name = _names.get(retarget.0).unwrap();
-                        error!("[Bone] {dist_name}'s {bone} not found");
-                    }
+                    let dist_name = _names.get(retarget.0).unwrap();
+                    error!("[Bone] {dist_name}'s {bone} not found");
                     continue;
                 };
                 par_commands.command_scope(|mut commands| {

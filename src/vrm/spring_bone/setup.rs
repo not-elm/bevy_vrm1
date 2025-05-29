@@ -170,16 +170,14 @@ fn init_spring_joint_states(
     global_transforms: Query<&GlobalTransform>,
 ) {
     spring_roots.par_iter().for_each(|root| {
-        for i in 0..root.joints.len() - 1 {
-            let head_entity = root.joints[i];
-            let joint_entity = root.joints[i + 1];
-            let Ok(head_tf) = joints.get(head_entity) else {
+        for [head_entity, joint_entity] in root.joints.windows(2) {
+            let Ok(head_tf) = joints.get(*head_entity) else {
                 continue;
             };
-            let Ok(tail_tf) = joints.get(joint_entity) else {
+            let Ok(tail_tf) = joints.get(*joint_entity) else {
                 continue;
             };
-            let Ok(tail_gtf) = global_transforms.get(joint_entity) else {
+            let Ok(tail_gtf) = global_transforms.get(*joint_entity) else {
                 continue;
             };
             let state = SpringJointState {

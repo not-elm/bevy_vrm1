@@ -1,6 +1,8 @@
 use crate::system_param::child_searcher::ChildSearcher;
 use crate::vrm::gltf::extensions::VrmNode;
-use crate::vrm::{BoneRestGlobalTransform, BoneRestTransform, Head, LeftEye, RightEye, VrmBone, VrmHipsBoneTo};
+use crate::vrm::{
+    BoneRestGlobalTransform, BoneRestTransform, Head, LeftEye, RightEye, VrmBone, VrmHipsBoneTo,
+};
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Assets, Handle};
 use bevy::gltf::GltfNode;

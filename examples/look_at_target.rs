@@ -6,7 +6,12 @@ use bevy_vrm1::vrm::VrmPlugin;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, PanOrbitCameraPlugin, VrmPlugin, MeshPickingPlugin))
+        .add_plugins((
+            DefaultPlugins,
+            PanOrbitCameraPlugin,
+            VrmPlugin,
+            MeshPickingPlugin,
+        ))
         .add_systems(Startup, (spawn_camera, spawn_vrm, spawn_directional_light))
         .add_systems(Update, rotate)
         .run();
@@ -36,12 +41,15 @@ fn spawn_vrm(
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
 ) {
-    let cube = commands.spawn((
-        Mesh3d(meshes.add(Cuboid::from_size(Vec3::ONE / 4.))),
-        MeshMaterial3d(materials.add(StandardMaterial::from_color(Color::linear_rgb(1., 0., 0.)))),
-        Transform::from_xyz(1., 2., 1.),
-        Rotation,
-    ))
+    let cube = commands
+        .spawn((
+            Mesh3d(meshes.add(Cuboid::from_size(Vec3::ONE / 4.))),
+            MeshMaterial3d(
+                materials.add(StandardMaterial::from_color(Color::linear_rgb(1., 0., 0.))),
+            ),
+            Transform::from_xyz(1., 2., 1.),
+            Rotation,
+        ))
         .id();
     commands.spawn((
         VrmHandle(asset_server.load("models/AliciaSolid.vrm")),
@@ -55,7 +63,7 @@ struct Rotation;
 fn rotate(
     mut cube: Query<&mut Transform, With<Rotation>>,
     time: Res<Time>,
-){
+) {
     for mut transform in cube.iter_mut() {
         transform.rotate_around(Vec3::ZERO, Quat::from_rotation_z(time.delta_secs()));
     }

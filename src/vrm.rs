@@ -2,14 +2,15 @@ pub mod expressions;
 pub mod gltf;
 pub mod humanoid_bone;
 pub mod loader;
+pub mod look_at;
 mod mtoon;
 mod spawn;
 mod spring_bone;
-pub mod look_at;
 
 use crate::new_type;
 use crate::vrm::humanoid_bone::VrmHumanoidBonePlugin;
 use crate::vrm::loader::{VrmAsset, VrmLoaderPlugin};
+use crate::vrm::look_at::LookAtPlugin;
 use crate::vrm::spawn::VrmSpawnPlugin;
 use crate::vrm::spring_bone::VrmSpringBonePlugin;
 use bevy::app::{App, Plugin};
@@ -20,7 +21,6 @@ use expressions::VrmExpressionPlugin;
 use mtoon::MtoonMaterialPlugin;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::vrm::look_at::LookAtPlugin;
 
 new_type!(
     /// The bone name obtained from `VRMC_vrm::humanoid`.

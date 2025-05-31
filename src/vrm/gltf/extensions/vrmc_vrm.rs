@@ -131,7 +131,7 @@ pub struct LookAtProperties {
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 #[cfg_attr(feature = "reflect", reflect(Serialize, Deserialize))]
-pub struct RangeMap{
+pub struct RangeMap {
     #[serde(rename = "inputMaxValue")]
     pub input_max_value: f32,
     #[serde(rename = "outputScale")]
@@ -142,7 +142,7 @@ pub struct RangeMap{
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 #[cfg_attr(feature = "reflect", reflect(Serialize, Deserialize))]
 #[serde(rename_all = "snake_case")]
-pub enum LookAtType{
+pub enum LookAtType {
     Bone,
     Expression,
 }

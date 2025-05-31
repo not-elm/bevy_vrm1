@@ -163,7 +163,12 @@ fn apply_left_eye_bone(
             / range_map_vertical_up.input_max_value
             * range_map_vertical_up.output_scale)
     };
-    left_eye.with_rotation(Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), pitch.to_radians(), 0.0))
+    left_eye.with_rotation(Quat::from_euler(
+        EulerRot::YXZ,
+        yaw.to_radians(),
+        pitch.to_radians(),
+        0.0,
+    ))
 }
 
 fn apply_right_eye_bone(
@@ -200,6 +205,11 @@ fn apply_right_eye_bone(
             / range_map_vertical_up.input_max_value
             * range_map_vertical_up.output_scale)
     };
-    
-    right_eye.with_rotation(Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), pitch.to_radians(), 0.0))
+
+    right_eye.with_rotation(Quat::from_euler(
+        EulerRot::YXZ,
+        yaw.to_radians(),
+        pitch.to_radians(),
+        0.0,
+    ))
 }

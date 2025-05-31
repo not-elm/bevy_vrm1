@@ -1,3 +1,5 @@
+//! [`VRMC_vrm-1.0/lookAt.md`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md)
+
 use crate::vrm::gltf::extensions::vrmc_vrm::LookAtProperties;
 use crate::vrm::{Head, LeftEye, RightEye};
 use bevy::app::{App, Plugin};

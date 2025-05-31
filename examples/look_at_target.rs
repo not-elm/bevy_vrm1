@@ -1,12 +1,11 @@
 use bevy::prelude::*;
-use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use bevy_vrm1::vrm::loader::VrmHandle;
 use bevy_vrm1::vrm::look_at::LookAt;
 use bevy_vrm1::vrm::VrmPlugin;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, PanOrbitCameraPlugin, VrmPlugin))
+        .add_plugins((DefaultPlugins, VrmPlugin))
         .add_systems(Startup, (spawn_camera, spawn_vrm, spawn_directional_light))
         .add_systems(Update, rotate)
         .run();
@@ -23,11 +22,7 @@ fn spawn_directional_light(mut commands: Commands) {
 }
 
 fn spawn_camera(mut commands: Commands) {
-    commands.spawn((
-        Camera3d::default(),
-        PanOrbitCamera::default(),
-        Transform::from_xyz(0.0, 2.5, 3.5),
-    ));
+    commands.spawn((Camera3d::default(), Transform::from_xyz(0.0, 1.0, 3.5)));
 }
 
 fn spawn_vrm(
@@ -42,7 +37,7 @@ fn spawn_vrm(
             MeshMaterial3d(
                 materials.add(StandardMaterial::from_color(Color::linear_rgb(1., 0., 0.))),
             ),
-            Transform::from_xyz(1., 2., 1.),
+            Transform::from_xyz(0.5, 2., 1.),
             Rotation,
         ))
         .id();
@@ -60,6 +55,6 @@ fn rotate(
     time: Res<Time>,
 ) {
     for mut transform in cube.iter_mut() {
-        transform.rotate_around(Vec3::ZERO, Quat::from_rotation_z(time.delta_secs()));
+        transform.rotate_around(Vec3::Y, Quat::from_rotation_z(time.delta_secs()));
     }
 }

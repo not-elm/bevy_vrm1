@@ -162,9 +162,9 @@ fn calc_lookt_at_cursor_position(
     };
     let cursor = window.cursor_position()?;
     let ray = camera.viewport_to_world(camera_gtf, cursor).ok()?;
-    let plane_prigin = head_gtf.translation();
+    let plane_origin = head_gtf.translation();
     let plane_up = InfinitePlane3d::new(head_gtf.back());
-    let distance = ray.intersect_plane(plane_prigin, plane_up)?;
+    let distance = ray.intersect_plane(plane_origin, plane_up)?;
     Some(ray.get_point(distance))
 }
 

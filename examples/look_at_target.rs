@@ -10,7 +10,6 @@ fn main() {
             DefaultPlugins,
             PanOrbitCameraPlugin,
             VrmPlugin,
-            MeshPickingPlugin,
         ))
         .add_systems(Startup, (spawn_camera, spawn_vrm, spawn_directional_light))
         .add_systems(Update, rotate)

@@ -2,20 +2,42 @@ use crate::vrm::gltf::extensions::vrmc_vrm::LookAtProperties;
 use crate::vrm::{Head, LeftEye, RightEye};
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
+use bevy::render::camera::RenderTarget;
+use bevy::window::{PrimaryWindow, WindowRef};
 #[cfg(feature = "reflect")]
 use serde::{Deserialize, Serialize};
 
 /// Holds the entity of looking the target entity.
 /// This component should be inserted into the root entity of the VRM.
-/// TODO: 詳細な説明
+///
+/// [`LookAt::Cursor`] is used to look at the mouse cursor in the window.
+/// [`LookAt::Target`] is used to look at the specified entity.
+/// 
+/// ```no_run
+/// use bevy::prelude::*;
+///
+/// fn spawn_camera_and_vrm(
+///     mut commands: Commands,
+///     asset_server: Res<AssetServer>,
+/// ) {
+///     let camera = commands.spawn(Camera3d::default()).id();
+///     commands.spawn((
+///         VrmHandle(asset_server.load("model.vrm")),
+///         LookAt::Cursor {
+///             camera,
+///         },
+///     ));
+/// }
+/// ```
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub enum LookAt {
     /// Look at the window cursor.
-    Cursor,
+    /// The camera entity that is specified as the render target of the window must be passed.
+    Cursor { camera: Entity },
 
-    /// Specifiy the entity of target.
+    /// Specify the entity of the target.
     Target(Entity),
 }
 
@@ -69,7 +91,11 @@ fn track_looking_target(
         &LeftEye,
         &RightEye,
     )>,
+    cameras: Query<&Camera>,
     transforms: Query<&Transform>,
+    global_transforms: Query<&GlobalTransform>,
+    primary_window: Query<&Window, With<PrimaryWindow>>,
+    windows: Query<&Window, Without<PrimaryWindow>>,
 ) {
     vrms.par_iter().for_each(
         |(look_at, properties, head, look_at_space, left_eye, right_eye)| {
@@ -77,27 +103,32 @@ fn track_looking_target(
                 return;
             };
             let Ok(head_tf) = transforms.get(head.0) else {
-                return; // Head bone not found
+                return;
             };
             let mut look_at_space_tf = *look_at_space_tf;
             look_at_space_tf.rotation = head_tf.rotation.inverse();
             let target = match look_at {
-                LookAt::Cursor => {
-                    todo!("Implement cursor tracking for LookAt");
-                }
+                LookAt::Cursor { camera } => calc_lookt_at_cursor_position(
+                    *camera,
+                    &head,
+                    &global_transforms,
+                    &cameras,
+                    &primary_window,
+                    &windows,
+                ),
                 LookAt::Target(target_entity) => {
-                    match transforms.get(*target_entity) {
-                        Ok(tf) => tf.translation,
-                        Err(_) => return, // Target entity not found
-                    }
+                    transforms.get(*target_entity).map(|t| t.translation).ok()
                 }
+            };
+            let Some(target) = target else {
+                return;
             };
             let (yaw, pitch) = calc_yaw_pitch(&look_at_space_tf, target);
             let Ok(left_eye_tf) = transforms.get(left_eye.0) else {
                 return;
             };
             let Ok(right_eye_tf) = transforms.get(right_eye.0) else {
-                return; // Right eye bone not found
+                return;
             };
             let applied_left_eye_tf = apply_left_eye_bone(left_eye_tf, properties, yaw, pitch);
             let applied_right_eye_tf = apply_right_eye_bone(right_eye_tf, properties, yaw, pitch);
@@ -107,6 +138,32 @@ fn track_looking_target(
             });
         },
     );
+}
+
+fn calc_lookt_at_cursor_position(
+    camera_entity: Entity,
+    head: &Head,
+    global_transforms: &Query<&GlobalTransform>,
+    cameras: &Query<&Camera>,
+    primary_window: &Query<&Window, With<PrimaryWindow>>,
+    windows: &Query<&Window, Without<PrimaryWindow>>,
+) -> Option<Vec3> {
+    let camera = cameras.get(camera_entity).ok()?;
+    let camera_gtf = global_transforms.get(camera_entity).ok()?;
+    let head_gtf = global_transforms.get(head.0).ok()?;
+    let RenderTarget::Window(window_ref) = camera.target else {
+        return None;
+    };
+    let window = match window_ref {
+        WindowRef::Primary => primary_window.single().ok()?,
+        WindowRef::Entity(window_entity) => windows.get(window_entity).ok()?,
+    };
+    let cursor = window.cursor_position()?;
+    let ray = camera.viewport_to_world(camera_gtf, cursor).ok()?;
+    let plane_prigin = head_gtf.translation();
+    let plane_up = InfinitePlane3d::new(head_gtf.back());
+    let distance = ray.intersect_plane(plane_prigin, plane_up)?;
+    Some(ray.get_point(distance))
 }
 
 fn calc_yaw_pitch(
@@ -122,7 +179,6 @@ fn calc_yaw_pitch(
     let x = local_target.dot(Vec3::X);
     let yaw = (x.atan2(z)).to_degrees();
 
-    // x+y z plane
     let xz = (x * x + z * z).sqrt();
     let y = local_target.dot(Vec3::Y);
     let pitch = (-y.atan2(xz)).to_degrees();

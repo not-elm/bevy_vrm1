@@ -114,7 +114,7 @@ pub struct LookAtProperties {
     /// A range map for the horizontal inner eye movement.
     #[serde(rename = "rangeMapHorizontalInner")]
     pub range_map_horizontal_inner: RangeMap,
-    /// A range map for the horizontal outer eye movement (used by Expression's LookLeft and LookRight).
+    /// A range map for the horizontal outer eye movement (used by Expression's `LookLeft` and `LookRight`).
     #[serde(rename = "rangeMapHorizontalOuter")]
     pub range_map_horizontal_outer: RangeMap,
     /// A range map for the vertical down eye movement.

@@ -99,8 +99,8 @@ fn track_looking_target(
             let Ok(right_eye_tf) = transforms.get(right_eye.0) else {
                 return; // Right eye bone not found
             };
-            let applied_left_eye_tf = apply_left_eye_bone(&left_eye_tf, properties, yaw, pitch);
-            let applied_right_eye_tf = apply_right_eye_bone(&right_eye_tf, properties, yaw, pitch);
+            let applied_left_eye_tf = apply_left_eye_bone(left_eye_tf, properties, yaw, pitch);
+            let applied_right_eye_tf = apply_right_eye_bone(right_eye_tf, properties, yaw, pitch);
             par_commands.command_scope(move |mut commands: Commands| {
                 commands.entity(left_eye.0).insert(applied_left_eye_tf);
                 commands.entity(right_eye.0).insert(applied_right_eye_tf);
@@ -141,9 +141,9 @@ fn apply_left_eye_bone(
     let range_map_vertical_down = properties.range_map_vertical_down;
     let range_map_vertical_up = properties.range_map_vertical_up;
     let yaw = if yaw_degress > 0.0 {
-        (yaw_degress.min(range_map_horizontal_outer.input_max_value)
+        yaw_degress.min(range_map_horizontal_outer.input_max_value)
             / range_map_horizontal_outer.input_max_value
-            * range_map_horizontal_outer.output_scale)
+            * range_map_horizontal_outer.output_scale
     } else {
         -(yaw_degress
             .abs()
@@ -153,9 +153,9 @@ fn apply_left_eye_bone(
     };
 
     let pitch = if pitch_degress > 0.0 {
-        (pitch_degress.min(range_map_vertical_down.input_max_value)
+        pitch_degress.min(range_map_vertical_down.input_max_value)
             / range_map_vertical_down.input_max_value
-            * range_map_vertical_down.output_scale)
+            * range_map_vertical_down.output_scale
     } else {
         -(pitch_degress
             .abs()
@@ -178,9 +178,9 @@ fn apply_right_eye_bone(
     let range_map_vertical_up = properties.range_map_vertical_up;
 
     let yaw = if yaw_degress > 0.0 {
-        (yaw_degress.min(range_map_horizontal_inner.input_max_value)
+        yaw_degress.min(range_map_horizontal_inner.input_max_value)
             / range_map_horizontal_inner.input_max_value
-            * range_map_horizontal_inner.output_scale)
+            * range_map_horizontal_inner.output_scale
     } else {
         -(yaw_degress
             .abs()
@@ -190,9 +190,9 @@ fn apply_right_eye_bone(
     };
 
     let pitch = if pitch_degress > 0.0 {
-        (pitch_degress.min(range_map_vertical_down.input_max_value)
+        pitch_degress.min(range_map_vertical_down.input_max_value)
             / range_map_vertical_down.input_max_value
-            * range_map_vertical_down.output_scale)
+            * range_map_vertical_down.output_scale
     } else {
         -(pitch_degress
             .abs()

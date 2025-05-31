@@ -1,15 +1,14 @@
 //! [`VRMC_vrm-1.0/lookAt.md`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md)
 
 use crate::vrm::gltf::extensions::vrmc_vrm::{LookAtProperties, LookAtType};
+use crate::vrm::mtoon::MToonMaterial;
 use crate::vrm::{Head, LeftEye, RightEye};
 use bevy::app::{App, Plugin};
-use bevy::math::Affine2;
 use bevy::prelude::*;
 use bevy::render::camera::RenderTarget;
 use bevy::window::{PrimaryWindow, WindowRef};
 #[cfg(feature = "reflect")]
 use serde::{Deserialize, Serialize};
-use crate::vrm::mtoon::MToonMaterial;
 
 /// Holds the entity of looking the target entity.
 /// This component should be inserted into the root entity of the VRM.
@@ -141,27 +140,26 @@ fn track_looking_target(
                         pitch,
                     );
                 }
-                LookAtType::Expression => {
-                }
+                LookAtType::Expression => {}
             }
         },
     );
 }
 
-struct ApplyForTextureTransformBindings{
+struct ApplyForTextureTransformBindings {
     left_eye: LeftEye,
     right_eye: RightEye,
     yaw: f32,
     pitch: f32,
-
 }
 
 fn apply_for_texture_transform_bindings(
     trigger: Trigger<ApplyForTextureTransformBindings>,
     mut materials: ResMut<Assets<MToonMaterial>>,
     handles: Query<&MeshMaterial3d<MToonMaterial>>,
-){
-    let Some(left_eye_material) = handles.get(trigger.left_eye.0)
+) {
+    let Some(left_eye_material) = handles
+        .get(trigger.left_eye.0)
         .ok()
         .and_then(|h| materials.get_mut(h))
     else {
@@ -197,10 +195,10 @@ fn calc_target_position(
         LookAt::Cursor { camera } => calc_lookt_at_cursor_position(
             *camera,
             vrm_entity,
-            &global_transforms,
-            &cameras,
-            &primary_window,
-            &windows,
+            global_transforms,
+            cameras,
+            primary_window,
+            windows,
         ),
         LookAt::Target(target_entity) => transforms.get(*target_entity).map(|t| t.translation).ok(),
     }

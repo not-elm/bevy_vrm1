@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// [`LookAt::Cursor`] is used to look at the mouse cursor in the window.
 /// [`LookAt::Target`] is used to look at the specified entity.
-/// 
+///
 /// ```no_run
 /// use bevy::prelude::*;
 ///
@@ -110,7 +110,7 @@ fn track_looking_target(
             let target = match look_at {
                 LookAt::Cursor { camera } => calc_lookt_at_cursor_position(
                     *camera,
-                    &head,
+                    head,
                     &global_transforms,
                     &cameras,
                     &primary_window,

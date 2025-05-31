@@ -6,11 +6,7 @@ use bevy_vrm1::vrm::VrmPlugin;
 
 fn main() {
     App::new()
-        .add_plugins((
-            DefaultPlugins,
-            PanOrbitCameraPlugin,
-            VrmPlugin,
-        ))
+        .add_plugins((DefaultPlugins, PanOrbitCameraPlugin, VrmPlugin))
         .add_systems(Startup, (spawn_camera_and_vrm, spawn_directional_light))
         .run();
 }
@@ -39,8 +35,6 @@ fn spawn_camera_and_vrm(
 
     commands.spawn((
         VrmHandle(asset_server.load("models/AliciaSolid.vrm")),
-        LookAt::Cursor {
-            camera,
-        },
+        LookAt::Cursor { camera },
     ));
 }

@@ -6,6 +6,16 @@ pub mod system_param;
 pub mod vrm;
 pub mod vrma;
 
+pub mod prelude{
+    pub use crate::{
+        vrm::*,
+        vrm::{
+            loader::VrmHandle,
+            look_at::LookAt,
+        },
+    };
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use bevy::asset::AssetPlugin;

@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// ```no_run
 /// use bevy::prelude::*;
+/// use bevy_vrm1::prelude::*;
 ///
 /// fn spawn_camera_and_vrm(
 ///     mut commands: Commands,

@@ -1,7 +1,6 @@
 //! [`VRMC_vrm-1.0/lookAt.md`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md)
 
 use crate::vrm::gltf::extensions::vrmc_vrm::{LookAtProperties, LookAtType};
-use crate::vrm::mtoon::MToonMaterial;
 use crate::vrm::{Head, LeftEye, RightEye};
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
@@ -87,7 +86,6 @@ fn spawn_look_at_space(
 fn track_looking_target(
     par_commands: ParallelCommands,
     vrms: Query<(
-        Entity,
         &LookAt,
         &LookAtProperties,
         &Head,
@@ -102,7 +100,7 @@ fn track_looking_target(
     windows: Query<&Window, Without<PrimaryWindow>>,
 ) {
     vrms.par_iter().for_each(
-        |(entity, look_at, properties, head, look_at_space, left_eye, right_eye)| {
+        |(look_at, properties, head, look_at_space, left_eye, right_eye)| {
             let Ok(look_at_space_tf) = transforms.get(look_at_space.0) else {
                 return;
             };
@@ -140,46 +138,12 @@ fn track_looking_target(
                         pitch,
                     );
                 }
-                LookAtType::Expression => {}
+                LookAtType::Expression => {
+                    todo!("Expression look at is not supported yet");
+                }
             }
         },
     );
-}
-
-struct ApplyForTextureTransformBindings {
-    left_eye: LeftEye,
-    right_eye: RightEye,
-    yaw: f32,
-    pitch: f32,
-}
-
-fn apply_for_texture_transform_bindings(
-    trigger: Trigger<ApplyForTextureTransformBindings>,
-    mut materials: ResMut<Assets<MToonMaterial>>,
-    handles: Query<&MeshMaterial3d<MToonMaterial>>,
-) {
-    let Some(left_eye_material) = handles
-        .get(trigger.left_eye.0)
-        .ok()
-        .and_then(|h| materials.get_mut(h))
-    else {
-        return;
-    };
-    // let Some(mut right_eye_material) = handles.get(trigger.right_eye.0)
-    //     .ok()
-    //     .and_then(|h| materials.get_mut(h))
-    // else {
-    //     return;
-    // // };
-    // left_eye_material.uv_transform = Affine2{
-    //     matrix2: Mat2::from_diagonal(Vec2::splat(1.)),
-    //     translation: Vec2::new(),
-    // };
-    // };
-    // right_eye_material.uv_transform = Affine2{
-    //     matrix2: Mat2::from_diagonal(Vec2::splat(1.)),
-    //     translation: Vec2::ZERO,
-    // };
 }
 
 fn calc_target_position(

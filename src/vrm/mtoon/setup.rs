@@ -74,6 +74,7 @@ fn turn_to_mtoon_material(
                     cull_mode: base.cull_mode,
                     emissive: base.emissive,
                     emissive_texture: base.emissive_texture.clone(),
+                    uv_transform: base.uv_transform,
                 }),
             ));
         if extension.outline_width_mode != "none" {

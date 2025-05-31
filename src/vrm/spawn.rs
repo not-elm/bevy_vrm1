@@ -71,6 +71,10 @@ fn spawn_vrm(
             ));
         }
 
+        if let Some(look_at) = extensions.vrmc_vrm.look_at.clone() {
+            cmd.insert(look_at);
+        }
+
         if let Some(vrm_path) = handle.0.path() {
             #[cfg(feature = "develop")]
             {

@@ -6,13 +6,10 @@ pub mod system_param;
 pub mod vrm;
 pub mod vrma;
 
-pub mod prelude{
+pub mod prelude {
     pub use crate::{
         vrm::*,
-        vrm::{
-            loader::VrmHandle,
-            look_at::LookAt,
-        },
+        vrm::{loader::VrmHandle, look_at::LookAt},
     };
 }
 

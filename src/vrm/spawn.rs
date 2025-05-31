@@ -70,6 +70,10 @@ fn spawn_vrm(
                 SpringNodeRegistry::new(spring_bone, &node_assets, &vrm.gltf.nodes),
             ));
         }
+        
+        if let Some(look_at) = extensions.vrmc_vrm.look_at.clone() {
+            cmd.insert(look_at);
+        }
 
         if let Some(vrm_path) = handle.0.path() {
             #[cfg(feature = "develop")]

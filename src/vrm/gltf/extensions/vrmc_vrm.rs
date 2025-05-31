@@ -1,5 +1,6 @@
 use crate::vrm::gltf::extensions::VrmNode;
 use bevy::platform::collections::HashMap;
+use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -8,8 +9,8 @@ pub struct VrmcVrm {
     // #[serde(rename = "firstPerson")]
     // pub first_person: Option<FirstPerson>,
     pub humanoid: Humanoid,
-    // #[serde(rename = "lookAt")]
-    // pub look_at: LookAt,
+    #[serde(rename = "lookAt")]
+    pub look_at: Option<LookAtProperties>,
     pub meta: Option<Meta>,
     #[serde(rename = "specVersion")]
     pub spec_version: String,
@@ -103,18 +104,45 @@ pub struct Meta {
     pub version: Option<String>,
 }
 
-// #[derive(Serialize, Deserialize)]
-// struct LookAt {
-//     #[serde(rename = "offsetFromHeadBone")]
-//     pub offset_from_head_bone: Vec<_>,
-//     #[serde(rename = "rangeMapHorizontalInner")]
-//     pub range_map_horizontal_inner: Struct8,
-//     #[serde(rename = "rangeMapHorizontalOuter")]
-//     pub range_map_horizontal_outer: Struct8,
-//     #[serde(rename = "rangeMapVerticalDown")]
-//     pub range_map_vertical_down: Struct8,
-//     #[serde(rename = "rangeMapVerticalUp")]
-//     pub range_map_vertical_up: Struct8,
-//     #[serde(rename = "type")]
-//     pub r#type: String,
-// }
+#[derive(Serialize, Deserialize, Component, Debug, Clone)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
+pub struct LookAtProperties {
+    /// An offset from the head bone to the lookAt reference position (between both eyes).
+    #[serde(rename = "offsetFromHeadBone")]
+    pub offset_from_head_bone: [f32; 3],
+    /// A range map for the horizontal inner eye movement.
+    #[serde(rename = "rangeMapHorizontalInner")]
+    pub range_map_horizontal_inner: RangeMap,
+    /// A range map for the horizontal outer eye movement (used by Expression's LookLeft and LookRight).
+    #[serde(rename = "rangeMapHorizontalOuter")]
+    pub range_map_horizontal_outer: RangeMap,
+    /// A range map for the vertical down eye movement.
+    #[serde(rename = "rangeMapVerticalDown")]
+    pub range_map_vertical_down: RangeMap,
+    /// A range map for the vertical up eye movement.
+    #[serde(rename = "rangeMapVerticalUp")]
+    pub range_map_vertical_up: RangeMap,
+    /// `bone` or `expression` to look at.
+    #[serde(rename = "type")]
+    pub r#type: LookAtType,
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Serialize, Deserialize))]
+pub struct RangeMap{
+    #[serde(rename = "inputMaxValue")]
+    pub input_max_value: f32,
+    #[serde(rename = "outputScale")]
+    pub output_scale: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Serialize, Deserialize))]
+#[serde(rename_all = "snake_case")]
+pub enum LookAtType{
+    Bone,
+    Expression,
+}

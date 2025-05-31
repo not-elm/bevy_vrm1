@@ -5,6 +5,7 @@ pub mod loader;
 mod mtoon;
 mod spawn;
 mod spring_bone;
+pub mod look_at;
 
 use crate::new_type;
 use crate::vrm::humanoid_bone::VrmHumanoidBonePlugin;
@@ -19,6 +20,7 @@ use expressions::VrmExpressionPlugin;
 use mtoon::MtoonMaterialPlugin;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use crate::vrm::look_at::LookAtPlugin;
 
 new_type!(
     /// The bone name obtained from `VRMC_vrm::humanoid`.
@@ -67,6 +69,24 @@ pub struct BoneRestGlobalTransform(pub GlobalTransform);
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct VrmHipsBoneTo(pub Entity);
 
+/// A marker components for left eye bone.
+#[derive(Debug, Copy, Clone, Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
+pub struct LeftEye(pub Entity);
+
+/// A marker components for right eye bone.
+#[derive(Debug, Copy, Clone, Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
+pub struct RightEye(pub Entity);
+
+/// Holds the entity of the vrm head bone.
+#[derive(Debug, Copy, Clone, Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
+pub struct Head(pub Entity);
+
 pub struct VrmPlugin;
 
 impl Plugin for VrmPlugin {
@@ -82,6 +102,7 @@ impl Plugin for VrmPlugin {
             VrmExpressionPlugin,
             MtoonMaterialPlugin,
             OutlinePlugin,
+            LookAtPlugin,
         ));
 
         #[cfg(feature = "reflect")]
@@ -91,7 +112,10 @@ impl Plugin for VrmPlugin {
                 .register_type::<BoneRestTransform>()
                 .register_type::<BoneRestGlobalTransform>()
                 .register_type::<VrmHipsBoneTo>()
-                .register_type::<VrmBone>();
+                .register_type::<VrmBone>()
+                .register_type::<LeftEye>()
+                .register_type::<RightEye>()
+                .register_type::<Head>();
         }
     }
 }

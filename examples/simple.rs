@@ -30,6 +30,7 @@ fn spawn_camera(
         PanOrbitCamera::default(),
         Transform::from_xyz(0.0, 2.5, 3.5),
     ));
+    // Ground
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::new(1000.0, 1000.0)))),
         MeshMaterial3d(materials.add(StandardMaterial::from(Color::WHITE))),

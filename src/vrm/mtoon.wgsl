@@ -50,6 +50,7 @@ struct MToonMaterialUniform {
     uv_animation_rotation_speed: f32,
     uv_animation_scroll_speed_x: f32,
     uv_animation_rotation_speed_y: f32,
+    uv_transform: mat3x3<f32>,
     mat_cap_color: vec4<f32>,
     parametric_rim_color: vec4<f32>,
     parametric_rim_lift_factor: f32,
@@ -104,7 +105,7 @@ fn fragment(
         in.world_position,
         in.world_normal,
 #ifdef VERTEX_UVS_A
-        calc_animated_uv(in.uv),
+        calc_animated_uv((material.uv_transform * vec3(in.uv, 1.0)).xy),
 #endif
 #ifdef VERTEX_UVS_B
         in.uv_b,

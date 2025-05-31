@@ -3,6 +3,7 @@ mod shade;
 mod uv_animation;
 
 use crate::vrm::mtoon::MTOON_SHADER_HANDLE;
+use bevy::math::Affine2;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey, OpaqueRendererMethod};
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
@@ -61,6 +62,7 @@ pub struct MToonMaterial {
     #[dependency]
     pub emissive_texture: Option<Handle<Image>>,
     pub uv_animation: UVAnimation,
+    pub uv_transform: Affine2,
     pub rim_lighting: RimLighting,
     pub shade: Shade,
     pub base_color: Color,
@@ -147,6 +149,7 @@ impl Default for MToonMaterial {
             matcap_texture: None,
             emissive_texture: None,
             uv_animation: UVAnimation::default(),
+            uv_transform: Affine2::IDENTITY,
             rim_lighting: RimLighting::default(),
             shade: Shade::default(),
             base_color: Color::WHITE,
@@ -191,6 +194,7 @@ pub struct MToonMaterialUniform {
     pub uv_animation_rotation_speed: f32,
     pub uv_animation_scroll_speed_x: f32,
     pub uv_animation_scroll_speed_y: f32,
+    pub uv_transform: Mat3,
     pub mat_cap_color: Vec4,
     pub parametric_rim_color: Vec4,
     pub parametric_rim_lift_factor: f32,
@@ -246,6 +250,7 @@ impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
             uv_animation_rotation_speed: self.uv_animation.rotation_speed,
             uv_animation_scroll_speed_x: self.uv_animation.scroll_speed.x,
             uv_animation_scroll_speed_y: self.uv_animation.scroll_speed.y,
+            uv_transform: self.uv_transform.into(),
             mat_cap_color: self.rim_lighting.mat_cap_color.to_vec4(),
             parametric_rim_color: self.rim_lighting.color.to_vec4(),
             parametric_rim_lift_factor: self.rim_lighting.lift_factor,

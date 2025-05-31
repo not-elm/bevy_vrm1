@@ -1,13 +1,15 @@
 //! [`VRMC_vrm-1.0/lookAt.md`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md)
 
-use crate::vrm::gltf::extensions::vrmc_vrm::LookAtProperties;
+use crate::vrm::gltf::extensions::vrmc_vrm::{LookAtProperties, LookAtType};
 use crate::vrm::{Head, LeftEye, RightEye};
 use bevy::app::{App, Plugin};
+use bevy::math::Affine2;
 use bevy::prelude::*;
 use bevy::render::camera::RenderTarget;
 use bevy::window::{PrimaryWindow, WindowRef};
 #[cfg(feature = "reflect")]
 use serde::{Deserialize, Serialize};
+use crate::vrm::mtoon::MToonMaterial;
 
 /// Holds the entity of looking the target entity.
 /// This component should be inserted into the root entity of the VRM.
@@ -86,6 +88,7 @@ fn spawn_look_at_space(
 fn track_looking_target(
     par_commands: ParallelCommands,
     vrms: Query<(
+        Entity,
         &LookAt,
         &LookAtProperties,
         &Head,
@@ -100,51 +103,138 @@ fn track_looking_target(
     windows: Query<&Window, Without<PrimaryWindow>>,
 ) {
     vrms.par_iter().for_each(
-        |(look_at, properties, head, look_at_space, left_eye, right_eye)| {
+        |(entity, look_at, properties, head, look_at_space, left_eye, right_eye)| {
             let Ok(look_at_space_tf) = transforms.get(look_at_space.0) else {
+                return;
+            };
+            let Ok(head_gtf) = global_transforms.get(head.0) else {
                 return;
             };
             let Ok(head_tf) = transforms.get(head.0) else {
                 return;
             };
             let mut look_at_space_tf = *look_at_space_tf;
+            look_at_space_tf.translation = Vec3::from(properties.offset_from_head_bone);
             look_at_space_tf.rotation = head_tf.rotation.inverse();
-            let target = match look_at {
-                LookAt::Cursor { camera } => calc_lookt_at_cursor_position(
-                    *camera,
-                    head,
-                    &global_transforms,
-                    &cameras,
-                    &primary_window,
-                    &windows,
-                ),
-                LookAt::Target(target_entity) => {
-                    transforms.get(*target_entity).map(|t| t.translation).ok()
+            let look_at_space = head_gtf.mul_transform(look_at_space_tf);
+            let Some(target) = calc_target_position(
+                look_at,
+                head.0,
+                &transforms,
+                &global_transforms,
+                &cameras,
+                &primary_window,
+                &windows,
+            ) else {
+                return;
+            };
+            let (yaw, pitch) = calc_yaw_pitch(&look_at_space, target);
+            match properties.r#type {
+                LookAtType::Bone => {
+                    apply_bone(
+                        &par_commands,
+                        &transforms,
+                        left_eye,
+                        right_eye,
+                        properties,
+                        yaw,
+                        pitch,
+                    );
                 }
-            };
-            let Some(target) = target else {
-                return;
-            };
-            let (yaw, pitch) = calc_yaw_pitch(&look_at_space_tf, target);
-            let Ok(left_eye_tf) = transforms.get(left_eye.0) else {
-                return;
-            };
-            let Ok(right_eye_tf) = transforms.get(right_eye.0) else {
-                return;
-            };
-            let applied_left_eye_tf = apply_left_eye_bone(left_eye_tf, properties, yaw, pitch);
-            let applied_right_eye_tf = apply_right_eye_bone(right_eye_tf, properties, yaw, pitch);
-            par_commands.command_scope(move |mut commands: Commands| {
-                commands.entity(left_eye.0).insert(applied_left_eye_tf);
-                commands.entity(right_eye.0).insert(applied_right_eye_tf);
-            });
+                LookAtType::Expression => {
+                }
+            }
         },
     );
 }
 
+struct ApplyForTextureTransformBindings{
+    left_eye: LeftEye,
+    right_eye: RightEye,
+    yaw: f32,
+    pitch: f32,
+
+}
+
+fn apply_for_texture_transform_bindings(
+    trigger: Trigger<ApplyForTextureTransformBindings>,
+    mut materials: ResMut<Assets<MToonMaterial>>,
+    handles: Query<&MeshMaterial3d<MToonMaterial>>,
+){
+    let Some(left_eye_material) = handles.get(trigger.left_eye.0)
+        .ok()
+        .and_then(|h| materials.get_mut(h))
+    else {
+        return;
+    };
+    // let Some(mut right_eye_material) = handles.get(trigger.right_eye.0)
+    //     .ok()
+    //     .and_then(|h| materials.get_mut(h))
+    // else {
+    //     return;
+    // // };
+    // left_eye_material.uv_transform = Affine2{
+    //     matrix2: Mat2::from_diagonal(Vec2::splat(1.)),
+    //     translation: Vec2::new(),
+    // };
+    // };
+    // right_eye_material.uv_transform = Affine2{
+    //     matrix2: Mat2::from_diagonal(Vec2::splat(1.)),
+    //     translation: Vec2::ZERO,
+    // };
+}
+
+fn calc_target_position(
+    look_at: &LookAt,
+    vrm_entity: Entity,
+    transforms: &Query<&Transform>,
+    global_transforms: &Query<&GlobalTransform>,
+    cameras: &Query<&Camera>,
+    primary_window: &Query<&Window, With<PrimaryWindow>>,
+    windows: &Query<&Window, Without<PrimaryWindow>>,
+) -> Option<Vec3> {
+    match look_at {
+        LookAt::Cursor { camera } => calc_lookt_at_cursor_position(
+            *camera,
+            vrm_entity,
+            &global_transforms,
+            &cameras,
+            &primary_window,
+            &windows,
+        ),
+        LookAt::Target(target_entity) => transforms.get(*target_entity).map(|t| t.translation).ok(),
+    }
+}
+
+fn apply_bone(
+    par_commands: &ParallelCommands,
+    transforms: &Query<&Transform>,
+    left_eye: &LeftEye,
+    right_eye: &RightEye,
+    properties: &LookAtProperties,
+    yaw: f32,
+    pitch: f32,
+) {
+    let Ok(left_eye_tf) = transforms.get(left_eye.0) else {
+        return;
+    };
+    let Ok(right_eye_tf) = transforms.get(right_eye.0) else {
+        return;
+    };
+    let applied_left_eye_tf = apply_left_eye_bone(left_eye_tf, properties, yaw, pitch);
+    let applied_right_eye_tf = apply_right_eye_bone(right_eye_tf, properties, yaw, pitch);
+    // Circles have 32 line-segments by default.
+    // You may want to increase this for larger circles.
+
+    par_commands.command_scope(move |mut commands: Commands| {
+        commands.entity(left_eye.0).insert(applied_left_eye_tf);
+        commands.entity(right_eye.0).insert(applied_right_eye_tf);
+    });
+}
+
 fn calc_lookt_at_cursor_position(
     camera_entity: Entity,
-    head: &Head,
+    vrm_entity: Entity,
     global_transforms: &Query<&GlobalTransform>,
     cameras: &Query<&Camera>,
     primary_window: &Query<&Window, With<PrimaryWindow>>,
@@ -152,7 +242,7 @@ fn calc_lookt_at_cursor_position(
 ) -> Option<Vec3> {
     let camera = cameras.get(camera_entity).ok()?;
     let camera_gtf = global_transforms.get(camera_entity).ok()?;
-    let head_gtf = global_transforms.get(head.0).ok()?;
+    let head_gtf = global_transforms.get(vrm_entity).ok()?;
     let RenderTarget::Window(window_ref) = camera.target else {
         return None;
     };
@@ -162,14 +252,15 @@ fn calc_lookt_at_cursor_position(
     };
     let cursor = window.cursor_position()?;
     let ray = camera.viewport_to_world(camera_gtf, cursor).ok()?;
-    let plane_origin = head_gtf.translation();
-    let plane_up = InfinitePlane3d::new(head_gtf.back());
+    let plane_origin = head_gtf.translation() + head_gtf.back().as_vec3();
+    let plane_up = InfinitePlane3d::new(head_gtf.forward());
     let distance = ray.intersect_plane(plane_origin, plane_up)?;
+    println!("applied_left_eye_tf: {:?}", ray.get_point(distance));
     Some(ray.get_point(distance))
 }
 
 fn calc_yaw_pitch(
-    look_at_space: &Transform,
+    look_at_space: &GlobalTransform,
     target: Vec3,
 ) -> (f32, f32) {
     let local_target = look_at_space

@@ -11,7 +11,6 @@ use crate::vrma::spawn::VrmaSpawnPlugin;
 use bevy::app::App;
 use bevy::asset::Handle;
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -22,48 +21,58 @@ impl Plugin for VrmaPlugin {
         &self,
         app: &mut App,
     ) {
-        app.register_type::<Vrma>()
-            .register_type::<VrmaEntity>()
-            .register_type::<VrmaHandle>()
-            .register_type::<VrmaPath>()
-            .register_type::<VrmaDuration>()
-            .register_type::<RetargetTo>()
-            .register_type::<RetargetSource>()
-            .add_plugins((
-                VrmaLoaderPlugin,
-                VrmaSpawnPlugin,
-                VrmaRetargetPlugin,
-                VrmaAnimationPlayersPlugin,
-            ));
+        app.add_plugins((
+            VrmaLoaderPlugin,
+            VrmaSpawnPlugin,
+            VrmaRetargetPlugin,
+            VrmaAnimationPlayersPlugin,
+        ));
+
+        #[cfg(feature = "reflect")]
+        {
+            app.register_type::<Vrma>()
+                .register_type::<VrmaEntity>()
+                .register_type::<VrmaHandle>()
+                .register_type::<VrmaPath>()
+                .register_type::<VrmaDuration>()
+                .register_type::<RetargetTo>()
+                .register_type::<RetargetSource>();
+        }
     }
 }
 
 /// An asset handle to spawn VRMA.
-#[derive(Debug, Component, Reflect)]
+#[derive(Debug, Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Component))]
 pub struct VrmaHandle(pub Handle<VrmaAsset>);
 
 /// A marker component attached to the entity of VRMA.
-#[derive(Debug, Component, Reflect, Copy, Clone, Serialize, Deserialize)]
-#[reflect(Component, Serialize, Deserialize)]
+#[derive(Debug, Component, Copy, Clone)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct Vrma;
 
 /// A new type pattern object to explicitly indicate the entity is VRMA.
-#[derive(Debug, Reflect, Copy, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[reflect(Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 pub struct VrmaEntity(pub Entity);
 
 /// Represents the path to the VRMA file.
 ///
 /// This component is automatically attached to the entity with the same entity as [`VrmaHandle`] after loading VRMA.
-#[derive(Component, Debug, Reflect, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[reflect(Component, Serialize, Deserialize)]
+#[derive(Component, Debug, Clone, Eq, PartialEq)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct VrmaPath(pub PathBuf);
 
 /// The component that holds the duration of VRMA's animation.
 /// This component is automatically attached to the entity with the same entity as [`VrmaHandle`] after loading VRMA.
 ///
 /// This component's structure will be changed in the future if VRMA can have multiple animations.
-#[derive(Debug, Component, Reflect)]
+#[derive(Debug, Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct VrmaDuration(pub Duration);
 
 /// An event that is emitted when VRMA is loaded.
@@ -78,12 +87,14 @@ pub struct LoadedVrma {
 
 /// The component that holds the entity to retarget.
 /// This is used internally to retarget bones and expressions, and attached after vrma's entity children are spawned.
-#[derive(Debug, Component, Reflect, Serialize, Deserialize)]
-#[reflect(Component, Serialize, Deserialize)]
+#[derive(Debug, Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 struct RetargetTo(pub Entity);
 
 /// This is a component that indicates that it is the source of retargeting.
 /// This is used internally to retarget bones and expressions, and attached after vrma's entity children are spawned.
-#[derive(Component, Reflect, Serialize, Deserialize)]
-#[reflect(Component, Serialize, Deserialize)]
+#[derive(Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 struct RetargetSource;

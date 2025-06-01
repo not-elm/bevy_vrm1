@@ -6,7 +6,6 @@ use crate::vrma::animation::setup::VrmaAnimationSetupPlugin;
 use bevy::app::App;
 use bevy::asset::Handle;
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 
 pub struct VrmaAnimationPlayersPlugin;
 
@@ -15,19 +14,24 @@ impl Plugin for VrmaAnimationPlayersPlugin {
         &self,
         app: &mut App,
     ) {
-        app.register_type::<AnimationPlayerEntityTo>()
-            .register_type::<VrmAnimationGraph>()
-            .add_plugins((VrmaAnimationSetupPlugin, VrmaAnimationPlayPlugin));
+        app.add_plugins((VrmaAnimationSetupPlugin, VrmaAnimationPlayPlugin));
+        #[cfg(feature = "reflect")]
+        {
+            app.register_type::<AnimationPlayerEntityTo>()
+                .register_type::<VrmAnimationGraph>();
+        }
     }
 }
 
 /// After spawn the vrma, the animation player will be spawned.
 /// This component is used to hold that entity in the root entity.
-#[derive(Component, Debug, Reflect, Deref, DerefMut, Serialize, Deserialize)]
-#[reflect(Component, Debug, Serialize, Deserialize)]
+#[derive(Component, Debug, Deref, DerefMut)]
+#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
+#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct AnimationPlayerEntityTo(pub Entity);
 
-#[derive(Component, Default, Reflect)]
+#[derive(Component, Default)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
 pub struct VrmAnimationGraph {
     pub handle: Handle<AnimationGraph>,
     pub nodes: Vec<AnimationNodeIndex>,

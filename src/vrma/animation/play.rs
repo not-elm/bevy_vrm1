@@ -3,18 +3,16 @@ use crate::vrm::Vrm;
 use crate::vrma::retarget::CurrentRetargeting;
 use crate::vrma::{RetargetSource, Vrma, VrmaEntity};
 use bevy::app::{App, Plugin};
-use bevy::prelude::{
-    ChildOf, Children, Commands, Entity, Event, Query, Reflect, Trigger, With, Without,
-};
+use bevy::prelude::{ChildOf, Children, Commands, Entity, Event, Query, Trigger, With, Without};
 
 /// The trigger event to play the Vrma's animation.
-#[derive(Event, Debug, Reflect)]
+#[derive(Event, Debug)]
 pub struct PlayVrma {
     /// Whether to loop the animation.
     pub repeat: bool,
 }
 
-#[derive(Event, Debug, Reflect)]
+#[derive(Event, Debug)]
 pub struct StopVrma;
 
 pub struct VrmaAnimationPlayPlugin;
@@ -24,10 +22,7 @@ impl Plugin for VrmaAnimationPlayPlugin {
         &self,
         app: &mut App,
     ) {
-        app.register_type::<PlayVrma>()
-            .register_type::<StopVrma>()
-            .add_event::<StopVrma>()
-            .add_observer(observe_play_animation)
+        app.add_observer(observe_play_animation)
             .add_observer(observe_stop_animation);
     }
 }

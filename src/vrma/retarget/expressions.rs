@@ -14,25 +14,31 @@ impl Plugin for VrmaRetargetExpressionsPlugin {
         &self,
         app: &mut App,
     ) {
-        app.register_type::<RetargetExpressionTo>()
-            .register_type::<BindExpressionNode>()
-            .add_systems(
-                Update,
-                (
-                    retarget_expressions_to_mascot,
-                    bind_expressions.in_set(RetargetBindingSystemSet),
-                ),
-            );
+        app.add_systems(
+            Update,
+            (
+                retarget_expressions_to_mascot,
+                bind_expressions.in_set(RetargetBindingSystemSet),
+            ),
+        );
+
+        #[cfg(feature = "reflect")]
+        {
+            app.register_type::<RetargetExpressionTo>()
+                .register_type::<BindExpressionNode>();
+        }
     }
 }
 
-#[derive(Reflect)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
 struct BindExpressionNode {
     pub expression_entity: Entity,
     pub index: usize,
 }
 
-#[derive(Component, Reflect)]
+#[derive(Component)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[cfg_attr(feature = "reflect", reflect(Component))]
 struct RetargetExpressionTo(Vec<BindExpressionNode>);
 
 fn retarget_expressions_to_mascot(

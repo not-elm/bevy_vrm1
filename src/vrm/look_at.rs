@@ -58,21 +58,15 @@ impl Plugin for LookAtPlugin {
 
 fn track_looking_target(
     par_commands: ParallelCommands,
-    vrms: Query<(
-        &LookAt,
-        &LookAtProperties,
-        &Head,
-        &LeftEye,
-        &RightEye,
-    )>,
+    vrms: Query<(&LookAt, &LookAtProperties, &Head, &LeftEye, &RightEye)>,
     cameras: Query<&Camera>,
     transforms: Query<&Transform>,
     global_transforms: Query<&GlobalTransform>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
     windows: Query<&Window, Without<PrimaryWindow>>,
 ) {
-    vrms.par_iter().for_each(
-        |(look_at, properties, head, left_eye, right_eye)| {
+    vrms.par_iter()
+        .for_each(|(look_at, properties, head, left_eye, right_eye)| {
             let Ok(head_gtf) = global_transforms.get(head.0) else {
                 return;
             };
@@ -80,7 +74,7 @@ fn track_looking_target(
                 return;
             };
             let look_at_space = GlobalTransform::default();
-            let mut look_at_space_tf =  look_at_space.reparented_to(head_gtf);
+            let mut look_at_space_tf = look_at_space.reparented_to(head_gtf);
             look_at_space_tf.translation = Vec3::from(properties.offset_from_head_bone);
             look_at_space_tf.rotation = head_tf.rotation.inverse();
             let look_at_space = head_gtf.mul_transform(look_at_space_tf);
@@ -112,8 +106,7 @@ fn track_looking_target(
                     todo!("Expression look at is not supported yet");
                 }
             }
-        },
-    );
+        });
 }
 
 fn calc_target_position(

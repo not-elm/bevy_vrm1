@@ -3,14 +3,13 @@ use crate::vrm::Vrm;
 use crate::vrma::retarget::CurrentRetargeting;
 use crate::vrma::{RetargetSource, Vrma, VrmaEntity};
 use bevy::app::{App, Plugin};
-use bevy::prelude::{Children, Commands, Entity, Event, Query, Reflect, Trigger, With, Without};
+use bevy::prelude::{
+    ChildOf, Children, Commands, Entity, Event, Query, Reflect, Trigger, With, Without,
+};
 
 /// The trigger event to play the Vrma's animation.
 #[derive(Event, Debug, Reflect)]
 pub struct PlayVrma {
-    /// The entity of the Vrma to play the animation.
-    pub vrma: VrmaEntity,
-
     /// Whether to loop the animation.
     pub repeat: bool,
 }
@@ -27,7 +26,6 @@ impl Plugin for VrmaAnimationPlayPlugin {
     ) {
         app.register_type::<PlayVrma>()
             .register_type::<StopVrma>()
-            .add_event::<PlayVrma>()
             .add_event::<StopVrma>()
             .add_observer(observe_play_animation)
             .add_observer(observe_stop_animation);
@@ -38,23 +36,26 @@ fn observe_play_animation(
     trigger: Trigger<PlayVrma>,
     mut commands: Commands,
     mut vrma_player: VrmaPlayer,
+    parents: Query<&ChildOf, With<Vrma>>,
     children: Query<&Children, With<Vrm>>,
     vrma: Query<Entity, With<Vrma>>,
     entities: Query<(Option<&Children>, Option<&RetargetSource>), Without<Vrm>>,
 ) {
-    let Ok(children) = children.get(trigger.target()) else {
+    let Ok(vrm_entity) = parents.get(trigger.target()).map(|c| c.parent()) else {
+        return;
+    };
+    let Ok(children) = children.get(vrm_entity) else {
         return;
     };
     for child in children.iter() {
         let Ok(vrma_entity) = vrma.get(*child) else {
             continue;
         };
-        let vrma_entity = VrmaEntity(vrma_entity);
-        if trigger.vrma == vrma_entity {
-            vrma_player.play(vrma_entity, trigger.repeat);
+        if trigger.target() == vrma_entity {
+            vrma_player.play(VrmaEntity(vrma_entity), trigger.repeat);
             foreach_children(
                 &mut commands,
-                vrma_entity.0,
+                vrma_entity,
                 &entities,
                 &|commands, entity, target_source| {
                     if target_source.is_some() {
@@ -63,10 +64,10 @@ fn observe_play_animation(
                 },
             );
         } else {
-            vrma_player.stop(vrma_entity);
+            vrma_player.stop(VrmaEntity(vrma_entity));
             foreach_children(
                 &mut commands,
-                vrma_entity.0,
+                vrma_entity,
                 &entities,
                 &|commands, entity, target_source| {
                     if target_source.is_some() {
@@ -82,14 +83,17 @@ fn observe_stop_animation(
     trigger: Trigger<StopVrma>,
     mut commands: Commands,
     mut vrma_player: VrmaPlayer,
+    parents: Query<&ChildOf, With<Vrma>>,
     children: Query<&Children, With<Vrm>>,
     vrma: Query<Entity, With<Vrma>>,
     entities: Query<(Option<&Children>, Option<&RetargetSource>), Without<Vrm>>,
 ) {
-    let Ok(children) = children.get(trigger.target()) else {
+    let Ok(vrm_entity) = parents.get(trigger.target()).map(|c| c.parent()) else {
         return;
     };
-
+    let Ok(children) = children.get(vrm_entity) else {
+        return;
+    };
     for child in children {
         let Ok(vrma_entity) = vrma.get(*child) else {
             continue;
@@ -97,7 +101,7 @@ fn observe_stop_animation(
         vrma_player.stop(VrmaEntity(vrma_entity));
         foreach_children(
             &mut commands,
-            trigger.observer(),
+            vrm_entity,
             &entities,
             &|commands, entity, retargeting_marker| {
                 if retargeting_marker.is_some() {
@@ -132,7 +136,7 @@ mod tests {
     use crate::vrma::animation::play::{PlayVrma, StopVrma, VrmaAnimationPlayPlugin};
     use crate::vrma::animation::setup::setup_vrma_player;
     use crate::vrma::animation::VrmAnimationGraph;
-    use crate::vrma::{Vrma, VrmaEntity};
+    use crate::vrma::Vrma;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
     use bevy::utils::default;
@@ -169,13 +173,10 @@ mod tests {
         })?;
         app.world_mut().run_system_once(setup_vrma_player)?;
         app.world_mut().run_system_once(
-            |mut commands: Commands,
-             vrm: Query<Entity, With<Vrm>>,
-             vrma: Query<Entity, With<Vrma>>| {
-                commands.entity(vrm.single().unwrap()).trigger(PlayVrma {
-                    vrma: VrmaEntity(vrma.single().unwrap()),
-                    repeat: false,
-                });
+            |mut commands: Commands, vrma: Query<Entity, With<Vrma>>| {
+                commands
+                    .entity(vrma.single().unwrap())
+                    .trigger(PlayVrma { repeat: false });
             },
         )?;
         app.update();
@@ -217,23 +218,17 @@ mod tests {
         })?;
         app.world_mut().run_system_once(setup_vrma_player)?;
         app.world_mut().run_system_once(
-            |mut commands: Commands,
-             vrm: Query<Entity, With<Vrm>>,
-             vrma: Query<Entity, With<Vrma1>>| {
-                commands.entity(vrm.single().unwrap()).trigger(PlayVrma {
-                    vrma: VrmaEntity(vrma.single().unwrap()),
-                    repeat: false,
-                });
+            |mut commands: Commands, vrma: Query<Entity, With<Vrma1>>| {
+                commands
+                    .entity(vrma.single().unwrap())
+                    .trigger(PlayVrma { repeat: false });
             },
         )?;
         app.world_mut().run_system_once(
-            |mut commands: Commands,
-             vrm: Query<Entity, With<Vrm>>,
-             vrma: Query<Entity, With<Vrma2>>| {
-                commands.entity(vrm.single().unwrap()).trigger(PlayVrma {
-                    vrma: VrmaEntity(vrma.single().unwrap()),
-                    repeat: false,
-                });
+            |mut commands: Commands, vrma: Query<Entity, With<Vrma2>>| {
+                commands
+                    .entity(vrma.single().unwrap())
+                    .trigger(PlayVrma { repeat: false });
             },
         )?;
         app.update();
@@ -269,18 +264,15 @@ mod tests {
         })?;
         app.world_mut().run_system_once(setup_vrma_player)?;
         app.world_mut().run_system_once(
-            |mut commands: Commands,
-             vrm: Query<Entity, With<Vrm>>,
-             vrma: Query<Entity, With<Vrma>>| {
-                commands.entity(vrm.single().unwrap()).trigger(PlayVrma {
-                    vrma: VrmaEntity(vrma.single().unwrap()),
-                    repeat: false,
-                });
+            |mut commands: Commands, vrma: Query<Entity, With<Vrma>>| {
+                commands
+                    .entity(vrma.single().unwrap())
+                    .trigger(PlayVrma { repeat: false });
             },
         )?;
         app.world_mut().run_system_once(
-            |mut commands: Commands, vrm: Query<Entity, With<Vrm>>| {
-                commands.entity(vrm.single().unwrap()).trigger(StopVrma);
+            |mut commands: Commands, vrma: Query<Entity, With<Vrma>>| {
+                commands.entity(vrma.single().unwrap()).trigger(StopVrma);
             },
         )?;
         app.update();

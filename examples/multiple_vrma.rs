@@ -1,10 +1,10 @@
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
 use bevy_vrm1::vrm::loader::VrmHandle;
-use bevy_vrm1::vrm::{Vrm, VrmPlugin};
+use bevy_vrm1::vrm::VrmPlugin;
 use bevy_vrm1::vrma::animation::play::PlayVrma;
 use bevy_vrm1::vrma::animation::AnimationPlayerEntityTo;
-use bevy_vrm1::vrma::{VrmaDuration, VrmaEntity, VrmaHandle, VrmaPlugin};
+use bevy_vrm1::vrma::{VrmaDuration, VrmaHandle, VrmaPlugin};
 
 fn main() {
     App::new()
@@ -73,20 +73,13 @@ fn spawn_vrm(
 fn change_animation(
     mut commands: Commands,
     animations: ResMut<Animations>,
-    vrm: Query<Entity, With<Vrm>>,
     vrma: Query<&VrmaDuration>,
 ) {
     let current = animations.animations[animations.current_index];
     let Ok(duration) = vrma.get(current) else {
         return;
     };
-    let Ok(vrm_entity) = vrm.single() else {
-        return;
-    };
-    commands.entity(vrm_entity).trigger(PlayVrma {
-        vrma: VrmaEntity(current),
-        repeat: true,
-    });
+    commands.entity(current).trigger(PlayVrma { repeat: true });
     commands.insert_resource(VrmaTimer(Timer::new(duration.0, TimerMode::Once)));
 }
 

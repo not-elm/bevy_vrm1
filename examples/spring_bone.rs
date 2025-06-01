@@ -2,17 +2,12 @@
 //! You can drag the character to move it around.
 
 use bevy::prelude::*;
-use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use bevy_vrm1::vrm::loader::VrmHandle;
 use bevy_vrm1::vrm::VrmPlugin;
 
 fn main() {
     App::new()
-        .add_plugins((
-            DefaultPlugins,
-            VrmPlugin,
-            MeshPickingPlugin,
-        ))
+        .add_plugins((DefaultPlugins, VrmPlugin, MeshPickingPlugin))
         .add_systems(Startup, (spawn_camera, spawn_vrm, spawn_directional_light))
         .run();
 }
@@ -28,10 +23,7 @@ fn spawn_directional_light(mut commands: Commands) {
 }
 
 fn spawn_camera(mut commands: Commands) {
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(0.0, 0.5, 3.5),
-    ));
+    commands.spawn((Camera3d::default(), Transform::from_xyz(0.0, 0.5, 3.5)));
 }
 
 fn spawn_vrm(
@@ -47,7 +39,7 @@ fn apply_drag_move_vrm(
     trigger: Trigger<Pointer<Drag>>,
     mut transforms: Query<&mut Transform>,
     cameras: Query<(&Camera, &GlobalTransform)>,
-    parents: Query<&ChildOf>
+    parents: Query<&ChildOf>,
 ) {
     let vrm_entity = parents.root_ancestor(trigger.target);
     let (camera, camera_gtf) = cameras.single().expect("expected a camera");

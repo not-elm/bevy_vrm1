@@ -66,6 +66,16 @@ pub struct VrmaPath(pub PathBuf);
 #[derive(Debug, Component, Reflect)]
 pub struct VrmaDuration(pub Duration);
 
+/// An event that is emitted when VRMA is loaded.
+///
+/// This event is emitted as a trigger.
+/// The target of the trigger is the VRMA entity.
+#[derive(Debug, Event, Copy, Clone)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+pub struct LoadedVrma {
+    pub vrm: Entity,
+}
+
 /// The component that holds the entity to retarget.
 /// This is used internally to retarget bones and expressions, and attached after vrma's entity children are spawned.
 #[derive(Debug, Component, Reflect, Serialize, Deserialize)]

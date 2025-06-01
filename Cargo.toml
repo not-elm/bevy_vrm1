@@ -3,6 +3,7 @@ name = "bevy_vrm1"
 version = "0.1.0"
 edition = "2021"
 authors = ["notelm <elmprograminfo@gmail.com>"]
+description = "Allows you to use VRM and VRMA in Bevy"
 repository = "https://github.com/not-elm/bevy_vrm1"
 keywords = ["bevy", "game", "vrm", "vrma"]
 categories = ["games"]

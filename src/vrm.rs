@@ -16,7 +16,6 @@ use crate::vrm::spring_bone::VrmSpringBonePlugin;
 use bevy::app::{App, Plugin};
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
-use bevy_mod_outline::OutlinePlugin;
 use expressions::VrmExpressionPlugin;
 use mtoon::MtoonMaterialPlugin;
 use serde::{Deserialize, Serialize};
@@ -101,7 +100,6 @@ impl Plugin for VrmPlugin {
             VrmHumanoidBonePlugin,
             VrmExpressionPlugin,
             MtoonMaterialPlugin,
-            OutlinePlugin,
             LookAtPlugin,
         ));
 

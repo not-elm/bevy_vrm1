@@ -1,4 +1,5 @@
-//! [`VRMC_vrm-1.0/lookAt.md`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md)
+//! - [`look at specification(en)`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md)
+//! - [`look at specification(ja)`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.ja.md)
 
 use crate::vrm::gltf::extensions::vrmc_vrm::{LookAtProperties, LookAtType};
 use crate::vrm::{Head, LeftEye, RightEye};
@@ -51,37 +52,8 @@ impl Plugin for LookAtPlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_systems(Update, (spawn_look_at_space, track_looking_target));
-
-        #[cfg(feature = "reflect")]
-        app.register_type::<LookAtSpace>();
+        app.add_systems(Update, track_looking_target);
     }
-}
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
-struct LookAtSpace(Entity);
-
-/// See [`lookAt`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md) for more details.
-fn spawn_look_at_space(
-    par_commands: ParallelCommands,
-    vrms: Query<(Entity, &Head, &LookAtProperties), Added<Head>>,
-    transforms: Query<&Transform>,
-) {
-    vrms.par_iter().for_each(|(entity, head, properties)| {
-        let offset = Vec3::from_array(properties.offset_from_head_bone);
-        let Ok(head_tf) = transforms.get(head.0) else {
-            return;
-        };
-        let transform =
-            Transform::from_translation(offset).with_rotation(head_tf.rotation.inverse());
-        par_commands.command_scope(move |mut commands: Commands| {
-            let look_at_space = commands.spawn(transform).id();
-            commands.entity(head.0).add_child(look_at_space);
-            commands.entity(entity).insert(LookAtSpace(look_at_space));
-        });
-    });
 }
 
 fn track_looking_target(
@@ -90,7 +62,6 @@ fn track_looking_target(
         &LookAt,
         &LookAtProperties,
         &Head,
-        &LookAtSpace,
         &LeftEye,
         &RightEye,
     )>,
@@ -101,17 +72,15 @@ fn track_looking_target(
     windows: Query<&Window, Without<PrimaryWindow>>,
 ) {
     vrms.par_iter().for_each(
-        |(look_at, properties, head, look_at_space, left_eye, right_eye)| {
-            let Ok(look_at_space_tf) = transforms.get(look_at_space.0) else {
-                return;
-            };
+        |(look_at, properties, head, left_eye, right_eye)| {
             let Ok(head_gtf) = global_transforms.get(head.0) else {
                 return;
             };
             let Ok(head_tf) = transforms.get(head.0) else {
                 return;
             };
-            let mut look_at_space_tf = *look_at_space_tf;
+            let look_at_space = GlobalTransform::default();
+            let mut look_at_space_tf =  look_at_space.reparented_to(head_gtf);
             look_at_space_tf.translation = Vec3::from(properties.offset_from_head_bone);
             look_at_space_tf.rotation = head_tf.rotation.inverse();
             let look_at_space = head_gtf.mul_transform(look_at_space_tf);
@@ -186,9 +155,6 @@ fn apply_bone(
     };
     let applied_left_eye_tf = apply_left_eye_bone(left_eye_tf, properties, yaw, pitch);
     let applied_right_eye_tf = apply_right_eye_bone(right_eye_tf, properties, yaw, pitch);
-    // Circles have 32 line-segments by default.
-    // You may want to increase this for larger circles.
-
     par_commands.command_scope(move |mut commands: Commands| {
         commands.entity(left_eye.0).insert(applied_left_eye_tf);
         commands.entity(right_eye.0).insert(applied_right_eye_tf);
@@ -215,10 +181,10 @@ fn calc_lookt_at_cursor_position(
     };
     let cursor = window.cursor_position()?;
     let ray = camera.viewport_to_world(camera_gtf, cursor).ok()?;
-    let plane_origin = head_gtf.translation() + head_gtf.back().as_vec3();
-    let plane_up = InfinitePlane3d::new(head_gtf.forward());
+    let delta = camera_gtf.translation() - head_gtf.translation();
+    let plane_origin = head_gtf.translation() + delta * 0.5;
+    let plane_up = InfinitePlane3d::new(camera_gtf.back());
     let distance = ray.intersect_plane(plane_origin, plane_up)?;
-    println!("applied_left_eye_tf: {:?}", ray.get_point(distance));
     Some(ray.get_point(distance))
 }
 

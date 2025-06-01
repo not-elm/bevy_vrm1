@@ -29,7 +29,7 @@ fn spawn_camera_and_vrm(
         .id();
 
     commands.spawn((
-        VrmHandle(asset_server.load("models/AliciaSolid.vrm")),
+        VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
         LookAt::Cursor { camera },
     ));
 }

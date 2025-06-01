@@ -32,7 +32,7 @@ fn spawn_vrm(
     asset_server: Res<AssetServer>,
 ) {
     commands
-        .spawn(VrmHandle(asset_server.load("models/AliciaSolid.vrm")))
+        .spawn(VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")))
         .with_children(|cmd| {
             cmd.spawn(VrmaHandle(asset_server.load("vrma/VRMA_01.vrma")))
                 .observe(apply_play_vrma);

@@ -42,9 +42,15 @@ You can use the `LookAt` component to track a specific target or the mouse curso
 - [look_at_cursor.rs](./examples/look_at_cursor.rs)
 - [look_at_target.rs](./examples/look_at_target.rs)
 
-
 ### Animation(vrma)
 
+You can play animations using VRMA.
+
+- [vrma specification(en)](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/README.md)
+- [vrma specification(ja)](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/README.ja.md)
+
+### examples
+- [vrma.rs](./examples/vrma.rs)
 
 ## Credits
 

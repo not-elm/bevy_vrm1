@@ -11,6 +11,8 @@ use crate::vrma::spawn::VrmaSpawnPlugin;
 use bevy::app::App;
 use bevy::asset::Handle;
 use bevy::prelude::*;
+#[cfg(feature = "reflect")]
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 

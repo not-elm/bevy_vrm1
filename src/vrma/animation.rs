@@ -7,6 +7,9 @@ use bevy::app::App;
 use bevy::asset::Handle;
 use bevy::prelude::*;
 
+#[cfg(feature = "reflect")]
+use serde::{Deserialize, Serialize};
+
 pub struct VrmaAnimationPlayersPlugin;
 
 impl Plugin for VrmaAnimationPlayersPlugin {

@@ -34,8 +34,7 @@ fn spawn_vrm(
     commands
         .spawn(VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")))
         .with_children(|cmd| {
-            cmd
-                .spawn(VrmaHandle(asset_server.load("vrma/VRMA_01.vrma")))
+            cmd.spawn(VrmaHandle(asset_server.load("vrma/VRMA_01.vrma")))
                 .observe(apply_play_vrma);
         });
 }

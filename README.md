@@ -1,6 +1,6 @@
 # bevy_vrm1
 
-![simple](./docs/simple.png)
+![simple](./docs/simple.jpg)
 
 > [!CAUTION]
 > This crate is in an early stage of development and may undergo breaking changes.

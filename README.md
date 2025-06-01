@@ -10,14 +10,14 @@
 
 This crate allows you to use [VRM1.0](https://vrm.dev/en/vrm/vrm_about/) and [VRMA](https://vrm.dev/en/vrma/).
 
-## Features
+## Usage
 
-| Feature        | currently supported |
-|----------------|---------------------|
-| Spring Bone    | ✅                   |
-| Look At        | ✅                   |
+| Name            | currently supported |
+|-----------------|---------------------|
+| Spring Bone     | ✅                   |
+| Look At         | ✅                   |
 | Animation(vrma) | ✅                   |
-| First Person   | ❌                   |
+| First Person    | ❌                   |
 
 ### Spring Bone
 
@@ -29,6 +29,7 @@ This is a feature for expressing the sway of a character's hair and other parts.
 - [spring bone specification(ja)](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_springBone-1.0/README.ja.md)
 
 #### examples
+
 - [spring_bone.rs](./examples/spring_bone.rs)
 
 ### Look At
@@ -42,6 +43,7 @@ LookAt is a component for animating the line of sight into a VRM model.
 You can use the `LookAt` component to track a specific target or the mouse cursor.
 
 #### examples
+
 - [look_at_cursor.rs](./examples/look_at_cursor.rs)
 - [look_at_target.rs](./examples/look_at_target.rs)
 
@@ -55,7 +57,20 @@ You can play animations using VRMA.
 - [vrma specification(ja)](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/README.ja.md)
 
 ### examples
+
 - [vrma.rs](./examples/vrma.rs)
+
+### Features
+
+| Feature | Description                   | default |
+|---------|-------------------------------|---------|
+| reflect | derive reflect for components | no      |
+
+## Versions
+
+| bevy_vrm1 | bevy |
+|-----------|------|
+| 0.1.0     | 0.16 |
 
 ## Credits
 

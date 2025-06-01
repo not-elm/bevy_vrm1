@@ -78,7 +78,6 @@ Using [bevy_game_template](https://github.com/NiklasEi/bevy_game_template) to CI
 
 ### Sample Models
 
-- **AvatarSample-A** by **pixiv Inc.'s VRoid Project**
 - **AliciaSolid** by **© DWANGO Co., Ltd.**
 
 ## Contact

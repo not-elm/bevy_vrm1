@@ -25,11 +25,11 @@ fn spawn_camera_and_vrm(
     asset_server: Res<AssetServer>,
 ) {
     let camera = commands
-        .spawn((Camera3d::default(), Transform::from_xyz(0.0, 1.0, 3.5)))
+        .spawn((Camera3d::default(), Transform::from_xyz(0.0, 1.3, 1.)))
         .id();
 
     commands.spawn((
-        VrmHandle(asset_server.load("models/AliciaSolid.vrm")),
+        VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
         LookAt::Cursor { camera },
     ));
 }

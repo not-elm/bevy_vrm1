@@ -1,7 +1,9 @@
 use crate::vrma::animation::{AnimationPlayerEntityTo, VrmAnimationGraph};
+use crate::vrma::LoadedVrma;
 use bevy::app::{App, Update};
 use bevy::prelude::{
-    Added, AnimationGraphHandle, AnimationPlayer, ChildOf, Entity, ParallelCommands, Plugin, Query,
+    Added, AnimationGraphHandle, AnimationPlayer, ChildOf, Commands, Entity, ParallelCommands,
+    Plugin, Query,
 };
 
 /// At the timing when the spawn of the Vrma's animation player is completed,
@@ -14,7 +16,7 @@ impl Plugin for VrmaAnimationSetupPlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_systems(Update, (setup_vrma_player,));
+        app.add_systems(Update, (setup_vrma_player, trigger_loaded_vrma));
     }
 }
 
@@ -46,6 +48,17 @@ pub(crate) fn setup_vrma_player(
             }
         }
     });
+}
+
+fn trigger_loaded_vrma(
+    mut commands: Commands,
+    vrma: Query<(Entity, &ChildOf), Added<AnimationPlayerEntityTo>>,
+) {
+    for (vrma_entity, child_of) in vrma.iter() {
+        commands.entity(vrma_entity).trigger(LoadedVrma {
+            vrm: child_of.parent(),
+        });
+    }
 }
 
 #[cfg(test)]

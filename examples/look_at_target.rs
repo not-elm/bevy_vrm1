@@ -1,3 +1,7 @@
+//! This example shows how to make a VRM model look at a specific entity.
+//! The VRM model will track a red cube as its target.
+//! The cube can be freely moved by dragging it with the mouse.
+
 use bevy::prelude::*;
 use bevy_vrm1::vrm::loader::VrmHandle;
 use bevy_vrm1::vrm::look_at::LookAt;
@@ -5,9 +9,8 @@ use bevy_vrm1::vrm::VrmPlugin;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, VrmPlugin))
+        .add_plugins((DefaultPlugins, VrmPlugin, MeshPickingPlugin))
         .add_systems(Startup, (spawn_camera, spawn_vrm, spawn_directional_light))
-        .add_systems(Update, rotate)
         .run();
 }
 
@@ -38,23 +41,30 @@ fn spawn_vrm(
                 materials.add(StandardMaterial::from_color(Color::linear_rgb(1., 0., 0.))),
             ),
             Transform::from_xyz(0.5, 2., 1.),
-            Rotation,
         ))
+        .observe(apply_drag_move_cube)
         .id();
     commands.spawn((
-        VrmHandle(asset_server.load("models/AliciaSolid.vrm")),
+        VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
         LookAt::Target(cube),
     ));
 }
 
-#[derive(Component)]
-struct Rotation;
-
-fn rotate(
-    mut cube: Query<&mut Transform, With<Rotation>>,
-    time: Res<Time>,
+fn apply_drag_move_cube(
+    trigger: Trigger<Pointer<Drag>>,
+    mut transforms: Query<&mut Transform>,
+    cameras: Query<(&Camera, &GlobalTransform)>,
 ) {
-    for mut transform in cube.iter_mut() {
-        transform.rotate_around(Vec3::Y, Quat::from_rotation_z(time.delta_secs()));
-    }
+    let (camera, camera_gtf) = cameras.single().expect("expected a camera");
+    let Ok(ray) = camera.viewport_to_world(camera_gtf, trigger.pointer_location.position) else {
+        return;
+    };
+    let Ok(mut tf) = transforms.get_mut(trigger.target) else {
+        return;
+    };
+    let plane = InfinitePlane3d::new(camera_gtf.back());
+    let Some(distance) = ray.intersect_plane(tf.translation, plane) else {
+        return;
+    };
+    tf.translation = ray.get_point(distance);
 }

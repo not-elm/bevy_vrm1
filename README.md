@@ -44,6 +44,8 @@ You can use the `LookAt` component to track a specific target or the mouse curso
 
 ### Animation(vrma)
 
+![VRMA](./docs/vrma.gif)
+
 You can play animations using VRMA.
 
 - [vrma specification(en)](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/README.md)

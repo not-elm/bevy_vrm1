@@ -5,7 +5,10 @@
 > [!CAUTION]
 > This crate is in an early stage of development and may undergo breaking changes.
 
-This crate allows you to use [VRM](https://vrm.dev/en/vrm/vrm_about/) and [VRMA](https://vrm.dev/en/vrma/).
+> [!NOTE]
+> This crate only supports VRM 1.0.
+
+This crate allows you to use [VRM1.0](https://vrm.dev/en/vrm/vrm_about/) and [VRMA](https://vrm.dev/en/vrma/).
 
 ## Features
 

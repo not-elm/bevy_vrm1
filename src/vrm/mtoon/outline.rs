@@ -63,7 +63,7 @@ impl From<&VrmcMaterialsExtensitions> for MToonOutline {
     fn from(value: &VrmcMaterialsExtensitions) -> Self {
         let color = value.outline_color_factor;
         Self {
-            width_factor: value.outline_width_factor,
+            width_factor: value.outline_width_factor.unwrap_or_default(),
             lighting_mix_factor: value.outline_lighting_mix_factor,
             color: LinearRgba::rgb(color[0], color[1], color[2]),
         }
@@ -133,7 +133,7 @@ impl Plugin for MToonOutlinePlugin {
             .add_systems(
                 Render,
                 (
-                    queue_outlines.in_set(RenderSet::QueueMeshes),
+                    // queue_outlines.in_set(RenderSet::QueueMeshes),
                     sort_phase_system::<OutlinePhaseItem>.in_set(RenderSet::PhaseSort),
                     bevy::render::batching::gpu_preprocessing::batch_and_prepare_sorted_render_phase::<OutlinePhaseItem, MToonOutlinePipeline>
                         .in_set(RenderSet::PrepareResources),

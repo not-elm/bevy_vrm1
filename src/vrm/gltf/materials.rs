@@ -26,7 +26,7 @@ pub struct VrmcMaterialsExtensitions {
     #[serde(rename = "outlineLightingMixFactor")]
     pub outline_lighting_mix_factor: f32,
     #[serde(rename = "outlineWidthFactor")]
-    pub outline_width_factor: f32,
+    pub outline_width_factor: Option<f32>,
     #[serde(rename = "outlineWidthMode")]
     pub outline_width_mode: String,
     #[serde(rename = "parametricRimColorFactor")]

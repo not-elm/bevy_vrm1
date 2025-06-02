@@ -133,7 +133,7 @@ impl Plugin for MToonOutlinePlugin {
             .add_systems(
                 Render,
                 (
-                    // queue_outlines.in_set(RenderSet::QueueMeshes),
+                    queue_outlines.in_set(RenderSet::QueueMeshes),
                     sort_phase_system::<OutlinePhaseItem>.in_set(RenderSet::PhaseSort),
                     bevy::render::batching::gpu_preprocessing::batch_and_prepare_sorted_render_phase::<OutlinePhaseItem, MToonOutlinePipeline>
                         .in_set(RenderSet::PrepareResources),

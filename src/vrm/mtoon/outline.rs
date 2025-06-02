@@ -63,7 +63,7 @@ impl From<&VrmcMaterialsExtensitions> for MToonOutline {
     fn from(value: &VrmcMaterialsExtensitions) -> Self {
         let color = value.outline_color_factor;
         Self {
-            width_factor: value.outline_width_factor,
+            width_factor: value.outline_width_factor.unwrap_or_default(),
             lighting_mix_factor: value.outline_lighting_mix_factor,
             color: LinearRgba::rgb(color[0], color[1], color[2]),
         }

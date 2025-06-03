@@ -100,29 +100,8 @@ fn fragment(
     in: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
-    let vertex_input = VertexOutput(
-        in.position,
-        in.world_position,
-        in.world_normal,
-#ifdef VERTEX_UVS_A
-        calc_animated_uv((material.uv_transform * vec3(in.uv, 1.0)).xy),
-#endif
-#ifdef VERTEX_UVS_B
-        in.uv_b,
-#endif
-#ifdef VERTEX_TANGENTS
-        in.world_tangent,
-#endif
-#ifdef VERTEX_COLORS
-        in.color,
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-        in.instance_index,
-#endif
-#ifdef VISIBILITY_RANGE_DITHER
-        in.visibility_range_dither,
-#endif
-    );
+    var vertex_input = in;
+    vertex_input.uv = calc_animated_uv((material.uv_transform * vec3(in.uv, 1.0)).xy);
 
     var out: FragmentOutput;
     var pbr_input = make_pbr_input(vertex_input, is_front);
@@ -201,27 +180,15 @@ fn apply_mtoon_lighting(in: MToonInput) -> vec4<f32> {
 
 fn apply_directional_lights(in: MToonInput) -> vec3<f32>{
     var direct: vec3<f32> = vec3(0.);
+    var shade_color: vec3<f32> = calc_shade_color(in);
+    var shading: f32 = 0.0;
     for (var i: u32 = 0u; i < lights.n_directional_lights; i = i + 1u) {
-        if (lights.directional_lights[i].skip != 0u) {
+        if (lights.directional_lights[i].skip != 0u || (lights.directional_lights[i].flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u) {
             continue;
         }
-        direct += calc_directional_light_color(in, i);
+        shading += calc_mtoon_lighting_shading(in, i);
     }
-    return direct;
-}
-
-fn calc_directional_light_color(
-    in: MToonInput,
-    light_id: u32,
-) -> vec3<f32> {
-    if((lights.directional_lights[light_id].flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u){
-        let shading = calc_mtoon_lighting_shading(in, light_id);
-        let base_color_term = in.lit_color.rgb;
-        let shade_color_term = calc_shade_color_term(in);
-        return mix(shade_color_term, base_color_term, shading);
-    }else{
-        return in.lit_color.rgb;
-    }
+    return mix(shade_color, in.lit_color.rgb, shading);
 }
 
 fn calc_mtoon_lighting_shading(
@@ -232,14 +199,26 @@ fn calc_mtoon_lighting_shading(
     let NdotL = saturate(dot(normalize(input.world_normal), normalize((*light).direction_to_light)));
     let shade_shift = calc_mtoon_lighting_reflectance_shading_shift(input);
     let shade_input = mix(-1., 1., mtoon_linearstep(-1., 1., NdotL));
-    return mtoon_linearstep(-1.0 + material.shading_toony_factor, 1.0 - material.shading_toony_factor, shade_input + shade_shift);
+    let view_z = dot(vec4<f32>(
+        view.view_from_world[0].z,
+        view.view_from_world[1].z,
+        view.view_from_world[2].z,
+        view.view_from_world[3].z
+    ), input.world_position);
+    var shadow = shadows::fetch_directional_shadow(
+        light_id,
+        input.world_position,
+        input.world_normal,
+        view_z,
+    );
+    return mtoon_linearstep(-1.0 + material.shading_toony_factor, 1.0 - material.shading_toony_factor, shade_input + shade_shift) * shadow;
 }
 
 fn calc_mtoon_lighting_reflectance_shading_shift(
     input: MToonInput,
 ) -> f32 {
     if((material.flags & SHADING_SHIFT_TEXTURE) != 0u) {
-        return textureSample(shading_shift_texture, shading_shift_texture_sampler, input.uv).r * material.shading_shift_texture_scale + material.shading_shift_factor;
+        return textureSampleBias(shading_shift_texture, shading_shift_texture_sampler, input.uv, view.mip_bias).r * material.shading_shift_texture_scale + material.shading_shift_factor;
     } else {
         return material.shading_shift_factor;
     }
@@ -269,10 +248,10 @@ fn apply_global_illumination(
     return view_bindings::view.exposure * in_direct_light;
 }
 
-fn calc_shade_color_term(in: MToonInput) -> vec3<f32>{
+fn calc_shade_color(in: MToonInput) -> vec3<f32>{
    let base_color = material.shade_color.rgb;
    if((material.flags & SHADE_MULTIPLY_TEXTURE) != 0u) {
-       return base_color * textureSample(shade_multiply_texture, shade_multiply_texture_sampler, in.uv).rgb;
+       return base_color * textureSampleBias(shade_multiply_texture, shade_multiply_texture_sampler, in.uv, view.mip_bias).rgb;
    }else{
       return base_color;
    }

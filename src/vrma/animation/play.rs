@@ -130,7 +130,7 @@ mod tests {
     use crate::vrm::Vrm;
     use crate::vrma::animation::play::{PlayVrma, StopVrma, VrmaAnimationPlayPlugin};
     use crate::vrma::animation::setup::setup_vrma_player;
-    use crate::vrma::animation::VrmAnimationGraph;
+    use crate::vrma::animation::{VrmAnimationGraph, VrmaAnimationPlayers};
     use crate::vrma::Vrma;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
@@ -153,11 +153,10 @@ mod tests {
         let mut app = test_app();
         app.add_plugins(VrmaAnimationPlayPlugin);
         app.world_mut().run_system_once(|mut commands: Commands| {
-            AnimationClip::default();
-
             commands.spawn(Vrm).with_children(|cmd| {
                 cmd.spawn((
                     Vrma,
+                    VrmaAnimationPlayers::default(),
                     VrmAnimationGraph {
                         nodes: vec![0.into()],
                         ..default()
@@ -193,6 +192,7 @@ mod tests {
                 cmd.spawn((
                     Vrma1,
                     Vrma,
+                    VrmaAnimationPlayers::default(),
                     VrmAnimationGraph {
                         nodes: vec![0.into()],
                         ..default()
@@ -203,6 +203,7 @@ mod tests {
                 cmd.spawn((
                     Vrma,
                     Vrma2,
+                    VrmaAnimationPlayers::default(),
                     VrmAnimationGraph {
                         nodes: vec![0.into()],
                         ..default()

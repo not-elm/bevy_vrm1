@@ -51,19 +51,19 @@ impl VrmPath {
 }
 
 /// The bone's initial transform.
-#[derive(Debug, Copy, Clone, Component)]
+#[derive(Debug, Copy, Clone, Component, Deref)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct BoneRestTransform(pub Transform);
 
 /// The bone's initial global transform.
-#[derive(Debug, Copy, Clone, Component)]
+#[derive(Debug, Copy, Clone, Component, Deref)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct BoneRestGlobalTransform(pub GlobalTransform);
 
 /// Holds the entity of the hips bone.
-#[derive(Debug, Copy, Clone, Component)]
+#[derive(Debug, Copy, Clone, Component, Deref)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct VrmHipsBoneTo(pub Entity);

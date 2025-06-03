@@ -1,7 +1,7 @@
 # bevy_vrm1
 
-[![Crates.io](https://img.shields.io/crates/v/bevy.svg)](https://crates.io/crates/bevy_vrm1)
-[![Docs](https://docs.rs/bevy/badge.svg)](https://docs.rs/bevy_vrm1/latest/bevy_vrm1/)
+[![Crates.io](https://img.shields.io/crates/v/bevy_vrm1.svg)](https://crates.io/crates/bevy_vrm1)
+[![Docs](https://docs.rs/bevy_vrm1/badge.svg)](https://docs.rs/bevy_vrm1/latest/bevy_vrm1/)
 
 ![simple](./docs/simple.jpg)
 

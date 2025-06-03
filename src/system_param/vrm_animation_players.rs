@@ -26,7 +26,6 @@ impl VrmaPlayer<'_, '_> {
             };
             player.stop_all();
             for node in &graph.nodes {
-                println!("{node:?}");
                 let controller = player.play(*node);
                 if is_repeat {
                     controller.repeat();

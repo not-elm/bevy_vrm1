@@ -1,7 +1,7 @@
 use crate::macros::marker_component;
 use crate::system_param::child_searcher::ChildSearcher;
 use crate::vrm::humanoid_bone::{Hips, HumanoidBoneRegistry, HumanoidBonesAttached};
-use crate::vrm::{BoneRestGlobalTransform, VrmHipsBoneTo};
+use crate::vrm::{BoneRestGlobalTransform, BoneRestTransform, VrmHipsBoneTo};
 use crate::vrma::retarget::{CurrentRetargeting, RetargetBindingSystemSet};
 use crate::vrma::{RetargetSource, RetargetTo};
 use bevy::prelude::*;
@@ -76,20 +76,31 @@ fn bind_bone_rotations(
         (
             &RetargetBoneTo,
             &Transform,
+            &BoneRestTransform,
             &BoneRestGlobalTransform,
             Option<&Hips>,
         ),
         (Changed<Transform>, With<CurrentRetargeting>),
     >,
-    dist_bones: Query<(&Transform, &BoneRestGlobalTransform)>,
+    dist_bones: Query<(&Transform, &BoneRestTransform, &BoneRestGlobalTransform)>,
 ) {
     sources.par_iter().for_each(
-        |(retarget_bone_to, src_pose_tf, src_rest_gtf, maybe_hips)| {
-            let Ok((dist_pose_tf, dist_rest_gtf)) = dist_bones.get(retarget_bone_to.0) else {
+        |(retarget_bone_to, src_pose_tf, src_rest_tf, src_rest_gtf, maybe_hips)| {
+            let Ok((dist_pose_tf, dist_rest_tf, dist_rest_gtf)) =
+                dist_bones.get(retarget_bone_to.0)
+            else {
                 return;
             };
+            // https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/how_to_transform_human_pose.md
+            let normalized_local_rotation = src_rest_gtf.rotation()
+                * src_rest_tf.rotation.inverse()
+                * src_pose_tf.rotation
+                * src_rest_gtf.rotation().inverse();
             let transform = Transform {
-                rotation: src_pose_tf.rotation,
+                rotation: dist_rest_tf.rotation
+                    * dist_rest_gtf.rotation().inverse()
+                    * normalized_local_rotation
+                    * dist_rest_gtf.rotation(),
                 translation: if maybe_hips.is_some() {
                     calc_hips_position(
                         src_rest_gtf.0.translation(),

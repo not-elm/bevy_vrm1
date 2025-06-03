@@ -180,27 +180,15 @@ fn apply_mtoon_lighting(in: MToonInput) -> vec4<f32> {
 
 fn apply_directional_lights(in: MToonInput) -> vec3<f32>{
     var direct: vec3<f32> = vec3(0.);
+    var shade_color: vec3<f32> = calc_shade_color(in);
+    var shading: f32 = 0.0;
     for (var i: u32 = 0u; i < lights.n_directional_lights; i = i + 1u) {
-        if (lights.directional_lights[i].skip != 0u) {
+        if (lights.directional_lights[i].skip != 0u || (lights.directional_lights[i].flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u) {
             continue;
         }
-        direct += calc_directional_light_color(in, i);
+        shading += calc_mtoon_lighting_shading(in, i);
     }
-    return direct;
-}
-
-fn calc_directional_light_color(
-    in: MToonInput,
-    light_id: u32,
-) -> vec3<f32> {
-    if((lights.directional_lights[light_id].flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u){
-        let shading = calc_mtoon_lighting_shading(in, light_id);
-        let base_color_term = in.lit_color.rgb;
-        let shade_color_term = calc_shade_color_term(in);
-        return mix(shade_color_term, base_color_term, shading);
-    }else{
-        return in.lit_color.rgb;
-    }
+    return mix(shade_color, in.lit_color.rgb, shading);
 }
 
 fn calc_mtoon_lighting_shading(
@@ -260,10 +248,10 @@ fn apply_global_illumination(
     return view_bindings::view.exposure * in_direct_light;
 }
 
-fn calc_shade_color_term(in: MToonInput) -> vec3<f32>{
+fn calc_shade_color(in: MToonInput) -> vec3<f32>{
    let base_color = material.shade_color.rgb;
    if((material.flags & SHADE_MULTIPLY_TEXTURE) != 0u) {
-       return base_color * textureSample(shade_multiply_texture, shade_multiply_texture_sampler, in.uv).rgb;
+       return base_color * textureSampleBias(shade_multiply_texture, shade_multiply_texture_sampler, in.uv, view.mip_bias).rgb;
    }else{
       return base_color;
    }

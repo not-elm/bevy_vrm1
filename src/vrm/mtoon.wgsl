@@ -100,29 +100,8 @@ fn fragment(
     in: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
-    let vertex_input = VertexOutput(
-        in.position,
-        in.world_position,
-        in.world_normal,
-#ifdef VERTEX_UVS_A
-        calc_animated_uv((material.uv_transform * vec3(in.uv, 1.0)).xy),
-#endif
-#ifdef VERTEX_UVS_B
-        in.uv_b,
-#endif
-#ifdef VERTEX_TANGENTS
-        in.world_tangent,
-#endif
-#ifdef VERTEX_COLORS
-        in.color,
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
-        in.instance_index,
-#endif
-#ifdef VISIBILITY_RANGE_DITHER
-        in.visibility_range_dither,
-#endif
-    );
+    var vertex_input = in;
+    vertex_input.uv = calc_animated_uv((material.uv_transform * vec3(in.uv, 1.0)).xy);
 
     var out: FragmentOutput;
     var pbr_input = make_pbr_input(vertex_input, is_front);
@@ -232,14 +211,26 @@ fn calc_mtoon_lighting_shading(
     let NdotL = saturate(dot(normalize(input.world_normal), normalize((*light).direction_to_light)));
     let shade_shift = calc_mtoon_lighting_reflectance_shading_shift(input);
     let shade_input = mix(-1., 1., mtoon_linearstep(-1., 1., NdotL));
-    return mtoon_linearstep(-1.0 + material.shading_toony_factor, 1.0 - material.shading_toony_factor, shade_input + shade_shift);
+    let view_z = dot(vec4<f32>(
+        view.view_from_world[0].z,
+        view.view_from_world[1].z,
+        view.view_from_world[2].z,
+        view.view_from_world[3].z
+    ), input.world_position);
+    var shadow = shadows::fetch_directional_shadow(
+        light_id,
+        input.world_position,
+        input.world_normal,
+        view_z,
+    );
+    return mtoon_linearstep(-1.0 + material.shading_toony_factor, 1.0 - material.shading_toony_factor, shade_input + shade_shift) * shadow;
 }
 
 fn calc_mtoon_lighting_reflectance_shading_shift(
     input: MToonInput,
 ) -> f32 {
     if((material.flags & SHADING_SHIFT_TEXTURE) != 0u) {
-        return textureSample(shading_shift_texture, shading_shift_texture_sampler, input.uv).r * material.shading_shift_texture_scale + material.shading_shift_factor;
+        return textureSampleBias(shading_shift_texture, shading_shift_texture_sampler, input.uv, view.mip_bias).r * material.shading_shift_texture_scale + material.shading_shift_factor;
     } else {
         return material.shading_shift_factor;
     }

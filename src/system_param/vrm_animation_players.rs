@@ -1,4 +1,4 @@
-use crate::vrma::animation::{AnimationPlayerEntityTo, VrmAnimationGraph};
+use crate::vrma::animation::{VrmAnimationGraph, VrmaAnimationPlayers};
 use crate::vrma::VrmaEntity;
 use bevy::animation::AnimationPlayer;
 use bevy::ecs::system::SystemParam;
@@ -6,7 +6,7 @@ use bevy::prelude::Query;
 
 #[derive(SystemParam)]
 pub struct VrmaPlayer<'w, 's> {
-    vrma: Query<'w, 's, (&'static AnimationPlayerEntityTo, &'static VrmAnimationGraph)>,
+    vrma: Query<'w, 's, (&'static VrmaAnimationPlayers, &'static VrmAnimationGraph)>,
     animation_players: Query<'w, 's, &'static mut AnimationPlayer>,
 }
 
@@ -16,17 +16,21 @@ impl VrmaPlayer<'_, '_> {
         vrma: VrmaEntity,
         is_repeat: bool,
     ) {
-        let Ok((AnimationPlayerEntityTo(player_entity), graph)) = self.vrma.get(vrma.0) else {
+        let Ok((VrmaAnimationPlayers(players), graph)) = self.vrma.get(vrma.0) else {
             return;
         };
-        let Ok(mut player) = self.animation_players.get_mut(*player_entity) else {
-            return;
-        };
-        player.stop_all();
-        for node in &graph.nodes {
-            let controller = player.play(*node);
-            if is_repeat {
-                controller.repeat();
+
+        for player_entity in players.iter() {
+            let Ok(mut player) = self.animation_players.get_mut(*player_entity) else {
+                return;
+            };
+            player.stop_all();
+            for node in &graph.nodes {
+                println!("{node:?}");
+                let controller = player.play(*node);
+                if is_repeat {
+                    controller.repeat();
+                }
             }
         }
     }
@@ -35,14 +39,16 @@ impl VrmaPlayer<'_, '_> {
         &mut self,
         vrma: VrmaEntity,
     ) {
-        let Ok((AnimationPlayerEntityTo(player_entity), _)) = self.vrma.get(vrma.0) else {
+        let Ok((VrmaAnimationPlayers(player_entity), _)) = self.vrma.get(vrma.0) else {
             return;
         };
 
-        let Ok(mut player) = self.animation_players.get_mut(*player_entity) else {
-            return;
-        };
-        player.stop_all();
+        for player_entity in player_entity.iter() {
+            let Ok(mut player) = self.animation_players.get_mut(*player_entity) else {
+                return;
+            };
+            player.stop_all();
+        }
     }
 }
 
@@ -51,7 +57,7 @@ mod tests {
     use crate::success;
     use crate::system_param::vrm_animation_players::VrmaPlayer;
     use crate::tests::{test_app, TestResult};
-    use crate::vrma::animation::{AnimationPlayerEntityTo, VrmAnimationGraph};
+    use crate::vrma::animation::{VrmAnimationGraph, VrmaAnimationPlayers};
     use crate::vrma::VrmaEntity;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::{
@@ -70,7 +76,7 @@ mod tests {
             commands.spawn(AnimationPlayer::default());
 
             commands.spawn((
-                AnimationPlayerEntityTo(p1),
+                VrmaAnimationPlayers(vec![p1]),
                 VrmAnimationGraph {
                     nodes: vec![AnimationNodeIndex::new(1)],
                     ..default()
@@ -80,7 +86,7 @@ mod tests {
         app.update();
 
         app.world_mut().run_system_once(
-            |mut players: VrmaPlayer, entity: Query<Entity, With<AnimationPlayerEntityTo>>| {
+            |mut players: VrmaPlayer, entity: Query<Entity, With<VrmaAnimationPlayers>>| {
                 players.play(VrmaEntity(entity.single().unwrap()), false);
             },
         )?;
@@ -100,7 +106,7 @@ mod tests {
             let p1 = commands.spawn((Target, AnimationPlayer::default())).id();
 
             commands.spawn((
-                AnimationPlayerEntityTo(p1),
+                VrmaAnimationPlayers(vec![p1]),
                 VrmAnimationGraph {
                     nodes: vec![AnimationNodeIndex::new(1)],
                     ..default()
@@ -110,14 +116,14 @@ mod tests {
         app.update();
 
         app.world_mut().run_system_once(
-            |mut players: VrmaPlayer, entity: Query<Entity, With<AnimationPlayerEntityTo>>| {
+            |mut players: VrmaPlayer, entity: Query<Entity, With<VrmaAnimationPlayers>>| {
                 players.play(VrmaEntity(entity.single().unwrap()), false);
             },
         )?;
         app.update();
 
         app.world_mut().run_system_once(
-            |mut players: VrmaPlayer, entity: Query<Entity, With<AnimationPlayerEntityTo>>| {
+            |mut players: VrmaPlayer, entity: Query<Entity, With<VrmaAnimationPlayers>>| {
                 players.stop(VrmaEntity(entity.single().unwrap()));
             },
         )?;

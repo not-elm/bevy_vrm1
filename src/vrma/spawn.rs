@@ -1,6 +1,6 @@
 use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, HumanoidBonesAttached};
 use crate::vrm::VrmExpression;
-use crate::vrma::animation::VrmAnimationGraph;
+use crate::vrma::animation::{VrmAnimationGraph, VrmaAnimationPlayers};
 use crate::vrma::gltf::extensions::VrmaExtensions;
 use crate::vrma::loader::VrmaAsset;
 use crate::vrma::{RetargetTo, Vrma, VrmaDuration, VrmaHandle, VrmaPath};
@@ -81,6 +81,7 @@ fn spawn_vrma(
         commands.entity(handle_entity).insert((
             Vrma,
             Name::new(name),
+            VrmaAnimationPlayers::default(),
             RetargetTo(child_of.parent()),
             SceneRoot(scene_root),
             VrmaDuration(obtain_vrma_duration(&clip_assets, &vrma.gltf.animations)),

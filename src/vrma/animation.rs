@@ -20,7 +20,7 @@ impl Plugin for VrmaAnimationPlayersPlugin {
         app.add_plugins((VrmaAnimationSetupPlugin, VrmaAnimationPlayPlugin));
         #[cfg(feature = "reflect")]
         {
-            app.register_type::<AnimationPlayerEntityTo>()
+            app.register_type::<VrmaAnimationPlayers>()
                 .register_type::<VrmAnimationGraph>();
         }
     }
@@ -28,15 +28,16 @@ impl Plugin for VrmaAnimationPlayersPlugin {
 
 /// After spawn the vrma, the animation player will be spawned.
 /// This component is used to hold that entity in the root entity.
-#[derive(Component, Debug, Deref, DerefMut)]
+#[derive(Component, Debug, Deref, DerefMut, Default)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
-pub struct AnimationPlayerEntityTo(pub Entity);
+pub struct VrmaAnimationPlayers(pub Vec<Entity>);
 
 #[derive(Component, Default)]
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 pub struct VrmAnimationGraph {
     pub handle: Handle<AnimationGraph>,
+    pub root: AnimationNodeIndex,
     pub nodes: Vec<AnimationNodeIndex>,
 }
 
@@ -46,8 +47,13 @@ impl VrmAnimationGraph {
         animation_graphs: &mut Assets<AnimationGraph>,
     ) -> Self {
         let (graph, nodes) = AnimationGraph::from_clips(clip);
+        let root = graph.root;
         let handle = animation_graphs.add(graph);
 
-        Self { handle, nodes }
+        Self {
+            handle,
+            nodes,
+            root,
+        }
     }
 }

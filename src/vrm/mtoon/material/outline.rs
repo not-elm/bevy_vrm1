@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use bevy::asset::Asset;
 use bevy::color::LinearRgba;
-use bevy::prelude::{Reflect, TypePath};
+use bevy::prelude::*;
 
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 #[cfg_attr(not(feature = "reflect"), derive(TypePath))]

@@ -1,4 +1,4 @@
-//! This example demonstrates the LookAt functionality of VRM.
+//! This example demonstrates the `LookAt` functionality of VRM.
 //!
 //! By using [`LookAt::Cursor`], the VRM model will look at the cursor position.
 //!

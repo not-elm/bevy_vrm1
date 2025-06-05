@@ -75,9 +75,7 @@ impl Cameras<'_, '_> {
         mascot_pos: Vec3,
     ) -> Option<Vec3> {
         let (camera, camera_gtf, _) = self.find_camera_from_window(window_entity)?;
-        let ray = camera
-            .viewport_to_world(camera_gtf, viewport_pos)
-            .ok()?;
+        let ray = camera.viewport_to_world(camera_gtf, viewport_pos).ok()?;
         let plane = InfinitePlane3d::new(camera_gtf.back());
         let distance = ray.intersect_plane(mascot_pos, plane)?;
         Some(ray.get_point(distance))

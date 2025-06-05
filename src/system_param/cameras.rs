@@ -1,6 +1,6 @@
 use bevy::ecs::system::SystemParam;
 use bevy::math::{Vec2, Vec3};
-use bevy::prelude::{Camera, Entity, GlobalTransform, Query};
+use bevy::prelude::{Camera, Entity, GlobalTransform, InfinitePlane3d, Query};
 use bevy::render::camera::RenderTarget;
 use bevy::render::view::RenderLayers;
 use bevy::window::WindowRef;
@@ -72,12 +72,15 @@ impl Cameras<'_, '_> {
         &self,
         window_entity: Entity,
         viewport_pos: Vec2,
+        mascot_pos: Vec3,
     ) -> Option<Vec3> {
-        let (camera, camera_tf, _) = self.find_camera_from_window(window_entity)?;
-        let pos = camera
-            .viewport_to_world_2d(camera_tf, viewport_pos)
-            .unwrap();
-        Some(pos.extend(0.))
+        let (camera, camera_gtf, _) = self.find_camera_from_window(window_entity)?;
+        let ray = camera
+            .viewport_to_world(camera_gtf, viewport_pos)
+            .ok()?;
+        let plane = InfinitePlane3d::new(camera_gtf.back());
+        let distance = ray.intersect_plane(mascot_pos, plane)?;
+        Some(ray.get_point(distance))
     }
 }
 

@@ -3,7 +3,7 @@ mod shade;
 mod uv_animation;
 
 use crate::vrm::mtoon::outline::{MToonOutline, OutlineWidthMode};
-use crate::vrm::mtoon::{MTOON_SHADER_HANDLE, MTOON_SHADER_VERTEX_HANDLE};
+use crate::vrm::mtoon::{MTOON_FRAGMENT_SHADER_HANDLE, MTOON_VERTEX_SHADER_HANDLE};
 use bevy::math::Affine2;
 use bevy::pbr::{setup_morph_and_skinning_defs, MaterialPipeline, MaterialPipelineKey, OpaqueRendererMethod};
 use bevy::prelude::*;
@@ -96,11 +96,11 @@ bitflags! {
 
 impl Material for MToonMaterial {
     fn vertex_shader() -> ShaderRef {
-        MTOON_SHADER_VERTEX_HANDLE.into()
+        MTOON_VERTEX_SHADER_HANDLE.into()
     }
 
     fn fragment_shader() -> ShaderRef {
-        MTOON_SHADER_HANDLE.into()
+        MTOON_FRAGMENT_SHADER_HANDLE.into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {

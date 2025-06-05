@@ -21,17 +21,12 @@ use bevy::{
     render::{
         mesh::RenderMesh,
         render_asset::RenderAssets,
-        render_graph::{
-            RenderGraphApp, ViewNodeRunner,
-        },
+        render_graph::{RenderGraphApp, ViewNodeRunner},
         render_phase::{
-            sort_phase_system, AddRenderCommand,
-            DrawFunctions, PhaseItemExtraIndex,
+            sort_phase_system, AddRenderCommand, DrawFunctions, PhaseItemExtraIndex,
             SortedRenderPhasePlugin, ViewSortedRenderPhases,
         },
-        render_resource::{
-            PipelineCache, SpecializedMeshPipelines,
-        },
+        render_resource::{PipelineCache, SpecializedMeshPipelines},
         view::{ExtractedView, RenderVisibleEntities, RetainedViewEntity},
         Extract, Render, RenderApp, RenderDebugFlags, RenderSet,
     },

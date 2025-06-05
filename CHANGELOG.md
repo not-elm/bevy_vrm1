@@ -4,6 +4,7 @@
 
 - `MToonOutline` is no longer a component; it has become part of the `MToonMaterial` fields.
 - `OutlineWidthMode` has been added as part of the field of `MToonOutline`.
+    - Currently only supports `OutlineWidthMode::WorldCoordinates` and `OutlineWidthMode::None`, and if `screenCoordinates` is passed, the outline will not be rendered.
 
 ### Bug Fixes
 

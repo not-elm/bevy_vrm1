@@ -34,16 +34,20 @@ fn spawn_vrm(
     commands
         .spawn(VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")))
         .with_children(|cmd| {
+            // You need to spawn VRMA as a child of the VRM you want to retarget.
             cmd.spawn(VrmaHandle(asset_server.load("vrma/VRMA_01.vrma")))
                 .observe(apply_play_vrma);
         });
 }
 
+/// When the VRMA animation player is set up, a [`LoadedVrma`] trigger is fired.
+/// You cannot play animations until this load is complete.
 fn apply_play_vrma(
     trigger: Trigger<LoadedVrma>,
     mut commands: Commands,
 ) {
+    let vrma_entity = trigger.target();
     commands
-        .entity(trigger.target())
+        .entity(vrma_entity)
         .trigger(PlayVrma { repeat: true });
 }

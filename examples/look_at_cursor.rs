@@ -1,3 +1,11 @@
+//! This example demonstrates the LookAt functionality of VRM.
+//!
+//! By using [`LookAt::Cursor`], the VRM model will look at the cursor position.
+//!
+//!
+//! Alternatively, VRM can also look at a specific target by using [`LookAt::Target`].
+//! Please refer to `examples/look_at_target.rs` for more details.
+
 use bevy::prelude::*;
 use bevy_vrm1::vrm::loader::VrmHandle;
 use bevy_vrm1::vrm::look_at::LookAt;
@@ -31,6 +39,7 @@ fn spawn_camera_and_vrm(
     commands.spawn((
         VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
         LookAt::Cursor {
+            // If you pass `None`, it will search for the camera in the scene to get the cursor position.
             camera: Some(camera),
         },
     ));

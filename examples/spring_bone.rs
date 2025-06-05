@@ -1,5 +1,7 @@
 //! This example demonstrates the use of spring bones in a VRM model to show how the character's hair and clothing can physically sway.
-//! You can drag the character to move it around.
+//! This feature is enabled by default and does not require any special settings.
+//!
+//! Please try dragging and moving the VRM model to see the swaying of the ribbons and hair.
 
 use bevy::prelude::*;
 use bevy_vrm1::vrm::loader::VrmHandle;

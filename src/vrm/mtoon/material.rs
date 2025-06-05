@@ -1,8 +1,9 @@
 mod rim_lighting;
 mod shade;
 mod uv_animation;
+mod outline;
 
-use crate::vrm::mtoon::outline::{MToonOutline, OutlineWidthMode};
+use crate::vrm::mtoon::material::outline::{MToonOutline, OutlineWidthMode};
 use crate::vrm::mtoon::{MTOON_FRAGMENT_SHADER_HANDLE, MTOON_VERTEX_SHADER_HANDLE};
 use bevy::math::Affine2;
 use bevy::pbr::{setup_morph_and_skinning_defs, MaterialPipeline, MaterialPipelineKey, OpaqueRendererMethod};
@@ -18,6 +19,20 @@ use bitflags::bitflags;
 pub use rim_lighting::RimLighting;
 pub use shade::Shade;
 pub use uv_animation::UVAnimation;
+
+pub mod prelude{
+    pub use crate::vrm::mtoon::material::{
+        MToonMaterial,
+        MToonMaterialKey,
+        shade::Shade,
+        uv_animation::UVAnimation,
+        rim_lighting::RimLighting,
+        outline::{
+            MToonOutline,
+            OutlineWidthMode,
+        },
+    };
+}
 
 /// [VRMC_materials_mtoon-1.0](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md)
 #[cfg_attr(feature = "reflect", derive(Reflect))]

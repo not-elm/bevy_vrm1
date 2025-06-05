@@ -8,8 +8,7 @@ pub mod vrma;
 
 pub mod prelude {
     pub use crate::{
-        vrm::*,
-        vrm::{loader::VrmHandle, look_at::LookAt},
+        vrm::prelude::*,
     };
 }
 

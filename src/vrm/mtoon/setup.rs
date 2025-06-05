@@ -1,5 +1,4 @@
-use crate::vrm::mtoon::outline::MToonOutline;
-use crate::vrm::mtoon::{MToonMaterial, RimLighting, Shade, UVAnimation, VrmcMaterialRegistry};
+use crate::prelude::*;
 use bevy::app::{App, Plugin};
 use bevy::asset::Assets;
 use bevy::prelude::*;

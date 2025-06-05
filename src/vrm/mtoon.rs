@@ -8,8 +8,17 @@ use crate::vrm::mtoon::setup::MToonMaterialSetupPlugin;
 use bevy::asset::{load_internal_asset, weak_handle, AssetId};
 use bevy::prelude::*;
 use std::collections::HashMap;
+use crate::prelude::*;
 
-pub use material::*;
+use material::*;
+
+pub mod prelude{
+    pub use crate::vrm::mtoon::{
+        material::prelude::*,
+        MtoonMaterialPlugin,
+        VrmcMaterialRegistry,
+    };
+}
 
 const MTOON_FRAGMENT_SHADER_HANDLE: Handle<Shader> =
     weak_handle!("9a96eff2-1676-1dc0-9abc-2fd5e7134441");
@@ -31,7 +40,7 @@ impl Plugin for MtoonMaterialPlugin {
         #[cfg(feature = "reflect")]
         {
             app.register_type::<MToonMaterial>()
-                .register_type::<crate::vrm::mtoon::outline::MToonOutline>()
+                .register_type::<MToonOutline>()
                 .register_type::<VrmcMaterialRegistry>();
         }
 

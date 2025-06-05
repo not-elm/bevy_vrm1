@@ -45,52 +45,6 @@ use bevy::{
 use std::collections::HashMap;
 use std::ops::Range;
 
-const OUTLINE_SHADER_HANDLE: Handle<Shader> = weak_handle!("fd53b589-5a4c-6f4d-9318-18db0f44db85");
-
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(not(feature = "reflect"), derive(TypePath))]
-#[derive(Asset, PartialEq, Debug, Clone, Component, ExtractComponent, Default)]
-pub struct MToonOutline {
-    pub mode: OutlineWidthMode,
-    /// The outline width
-    ///
-    /// the unit is in meters.
-    pub width_factor: f32,
-
-    /// The outline color
-    pub color: LinearRgba,
-
-    /// The ratio of the surface shading result to be multiplied by the outline color.
-    pub lighting_mix_factor: f32,
-}
-
-impl From<&VrmcMaterialsExtensitions> for MToonOutline {
-    fn from(value: &VrmcMaterialsExtensitions) -> Self {
-        let color = value.outline_color_factor;
-        Self {
-            mode: match value.outline_width_mode.as_str() {
-                "worldCoordinates" => OutlineWidthMode::WorldCoordinates,
-                _ => OutlineWidthMode::None,
-            },
-            width_factor: value.outline_width_factor.unwrap_or_default(),
-            lighting_mix_factor: value.outline_lighting_mix_factor,
-            color: LinearRgba::rgb(color[0], color[1], color[2]),
-        }
-    }
-}
-
-
-#[derive(Reflect, Debug, Clone, Default, Copy, PartialEq, Eq, Hash)]
-pub enum OutlineWidthMode {
-    /// The outline will not be drawn.
-    #[default]
-    None,
-    /// The outline width is determined by the distance in world coordinates.
-    WorldCoordinates,
-    // TODO: Not supported yet
-    // ScreenCoordinates,
-}
-
 pub struct MToonOutlinePlugin;
 
 impl Plugin for MToonOutlinePlugin {
@@ -98,11 +52,8 @@ impl Plugin for MToonOutlinePlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_plugins((
-            ExtractComponentPlugin::<MToonOutline>::default(),
-            SortedRenderPhasePlugin::<OutlinePhaseItem, MeshPipeline>::new(
-                RenderDebugFlags::default(),
-            ),
+        app.add_plugins(SortedRenderPhasePlugin::<OutlinePhaseItem, MeshPipeline>::new(
+            RenderDebugFlags::default(),
         ));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -250,19 +201,14 @@ fn queue_outlines(
     mut pipelines: ResMut<SpecializedMeshPipelines<MToonOutlinePipeline>>,
     mut outline_phases: ResMut<ViewSortedRenderPhases<OutlinePhaseItem>>,
     mut views: Query<(&ExtractedView, &RenderVisibleEntities, &Msaa)>,
-    mut bindgroups: ResMut<OutlineBindGroups>,
     material_bind_group_allocator: Res<MaterialBindGroupAllocator<MToonMaterial>>,
-    render_device: Res<RenderDevice>,
-    render_queue: Res<RenderQueue>,
     instances: Res<MToonMaterialInstances>,
     render_materials: Res<RenderAssets<PreparedMaterial<MToonMaterial>>>,
-    render_material_instances: Res<RenderMaterialInstances>,
     draw_functions: Res<DrawFunctions<OutlinePhaseItem>>,
     pipeline_cache: Res<PipelineCache>,
     outline_pipeline: Res<MToonOutlinePipeline>,
     render_meshes: Res<RenderAssets<RenderMesh>>,
     render_mesh_instances: Res<RenderMeshInstances>,
-    outlines: Query<&MToonOutline>,
 ) {
     for (view, visible_entities, msaa) in &mut views {
         let Some(outline_phase) = outline_phases.get_mut(&view.retained_view_entity) else {
@@ -286,9 +232,6 @@ fn queue_outlines(
             let Some(material) = render_materials.get(asset_id.clone()) else {
                 continue;
             };
-            // let mut buffer = UniformBuffer::from(MToonMaterialUniform::from(material));
-            // buffer.add_usages(BufferUsages::STORAGE);
-            // buffer.write_buffer(&render_device, &render_queue);
             let mut mesh_key = view_key;
             mesh_key |= MeshPipelineKey::from_primitive_topology(mesh.primitive_topology());
             if mesh.morph_targets.is_some() {
@@ -320,17 +263,6 @@ fn queue_outlines(
                 extra_index: PhaseItemExtraIndex::None,
                 indexed: mesh.indexed(),
             });
-            // bindgroups.insert(
-            //     *visible_entity,
-            //     render_device.create_bind_group(
-            //         "outline_bind_group",
-            //         &outline_pipeline.outline_unifrom_layout,
-            //         &[BindGroupEntry {
-            //             binding: 0,
-            //             resource: binding,
-            //         }],
-            //     ),
-            // );
         }
     }
 }

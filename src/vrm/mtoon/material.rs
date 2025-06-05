@@ -2,9 +2,10 @@ mod rim_lighting;
 mod shade;
 mod uv_animation;
 
-use crate::vrm::mtoon::MTOON_SHADER_HANDLE;
+use crate::vrm::mtoon::outline::{MToonOutline, OutlineWidthMode};
+use crate::vrm::mtoon::{MTOON_SHADER_HANDLE, MTOON_SHADER_VERTEX_HANDLE};
 use bevy::math::Affine2;
-use bevy::pbr::{MaterialPipeline, MaterialPipelineKey, OpaqueRendererMethod};
+use bevy::pbr::{setup_morph_and_skinning_defs, MaterialPipeline, MaterialPipelineKey, OpaqueRendererMethod};
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
 use bevy::render::render_asset::RenderAssets;
@@ -61,10 +62,15 @@ pub struct MToonMaterial {
     #[sampler(114)]
     #[dependency]
     pub emissive_texture: Option<Handle<Image>>,
+    #[texture(115)]
+    #[sampler(116)]
+    #[dependency]
+    pub outline_width_multiply_texture: Option<Handle<Image>>,
     pub uv_animation: UVAnimation,
     pub uv_transform: Affine2,
     pub rim_lighting: RimLighting,
     pub shade: Shade,
+    pub outline: MToonOutline,
     pub base_color: Color,
     /// [VRMC_materials_mtoon-1.0](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#emission)
     pub emissive: LinearRgba,
@@ -89,6 +95,10 @@ bitflags! {
 }
 
 impl Material for MToonMaterial {
+    fn vertex_shader() -> ShaderRef {
+        MTOON_SHADER_VERTEX_HANDLE.into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         MTOON_SHADER_HANDLE.into()
     }
@@ -146,6 +156,7 @@ impl Default for MToonMaterial {
             shade_multiply_texture: None,
             rim_multiply_texture: None,
             uv_animation_mask_texture: None,
+            outline_width_multiply_texture: None,
             matcap_texture: None,
             emissive_texture: None,
             uv_animation: UVAnimation::default(),
@@ -160,6 +171,7 @@ impl Default for MToonMaterial {
             depth_bias: 0.0,
             opaque_renderer_method: OpaqueRendererMethod::default(),
             cull_mode: None,
+            outline: MToonOutline::default(),
         }
     }
 }
@@ -177,10 +189,60 @@ bitflags::bitflags! {
         const DOUBLE_SIDED = 1 << 7;
         const ALPHA_MODE_MASK = 1 << 8;
         const ALPHA_MODE_ALPHA_TO_COVERAGE = 1 << 9;
+        const OUTLINE_WIDTH_MULTIPLY_TEXTURE = 1 << 10;
+    }
+}
+
+impl From<&MToonMaterial> for MtoonFlags {
+    fn from(value: &MToonMaterial) -> Self {
+        let mut flags = MtoonFlags::empty();
+        flags.set(
+            MtoonFlags::BASE_COLOR_TEXTURE,
+            value.base_color_texture.is_some(),
+        );
+        flags.set(MtoonFlags::DOUBLE_SIDED, value.double_sided);
+        flags.set(
+            MtoonFlags::SHADING_SHIFT_TEXTURE,
+            value.shading_shift_texture.is_some(),
+        );
+        flags.set(
+            MtoonFlags::SHADE_MULTIPLY_TEXTURE,
+            value.shade_multiply_texture.is_some(),
+        );
+        flags.set(
+            MtoonFlags::RIM_MAP_TEXTURE,
+            value.rim_multiply_texture.is_some(),
+        );
+        flags.set(
+            MtoonFlags::UV_ANIMATION_MASK_TEXTURE,
+            value.uv_animation_mask_texture.is_some(),
+        );
+        flags.set(MtoonFlags::MATCAP_TEXTURE, value.matcap_texture.is_some());
+        flags.set(
+            MtoonFlags::ALPHA_MODE_MASK,
+            matches!(value.alpha_mode, AlphaMode::Mask(_)),
+        );
+        flags.set(
+            MtoonFlags::ALPHA_MODE_ALPHA_TO_COVERAGE,
+            matches!(value.alpha_mode, AlphaMode::AlphaToCoverage),
+        );
+        flags.set(
+            MtoonFlags::OUTLINE_WIDTH_MULTIPLY_TEXTURE,
+            value.outline_width_multiply_texture.is_some(),
+        );
+        flags
+    }
+}
+
+bitflags::bitflags! {
+    #[repr(transparent)]
+    pub struct OutlineWidthModeFlags: u32 {
+        const WORLD_COORDINATES = 1 << 0;
     }
 }
 
 #[derive(Clone, Default, ShaderType)]
+#[repr(align(16))]
 pub struct MToonMaterialUniform {
     pub flags: u32,
     pub base_color: Vec4,
@@ -201,6 +263,10 @@ pub struct MToonMaterialUniform {
     pub parametric_rim_fresnel_power: f32,
     pub rim_lighting_mix_factor: f32,
     pub alpha_cutoff: f32,
+    pub outline_flags: u32,
+    pub outline_color: Vec4,
+    pub outline_width_factor: f32,
+    pub outline_lighting_mix_factor: f32,
 }
 
 impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
@@ -208,39 +274,13 @@ impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
         &self,
         _images: &RenderAssets<GpuImage>,
     ) -> MToonMaterialUniform {
-        let mut flags = MtoonFlags::empty();
-        flags.set(
-            MtoonFlags::BASE_COLOR_TEXTURE,
-            self.base_color_texture.is_some(),
-        );
-        flags.set(MtoonFlags::DOUBLE_SIDED, self.double_sided);
-        flags.set(
-            MtoonFlags::SHADING_SHIFT_TEXTURE,
-            self.shading_shift_texture.is_some(),
-        );
-        flags.set(
-            MtoonFlags::SHADE_MULTIPLY_TEXTURE,
-            self.shade_multiply_texture.is_some(),
-        );
-        flags.set(
-            MtoonFlags::RIM_MAP_TEXTURE,
-            self.rim_multiply_texture.is_some(),
-        );
-        flags.set(
-            MtoonFlags::UV_ANIMATION_MASK_TEXTURE,
-            self.uv_animation_mask_texture.is_some(),
-        );
-        flags.set(MtoonFlags::MATCAP_TEXTURE, self.matcap_texture.is_some());
-        flags.set(
-            MtoonFlags::ALPHA_MODE_MASK,
-            matches!(self.alpha_mode, AlphaMode::Mask(_)),
-        );
-        flags.set(
-            MtoonFlags::ALPHA_MODE_ALPHA_TO_COVERAGE,
-            matches!(self.alpha_mode, AlphaMode::AlphaToCoverage),
+        let mut outline_flags = OutlineWidthModeFlags::empty();
+        outline_flags.set(
+            OutlineWidthModeFlags::WORLD_COORDINATES,
+            matches!(self.outline.mode, OutlineWidthMode::WorldCoordinates),
         );
         MToonMaterialUniform {
-            flags: flags.bits(),
+            flags: MtoonFlags::from(self).bits(),
             shade_color: self.shade.color.to_vec4(),
             shading_shift_factor: self.shade.shading_shift_factor,
             shading_shift_texture_offset: self.shade.texture_offset,
@@ -262,6 +302,10 @@ impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
                 AlphaMode::Mask(value) => value,
                 _ => 0.5,
             },
+            outline_flags: outline_flags.bits(),
+            outline_color: self.outline.color.to_vec4(),
+            outline_width_factor: self.outline.width_factor,
+            outline_lighting_mix_factor: self.outline.lighting_mix_factor,
         }
     }
 }

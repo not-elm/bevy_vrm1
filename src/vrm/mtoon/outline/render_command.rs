@@ -1,7 +1,8 @@
+use crate::vrm::mtoon::MToonMaterial;
 use bevy::ecs::query::ROQueryItem;
 use bevy::ecs::system::lifetimeless::SRes;
 use bevy::ecs::system::SystemParamItem;
-use bevy::pbr::{DrawMesh, SetMeshBindGroup, SetMeshViewBindGroup};
+use bevy::pbr::{DrawMesh, SetMaterialBindGroup, SetMeshBindGroup, SetMeshViewBindGroup};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::render::render_phase::{
@@ -14,7 +15,7 @@ pub(super) type DrawOutline = (
     SetItemPipeline,
     SetMeshViewBindGroup<0>,
     SetMeshBindGroup<1>,
-    SetOutlineBindGroup<2>,
+    SetMaterialBindGroup<MToonMaterial, 2>,
     DrawMesh,
 );
 

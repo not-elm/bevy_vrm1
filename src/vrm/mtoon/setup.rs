@@ -62,7 +62,12 @@ fn turn_to_mtoon_material(
                         .rim_multiply_texture
                         .and_then(|tex| registry.images.get(tex.index))
                         .cloned(),
+                    outline_width_multiply_texture: extension
+                        .outline_width_multiply_texture
+                        .and_then(|tex| registry.images.get(tex.index))
+                        .cloned(),
                     shade: Shade::from(extension),
+                    outline: MToonOutline::from(extension),
                     rim_lighting: RimLighting::from(extension),
                     uv_animation: UVAnimation::from(extension),
                     gi_equalization_factor: extension.gi_equalization_factor,
@@ -77,8 +82,5 @@ fn turn_to_mtoon_material(
                     uv_transform: base.uv_transform,
                 }),
             ));
-        if extension.outline_width_mode != "none" {
-            cmd.insert(MToonOutline::from(extension));
-        }
     });
 }

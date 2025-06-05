@@ -1,32 +1,18 @@
-#import bevy_pbr::pbr_types::PbrInput;
-#import bevy_pbr::ambient::ambient_light;
 #import bevy_pbr::{
-    forward_io::{VertexOutput, FragmentOutput},
-    pbr_fragment::pbr_input_from_vertex_output,
-    pbr_types,
-    pbr_types::{
-        STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
-        STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS,
-        STANDARD_MATERIAL_FLAGS_ALPHA_MODE_OPAQUE,
+    forward_io::{
+        VertexOutput,
+         FragmentOutput,
     },
-    pbr_bindings,
-    pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
-    decal::clustered::apply_decal_base_color,
+    pbr_fragment::pbr_input_from_vertex_output,
+    pbr_types::PbrInput,
+    mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
+    shadows::fetch_directional_shadow,
+    ambient::ambient_light,
     mesh_view_bindings::{
         view,
         lights,
+        globals,
     },
-    mesh_view_bindings as view_bindings,
-    mesh_view_bindings::globals,
-    mesh_view_types,
-    lighting,
-    lighting::{LAYER_BASE, LAYER_CLEARCOAT},
-    transmission,
-    clustered_forward as clustering,
-    shadows,
-    ambient,
-    irradiance_volume,
-    mesh_types::{MESH_FLAGS_SHADOW_RECEIVER_BIT, MESH_FLAGS_TRANSMITTED_SHADOW_RECEIVER_BIT},
 }
 #import mtoon::types::{
     MToonInput,
@@ -159,7 +145,7 @@ fn apply_directional_lights(in: MToonInput) -> vec3<f32>{
     var shade_color: vec3<f32> = calc_shade_color(in);
     var shading: f32 = 0.0;
     for (var i: u32 = 0u; i < lights.n_directional_lights; i = i + 1u) {
-        if (lights.directional_lights[i].skip != 0u || (lights.directional_lights[i].flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u) {
+        if (lights.directional_lights[i].skip != 0u || (lights.directional_lights[i].flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u) {
             continue;
         }
         shading += calc_mtoon_lighting_shading(in, i);
@@ -181,7 +167,7 @@ fn calc_mtoon_lighting_shading(
         view.view_from_world[2].z,
         view.view_from_world[3].z
     ), input.world_position);
-    var shadow = shadows::fetch_directional_shadow(
+    var shadow = fetch_directional_shadow(
         light_id,
         input.world_position,
         input.world_normal,
@@ -224,7 +210,7 @@ fn apply_global_illumination(
         in.pbr.material.perceptual_roughness,
         in.pbr.diffuse_occlusion,
     );
-    return view_bindings::view.exposure * in_direct_light;
+    return view.exposure * in_direct_light;
 #endif
 }
 

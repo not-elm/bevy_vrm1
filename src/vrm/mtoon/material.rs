@@ -1,12 +1,12 @@
+mod outline;
 mod rim_lighting;
 mod shade;
 mod uv_animation;
-mod outline;
 
 use crate::vrm::mtoon::material::outline::{MToonOutline, OutlineWidthMode};
 use crate::vrm::mtoon::{MTOON_FRAGMENT_SHADER_HANDLE, MTOON_VERTEX_SHADER_HANDLE};
 use bevy::math::Affine2;
-use bevy::pbr::{setup_morph_and_skinning_defs, MaterialPipeline, MaterialPipelineKey, OpaqueRendererMethod};
+use bevy::pbr::{MaterialPipeline, MaterialPipelineKey, OpaqueRendererMethod};
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
 use bevy::render::render_asset::RenderAssets;
@@ -20,17 +20,13 @@ pub use rim_lighting::RimLighting;
 pub use shade::Shade;
 pub use uv_animation::UVAnimation;
 
-pub mod prelude{
+pub mod prelude {
     pub use crate::vrm::mtoon::material::{
-        MToonMaterial,
-        MToonMaterialKey,
+        outline::{MToonOutline, OutlineWidthMode},
+        rim_lighting::RimLighting,
         shade::Shade,
         uv_animation::UVAnimation,
-        rim_lighting::RimLighting,
-        outline::{
-            MToonOutline,
-            OutlineWidthMode,
-        },
+        MToonMaterial, MToonMaterialKey,
     };
 }
 

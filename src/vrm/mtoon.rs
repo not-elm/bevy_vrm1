@@ -1,23 +1,18 @@
 mod material;
-mod outline;
+mod outline_pass;
 mod setup;
 
 use crate::vrm::gltf::materials::VrmcMaterialsExtensitions;
-use crate::vrm::mtoon::outline::MToonOutlinePlugin;
+use crate::vrm::mtoon::outline_pass::MToonOutlinePlugin;
 use crate::vrm::mtoon::setup::MToonMaterialSetupPlugin;
 use bevy::asset::{load_internal_asset, weak_handle, AssetId};
 use bevy::prelude::*;
 use std::collections::HashMap;
+
 use crate::prelude::*;
 
-use material::*;
-
-pub mod prelude{
-    pub use crate::vrm::mtoon::{
-        material::prelude::*,
-        MtoonMaterialPlugin,
-        VrmcMaterialRegistry,
-    };
+pub mod prelude {
+    pub use crate::vrm::mtoon::{material::prelude::*, MtoonMaterialPlugin, VrmcMaterialRegistry};
 }
 
 const MTOON_FRAGMENT_SHADER_HANDLE: Handle<Shader> =

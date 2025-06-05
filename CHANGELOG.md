@@ -1,3 +1,14 @@
+## Unreleased
+
+### Breaking Changes
+
+- `MToonOutline` is no longer a component; it has become part of the `MToonMaterial` fields.
+- `OutlineWidthMode` has been added as part of the field of `MToonOutline`.
+
+### Bug Fixes
+
+- Fixed outline rendering 
+
 ## v0.1.2
 
 [Relsease Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.1.2)

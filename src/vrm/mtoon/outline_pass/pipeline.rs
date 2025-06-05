@@ -2,7 +2,10 @@ use crate::vrm::mtoon::MToonMaterial;
 use bevy::pbr::MaterialPipeline;
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
-use bevy::render::render_resource::{CompareFunction, DepthBiasState, DepthStencilState, Face, RenderPipelineDescriptor, SpecializedMeshPipeline, SpecializedMeshPipelineError, StencilState, TextureFormat};
+use bevy::render::render_resource::{
+    CompareFunction, DepthBiasState, DepthStencilState, Face, RenderPipelineDescriptor,
+    SpecializedMeshPipeline, SpecializedMeshPipelineError, StencilState, TextureFormat,
+};
 
 #[derive(Resource)]
 pub(super) struct MToonOutlinePipeline {
@@ -25,10 +28,17 @@ impl SpecializedMeshPipeline for MToonOutlinePipeline {
         key: Self::Key,
         layout: &MeshVertexBufferLayoutRef,
     ) -> Result<RenderPipelineDescriptor, SpecializedMeshPipelineError> {
+        const PASS_NAME: &str = "OUTLINE_PASS";
+
         let mut descriptor = self.base.specialize(key.clone(), layout)?;
         descriptor.label.replace("mtoon_outline_pipeline".into());
-        descriptor.vertex.shader_defs.push("OUTLINE_PASS".into());
-        descriptor.fragment.as_mut().unwrap().shader_defs.push("OUTLINE_PASS".into());
+        descriptor.vertex.shader_defs.push(PASS_NAME.into());
+        descriptor
+            .fragment
+            .as_mut()
+            .unwrap()
+            .shader_defs
+            .push(PASS_NAME.into());
         descriptor.depth_stencil.replace(DepthStencilState {
             depth_compare: CompareFunction::Greater,
             depth_write_enabled: true,

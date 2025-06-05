@@ -7,9 +7,7 @@ pub mod vrm;
 pub mod vrma;
 
 pub mod prelude {
-    pub use crate::{
-        vrm::prelude::*,
-    };
+    pub use crate::vrm::prelude::*;
 }
 
 #[cfg(test)]

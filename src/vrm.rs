@@ -21,13 +21,13 @@ use mtoon::MtoonMaterialPlugin;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub mod prelude{
+pub mod prelude {
     pub use crate::vrm::{
-        mtoon::prelude::*,
-        loader::{VrmHandle, VrmAsset},
-        look_at::{LookAt, LookAtPlugin},
-        humanoid_bone::*,
         gltf::prelude::*,
+        humanoid_bone::*,
+        loader::{VrmAsset, VrmHandle},
+        look_at::{LookAt, LookAtPlugin},
+        mtoon::prelude::*,
     };
 }
 

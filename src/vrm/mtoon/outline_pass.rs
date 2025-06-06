@@ -5,8 +5,8 @@ mod view_node;
 
 use crate::vrm::mtoon::outline_pass::phase_item::{OutlinePhaseItem, OutlineTransparentPhaseItem};
 use crate::vrm::mtoon::outline_pass::pipeline::MToonOutlinePipeline;
-use crate::vrm::mtoon::outline_pass::render_command::DrawOutline;
-use crate::vrm::mtoon::outline_pass::view_node::{OutlineDrawNode, OutlineDrawPassLabel};
+use crate::vrm::mtoon::outline_pass::render_command::{DrawOutline, DrawOutlineTransparent};
+use crate::vrm::mtoon::outline_pass::view_node::{OutlineDrawNode, OutlineDrawPassLabel, OutlineTransparentDrawPassLabel, OutlineTransparentNode};
 use crate::vrm::mtoon::MToonMaterial;
 use bevy::core_pipeline::core_3d::Transparent3d;
 use bevy::pbr::{
@@ -36,6 +36,7 @@ use bevy::{
         Extract, Render, RenderApp, RenderDebugFlags, RenderSet,
     },
 };
+use bevy::ecs::schedule::graph::Direction::Outgoing;
 
 pub struct MToonOutlinePlugin;
 
@@ -57,7 +58,7 @@ impl Plugin for MToonOutlinePlugin {
             .init_resource::<DrawFunctions<OutlinePhaseItem>>()
             .init_resource::<DrawFunctions<OutlineTransparentPhaseItem>>()
             .add_render_command::<OutlinePhaseItem, DrawOutline>()
-            .add_render_command::<OutlineTransparentPhaseItem, DrawOutline>()
+            .add_render_command::<OutlineTransparentPhaseItem, DrawOutlineTransparent>()
             .init_resource::<ViewSortedRenderPhases<OutlinePhaseItem>>()
             .init_resource::<ViewSortedRenderPhases<OutlineTransparentPhaseItem>>()
             .init_resource::<MToonMaterialInstances>()
@@ -81,12 +82,14 @@ impl Plugin for MToonOutlinePlugin {
 
         render_app
             .add_render_graph_node::<ViewNodeRunner<OutlineDrawNode>>(Core3d, OutlineDrawPassLabel)
+            .add_render_graph_node::<ViewNodeRunner<OutlineTransparentNode>>(Core3d, OutlineTransparentDrawPassLabel)
             .add_render_graph_edges(
                 Core3d,
                 (
-                    Node3d::MainOpaquePass,
-                    OutlineDrawPassLabel,
                     Node3d::MainTransparentPass,
+                    OutlineDrawPassLabel,
+                    OutlineTransparentDrawPassLabel,
+                    Node3d::EndMainPass,
                 ),
             );
     }
@@ -232,17 +235,17 @@ fn queue_outlines(
             };
             let distance = material.properties.depth_bias;
             match material.properties.render_phase_type {
-                RenderPhaseType::Transparent => {
-                    transparent_phase.add(OutlineTransparentPhaseItem {
-                        sort_key: FloatOrd(distance),
-                        entity: (*render_entity, *visible_entity),
-                        pipeline: pipeline_id,
-                        draw_function: draw_function_id,
-                        batch_range: 0..0,
-                        extra_index: PhaseItemExtraIndex::None,
-                        indexed: mesh.indexed(),
-                    });
-                }
+                // RenderPhaseType::Transparent => {
+                //     transparent_phase.add(OutlineTransparentPhaseItem {
+                //         sort_key: FloatOrd(distance),
+                //         entity: (*render_entity, *visible_entity),
+                //         pipeline: pipeline_id,
+                //         draw_function: draw_function_id,
+                //         batch_range: 0..0,
+                //         extra_index: PhaseItemExtraIndex::None,
+                //         indexed: mesh.indexed(),
+                //     });
+                // }
                 _ => {
                     outline_phase.add(OutlinePhaseItem {
                         sort_key: FloatOrd(distance),

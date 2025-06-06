@@ -41,6 +41,7 @@
     EMISSIVE_TEXTURE,
     DOUBLE_SIDED,
     ALPHA_MODE_MASK,
+    ALPHA_MODE_BLEND,
     ALPHA_MODE_ALPHA_TO_COVERAGE,
     OUTLINE_WORLD_COORDINATES,
 }
@@ -51,7 +52,7 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
 #ifdef OUTLINE_PASS
-    // Currently, the outline only supports world coordinates.
+    // Currently, txhe outline only supports world coordinates.
     if((material.outline_flags & OUTLINE_WORLD_COORDINATES) == 0u) {
         discard;
     }
@@ -67,7 +68,7 @@ fn fragment(
 
 #ifdef OUTLINE_PASS
     let outline_color = material.outline_color.rgb * mix(vec3(1.), out.color.rgb, material.outline_lighting_mix_factor);
-    out.color = vec4(outline_color, material.base_color.a);
+    out.color = vec4(outline_color, mtoon_input.lit_color.a);
 #endif
 
     return out;
@@ -99,6 +100,11 @@ fn lit_color(uv: vec2<f32>) -> vec4<f32> {
             base_color.a = 1.0;
         }
     }
+#ifdef OUTLINE_PASS
+    if((material.flags & ALPHA_MODE_BLEND) != 0u) {
+        base_color.a = 1.0;
+    }
+#endif
     return base_color;
 }
 
@@ -126,7 +132,6 @@ fn calc_animated_uv(uv: vec2<f32>) -> vec2<f32>{
 
 fn calc_uv_time(uv: vec2<f32>) -> f32{
     if((material.flags & UV_ANIMATION_MASK_TEXTURE) != 0u) {
-        // I referred to MToon's implementation, but I don't know why this works. ⊂二二二（　＾ω＾）二二⊃
         let mask = textureSample(uv_animation_mask_texture, uv_animation_mask_sampler, uv).b;
         return mask * globals.time;
     }else{

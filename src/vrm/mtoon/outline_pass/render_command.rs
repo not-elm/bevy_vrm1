@@ -9,3 +9,11 @@ pub(super) type DrawOutline = (
     SetMaterialBindGroup<MToonMaterial, 2>,
     DrawMesh,
 );
+
+pub(super) type DrawOutlineTransparent = (
+    SetItemPipeline,
+    SetMeshViewBindGroup<0>,
+    SetMeshBindGroup<1>,
+    SetMaterialBindGroup<MToonMaterial, 2>,
+    DrawMesh,
+);

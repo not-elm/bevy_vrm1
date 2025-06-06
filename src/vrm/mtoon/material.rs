@@ -104,6 +104,7 @@ bitflags! {
     pub struct MToonMaterialKey: u64 {
         const CULL_FRONT = 1 << 0;
         const CULL_BACK = 1 << 1;
+        const TRANSPARENT_WITH_Z_WRITE = 1 << 2;
     }
 }
 
@@ -132,13 +133,13 @@ impl Material for MToonMaterial {
         };
         let offset = match (self.alpha_mode, self.transparent_with_z_write) {
             (AlphaMode::Opaque, _) => {
-                -10000.    
+                -10000.
             }
             (AlphaMode::Mask(_), _) => {
                 -1000.
             }
             (AlphaMode::Blend, true) => {
-                -100.  
+                -100.
             }
             (AlphaMode::Blend, false) => {
                 -10.0
@@ -162,6 +163,11 @@ impl Material for MToonMaterial {
             } else {
                 None
             };
+        if let Some(stencil) = descriptor.depth_stencil.as_mut(){
+            if key.bind_group_data.intersects(MToonMaterialKey::TRANSPARENT_WITH_Z_WRITE){
+                stencil.depth_write_enabled = true;
+            }
+        }
         Ok(())
     }
 }
@@ -176,6 +182,10 @@ impl From<&MToonMaterial> for MToonMaterialKey {
         key.set(
             MToonMaterialKey::CULL_BACK,
             material.cull_mode == Some(Face::Back),
+        );
+        key.set(
+            MToonMaterialKey::TRANSPARENT_WITH_Z_WRITE,
+            matches!(material.alpha_mode, AlphaMode::Blend) && material.transparent_with_z_write,
         );
         key
     }
@@ -224,7 +234,8 @@ bitflags::bitflags! {
         const DOUBLE_SIDED = 1 << 7;
         const ALPHA_MODE_MASK = 1 << 8;
         const ALPHA_MODE_ALPHA_TO_COVERAGE = 1 << 9;
-        const OUTLINE_WIDTH_MULTIPLY_TEXTURE = 1 << 10;
+        const ALPHA_MODE_BLEND = 1 << 10;
+        const OUTLINE_WIDTH_MULTIPLY_TEXTURE = 1 << 11;
     }
 }
 
@@ -261,6 +272,11 @@ impl From<&MToonMaterial> for MtoonFlags {
             MtoonFlags::ALPHA_MODE_ALPHA_TO_COVERAGE,
             matches!(value.alpha_mode, AlphaMode::AlphaToCoverage),
         );
+        flags.set(
+            MtoonFlags::ALPHA_MODE_BLEND,
+            matches!(value.alpha_mode, AlphaMode::Blend),
+        );
+        println!("Alpha mode: {:?}", value.alpha_mode);
         flags.set(
             MtoonFlags::OUTLINE_WIDTH_MULTIPLY_TEXTURE,
             value.outline_width_multiply_texture.is_some(),

@@ -126,25 +126,17 @@ impl Material for MToonMaterial {
     }
 
     fn depth_bias(&self) -> f32 {
-        let bias = if matches!(self.alpha_mode, AlphaMode::Blend){
+        let bias = if matches!(self.alpha_mode, AlphaMode::Blend) {
             self.depth_bias + self.render_queue_offset
-        }else{
+        } else {
             self.depth_bias
         };
         let offset = match (self.alpha_mode, self.transparent_with_z_write) {
-            (AlphaMode::Opaque, _) => {
-                -10000.
-            }
-            (AlphaMode::Mask(_), _) => {
-                -1000.
-            }
-            (AlphaMode::Blend, true) => {
-                -100.
-            }
-            (AlphaMode::Blend, false) => {
-                -10.0
-            }
-            _ => 0.
+            (AlphaMode::Opaque, _) => -10000.,
+            (AlphaMode::Mask(_), _) => -1000.,
+            (AlphaMode::Blend, true) => -100.,
+            (AlphaMode::Blend, false) => -10.0,
+            _ => 0.,
         };
         bias + offset
     }
@@ -163,8 +155,11 @@ impl Material for MToonMaterial {
             } else {
                 None
             };
-        if let Some(stencil) = descriptor.depth_stencil.as_mut(){
-            if key.bind_group_data.intersects(MToonMaterialKey::TRANSPARENT_WITH_Z_WRITE){
+        if let Some(stencil) = descriptor.depth_stencil.as_mut() {
+            if key
+                .bind_group_data
+                .intersects(MToonMaterialKey::TRANSPARENT_WITH_Z_WRITE)
+            {
                 stencil.depth_write_enabled = true;
             }
         }
@@ -276,7 +271,6 @@ impl From<&MToonMaterial> for MtoonFlags {
             MtoonFlags::ALPHA_MODE_BLEND,
             matches!(value.alpha_mode, AlphaMode::Blend),
         );
-        println!("Alpha mode: {:?}", value.alpha_mode);
         flags.set(
             MtoonFlags::OUTLINE_WIDTH_MULTIPLY_TEXTURE,
             value.outline_width_multiply_texture.is_some(),

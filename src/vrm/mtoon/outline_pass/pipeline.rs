@@ -1,8 +1,11 @@
 use crate::vrm::mtoon::MToonMaterial;
-use bevy::pbr::{MaterialPipeline, MeshPipelineKey};
+use bevy::pbr::MaterialPipeline;
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
-use bevy::render::render_resource::{BlendState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState, Face, FrontFace, PolygonMode, PrimitiveState, RenderPipelineDescriptor, SpecializedMeshPipeline, SpecializedMeshPipelineError, StencilState, TextureFormat};
+use bevy::render::render_resource::{
+    CompareFunction, Face, RenderPipelineDescriptor, SpecializedMeshPipeline,
+    SpecializedMeshPipelineError,
+};
 
 #[derive(Resource)]
 pub(super) struct MToonOutlinePipeline {
@@ -29,7 +32,7 @@ impl SpecializedMeshPipeline for MToonOutlinePipeline {
         let mut descriptor = self.base.specialize(key.clone(), layout)?;
         descriptor.label.replace("mtoon_outline_pipeline".into());
         descriptor.vertex.shader_defs.push(PASS_NAME.into());
-        if let Some(stencil) = descriptor.depth_stencil.as_mut(){
+        if let Some(stencil) = descriptor.depth_stencil.as_mut() {
             stencil.depth_compare = CompareFunction::GreaterEqual;
         }
         descriptor.primitive.cull_mode.replace(Face::Front);
@@ -39,4 +42,3 @@ impl SpecializedMeshPipeline for MToonOutlinePipeline {
         Ok(descriptor)
     }
 }
-

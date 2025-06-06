@@ -25,7 +25,6 @@ pub struct MToonOutline {
 impl From<&VrmcMaterialsExtensitions> for MToonOutline {
     fn from(value: &VrmcMaterialsExtensitions) -> Self {
         let color = value.outline_color_factor;
-        println!("Outline color: {:?}", value.outline_width_mode);
         Self {
             mode: match value.outline_width_mode.as_str() {
                 "worldCoordinates" => OutlineWidthMode::WorldCoordinates,

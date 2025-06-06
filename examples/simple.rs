@@ -41,5 +41,5 @@ fn spawn_vrm(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    commands.spawn(VrmHandle(asset_server.load("vrm/sample.vrm")));
+    commands.spawn(VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")));
 }

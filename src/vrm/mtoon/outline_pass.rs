@@ -3,18 +3,15 @@ mod pipeline;
 mod render_command;
 mod view_node;
 
-use crate::vrm::mtoon::outline_pass::phase_item::{OutlinePhaseItem, OutlineTransparentPhaseItem};
+use crate::vrm::mtoon::outline_pass::phase_item::OutlinePhaseItem;
 use crate::vrm::mtoon::outline_pass::pipeline::MToonOutlinePipeline;
-use crate::vrm::mtoon::outline_pass::render_command::{DrawOutline, DrawOutlineTransparent};
-use crate::vrm::mtoon::outline_pass::view_node::{OutlineDrawNode, OutlineDrawPassLabel, OutlineTransparentDrawPassLabel, OutlineTransparentNode};
+use crate::vrm::mtoon::outline_pass::render_command::DrawOutline;
+use crate::vrm::mtoon::outline_pass::view_node::{OutlineDrawNode, OutlineDrawPassLabel};
 use crate::vrm::mtoon::MToonMaterial;
-use bevy::core_pipeline::core_3d::Transparent3d;
 use bevy::pbr::{
     alpha_mode_pipeline_key, queue_material_meshes, MaterialBindGroupAllocator,
-    MaterialPipelineKey, PreparedMaterial, RenderLightmaps, RenderMeshInstanceFlags,
-    RenderPhaseType, ViewKeyCache,
+    MaterialPipelineKey, PreparedMaterial, RenderMeshInstanceFlags, ViewKeyCache,
 };
-use bevy::render::mesh::allocator::MeshAllocator;
 use bevy::render::sync_world::MainEntityHashMap;
 use bevy::render::view::RenderVisibilityRanges;
 use bevy::{
@@ -36,7 +33,6 @@ use bevy::{
         Extract, Render, RenderApp, RenderDebugFlags, RenderSet,
     },
 };
-use bevy::ecs::schedule::graph::Direction::Outgoing;
 
 pub struct MToonOutlinePlugin;
 
@@ -56,11 +52,8 @@ impl Plugin for MToonOutlinePlugin {
         render_app
             .init_resource::<SpecializedMeshPipelines<MToonOutlinePipeline>>()
             .init_resource::<DrawFunctions<OutlinePhaseItem>>()
-            .init_resource::<DrawFunctions<OutlineTransparentPhaseItem>>()
             .add_render_command::<OutlinePhaseItem, DrawOutline>()
-            .add_render_command::<OutlineTransparentPhaseItem, DrawOutlineTransparent>()
             .init_resource::<ViewSortedRenderPhases<OutlinePhaseItem>>()
-            .init_resource::<ViewSortedRenderPhases<OutlineTransparentPhaseItem>>()
             .init_resource::<MToonMaterialInstances>()
             .add_systems(
                 ExtractSchedule,
@@ -72,23 +65,17 @@ impl Plugin for MToonOutlinePlugin {
                     queue_outlines
                         .after(queue_material_meshes::<MToonMaterial>)
                         .in_set(RenderSet::QueueMeshes),
-                    (
-                        sort_phase_system::<OutlinePhaseItem>,
-                        sort_phase_system::<OutlineTransparentPhaseItem>,
-                    )
-                        .in_set(RenderSet::PhaseSort),
+                    sort_phase_system::<OutlinePhaseItem>.in_set(RenderSet::PhaseSort),
                 ),
             );
 
         render_app
             .add_render_graph_node::<ViewNodeRunner<OutlineDrawNode>>(Core3d, OutlineDrawPassLabel)
-            .add_render_graph_node::<ViewNodeRunner<OutlineTransparentNode>>(Core3d, OutlineTransparentDrawPassLabel)
             .add_render_graph_edges(
                 Core3d,
                 (
                     Node3d::MainTransparentPass,
                     OutlineDrawPassLabel,
-                    OutlineTransparentDrawPassLabel,
                     Node3d::EndMainPass,
                 ),
             );
@@ -110,7 +97,6 @@ struct MToonMaterialInstances(MainEntityHashMap<AssetId<MToonMaterial>>);
 
 fn extract_camera_phases(
     mut outline_phases: ResMut<ViewSortedRenderPhases<OutlinePhaseItem>>,
-    mut transparent_render_phases: ResMut<ViewSortedRenderPhases<OutlineTransparentPhaseItem>>,
     mut live_entities: Local<HashSet<RetainedViewEntity>>,
     cameras: Extract<Query<(Entity, &Camera), With<Camera3d>>>,
 ) {
@@ -122,7 +108,6 @@ fn extract_camera_phases(
 
         let retained_view_entity = RetainedViewEntity::new(main_entity.into(), None, 0);
         outline_phases.insert_or_clear(retained_view_entity);
-        transparent_render_phases.insert_or_clear(retained_view_entity);
         live_entities.insert(retained_view_entity);
     }
 
@@ -141,12 +126,9 @@ fn extract_mtoon_materials(
 fn queue_outlines(
     mut pipelines: ResMut<SpecializedMeshPipelines<MToonOutlinePipeline>>,
     mut outline_phases: ResMut<ViewSortedRenderPhases<OutlinePhaseItem>>,
-    mut transparent_render_phases: ResMut<ViewSortedRenderPhases<OutlineTransparentPhaseItem>>,
-    mut views: Query<(&ExtractedView, &RenderVisibleEntities, &Msaa)>,
+    mut views: Query<(&ExtractedView, &RenderVisibleEntities)>,
     material_bind_group_allocator: Res<MaterialBindGroupAllocator<MToonMaterial>>,
     view_key_cache: Res<ViewKeyCache>,
-    mesh_allocator: Res<MeshAllocator>,
-    render_lightmaps: Res<RenderLightmaps>,
     render_visibility_ranges: Res<RenderVisibilityRanges>,
     instances: Res<MToonMaterialInstances>,
     render_materials: Res<RenderAssets<PreparedMaterial<MToonMaterial>>>,
@@ -156,20 +138,14 @@ fn queue_outlines(
     render_meshes: Res<RenderAssets<RenderMesh>>,
     render_mesh_instances: Res<RenderMeshInstances>,
 ) {
-    for (view, visible_entities, msaa) in &mut views {
+    for (view, visible_entities) in &mut views {
         let Some(view_key) = view_key_cache.get(&view.retained_view_entity) else {
             continue;
         };
         let Some(outline_phase) = outline_phases.get_mut(&view.retained_view_entity) else {
             continue;
         };
-        let Some(transparent_phase) = transparent_render_phases.get_mut(&view.retained_view_entity)
-        else {
-            continue;
-        };
-
         let draw_function_id = draw_functions.read().id::<DrawOutline>();
-        let rangefinder = view.rangefinder3d();
         for (render_entity, visible_entity) in visible_entities.iter::<Mesh3d>() {
             let Some(mesh_instance) = render_mesh_instances.render_mesh_queue_data(*visible_entity)
             else {
@@ -234,29 +210,16 @@ fn queue_outlines(
                 }
             };
             let distance = material.properties.depth_bias;
-            match material.properties.render_phase_type {
-                // RenderPhaseType::Transparent => {
-                //     transparent_phase.add(OutlineTransparentPhaseItem {
-                //         sort_key: FloatOrd(distance),
-                //         entity: (*render_entity, *visible_entity),
-                //         pipeline: pipeline_id,
-                //         draw_function: draw_function_id,
-                //         batch_range: 0..0,
-                //         extra_index: PhaseItemExtraIndex::None,
-                //         indexed: mesh.indexed(),
-                //     });
-                // }
-                _ => {
-                    outline_phase.add(OutlinePhaseItem {
-                        sort_key: FloatOrd(distance),
-                        entity: (*render_entity, *visible_entity),
-                        pipeline: pipeline_id,
-                        draw_function: draw_function_id,
-                        batch_range: 0..0,
-                        extra_index: PhaseItemExtraIndex::None,
-                        indexed: mesh.indexed(),
-                    });
-                }
+            {
+                outline_phase.add(OutlinePhaseItem {
+                    sort_key: FloatOrd(distance),
+                    entity: (*render_entity, *visible_entity),
+                    pipeline: pipeline_id,
+                    draw_function: draw_function_id,
+                    batch_range: 0..0,
+                    extra_index: PhaseItemExtraIndex::None,
+                    indexed: mesh.indexed(),
+                });
             }
         }
     }

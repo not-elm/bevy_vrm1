@@ -2,10 +2,7 @@ use crate::vrm::mtoon::MToonMaterial;
 use bevy::pbr::MaterialPipeline;
 use bevy::prelude::*;
 use bevy::render::mesh::MeshVertexBufferLayoutRef;
-use bevy::render::render_resource::{
-    CompareFunction, DepthBiasState, DepthStencilState, Face, RenderPipelineDescriptor,
-    SpecializedMeshPipeline, SpecializedMeshPipelineError, StencilState, TextureFormat,
-};
+use bevy::render::render_resource::{BlendState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState, Face, FrontFace, PolygonMode, PrimitiveState, RenderPipelineDescriptor, SpecializedMeshPipeline, SpecializedMeshPipelineError, StencilState, TextureFormat};
 
 #[derive(Resource)]
 pub(super) struct MToonOutlinePipeline {
@@ -29,24 +26,66 @@ impl SpecializedMeshPipeline for MToonOutlinePipeline {
         layout: &MeshVertexBufferLayoutRef,
     ) -> Result<RenderPipelineDescriptor, SpecializedMeshPipelineError> {
         const PASS_NAME: &str = "OUTLINE_PASS";
-
         let mut descriptor = self.base.specialize(key.clone(), layout)?;
         descriptor.label.replace("mtoon_outline_pipeline".into());
         descriptor.vertex.shader_defs.push(PASS_NAME.into());
-        descriptor
-            .fragment
-            .as_mut()
-            .unwrap()
-            .shader_defs
-            .push(PASS_NAME.into());
         descriptor.depth_stencil.replace(DepthStencilState {
-            depth_compare: CompareFunction::Greater,
+            depth_compare: CompareFunction::LessEqual,
             depth_write_enabled: true,
             format: TextureFormat::Depth32Float,
             stencil: StencilState::default(),
             bias: DepthBiasState::default(),
         });
         descriptor.primitive.cull_mode.replace(Face::Front);
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            fragment.shader_defs.push(PASS_NAME.into());
+            for target in fragment.targets.iter_mut().filter_map(|s|s.as_mut()){
+                target.blend.replace(BlendState::ALPHA_BLENDING);
+            }
+        }
+        Ok(descriptor)
+    }
+}
+
+#[derive(Resource)]
+pub(super) struct MToonOutlineTransparentPipeline {
+    base: MaterialPipeline<MToonMaterial>,
+}
+
+impl FromWorld for MToonOutlineTransparentPipeline {
+    fn from_world(world: &mut World) -> Self {
+        Self {
+            base: MaterialPipeline::from_world(world),
+        }
+    }
+}
+
+impl SpecializedMeshPipeline for MToonOutlineTransparentPipeline {
+    type Key = <MaterialPipeline<MToonMaterial> as SpecializedMeshPipeline>::Key;
+
+    fn specialize(
+        &self,
+        key: Self::Key,
+        layout: &MeshVertexBufferLayoutRef,
+    ) -> Result<RenderPipelineDescriptor, SpecializedMeshPipelineError> {
+        const PASS_NAME: &str = "OUTLINE_PASS";
+        let mut descriptor = self.base.specialize(key.clone(), layout)?;
+        descriptor.label.replace("mtoon_outline_pipeline".into());
+        descriptor.vertex.shader_defs.push(PASS_NAME.into());
+        descriptor.depth_stencil.replace(DepthStencilState {
+            depth_compare: CompareFunction::LessEqual,
+            depth_write_enabled: true,
+            format: TextureFormat::Depth32Float,
+            stencil: StencilState::default(),
+            bias: DepthBiasState::default(),
+        });
+        descriptor.primitive.cull_mode.replace(Face::Front);
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            fragment.shader_defs.push(PASS_NAME.into());
+            for target in fragment.targets.iter_mut().filter_map(|s|s.as_mut()){
+                target.blend.replace(BlendState::ALPHA_BLENDING);
+            }
+        }
         Ok(descriptor)
     }
 }

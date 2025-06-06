@@ -1,7 +1,7 @@
 #import bevy_pbr::{
     forward_io::{
         VertexOutput,
-         FragmentOutput,
+        FragmentOutput,
     },
     pbr_fragment::pbr_input_from_vertex_output,
     pbr_types::PbrInput,
@@ -67,7 +67,7 @@ fn fragment(
 
 #ifdef OUTLINE_PASS
     let outline_color = material.outline_color.rgb * mix(vec3(1.), out.color.rgb, material.outline_lighting_mix_factor);
-    out.color = vec4(outline_color, out.color.a);
+    out.color = vec4(outline_color, material.base_color.a);
 #endif
 
     return out;
@@ -91,10 +91,12 @@ fn lit_color(uv: vec2<f32>) -> vec4<f32> {
         base_color *= textureSampleBias(base_color_texture, base_color_sampler, uv, view.mip_bias);
     }
     if((material.flags & ALPHA_MODE_MASK) != 0u || (material.flags & ALPHA_MODE_ALPHA_TO_COVERAGE) != 0u) {
-        if(base_color.a >= material.alpha_cutoff) {
-            base_color.a = 1.0;
-        } else {
+        let raw = base_color.a;
+        let tmpAlpha = (raw - material.alpha_cutoff) / max(fwidth(raw), 0.00001) + 0.5;
+        if(tmpAlpha < material.alpha_cutoff) {
             discard;
+        }else{
+            base_color.a = 1.0;
         }
     }
     return base_color;
@@ -158,8 +160,12 @@ fn calc_mtoon_lighting_shading(
     light_id: u32,
 ) -> f32 {
     let light = &lights.directional_lights[light_id];
-    let NdotL = saturate(dot(normalize(input.world_normal), normalize((*light).direction_to_light)));
+    let light_color = (*light).color.rgb;
+    let NdotL = saturate(dot(input.world_normal, (*light).direction_to_light));
     let shade_shift = calc_mtoon_lighting_reflectance_shading_shift(input);
+#ifdef OUTLINE_PASS
+    let shading = mtoon_linearstep(-1.0 + material.shading_toony_factor, 1.0 - material.shading_toony_factor, NdotL + shade_shift);
+#else
     let shade_input = mix(-1., 1., mtoon_linearstep(-1., 1., NdotL));
     let view_z = dot(vec4<f32>(
         view.view_from_world[0].z,
@@ -173,7 +179,9 @@ fn calc_mtoon_lighting_shading(
         input.world_normal,
         view_z,
     );
-    return mtoon_linearstep(-1.0 + material.shading_toony_factor, 1.0 - material.shading_toony_factor, shade_input + shade_shift) * shadow;
+    let shading =  mtoon_linearstep(-1.0 + material.shading_toony_factor, 1.0 - material.shading_toony_factor, shade_input + shade_shift) * shadow;
+#endif
+   return shading;
 }
 
 fn calc_mtoon_lighting_reflectance_shading_shift(
@@ -237,13 +245,13 @@ fn apply_emissive_light(in: MToonInput) -> vec3<f32> {
 }
 
 fn apply_rim_lighting(in: PbrInput, uv: vec2<f32>, direct_light: vec3<f32>, in_direct: vec3<f32>) -> vec3<f32>{
-    var rim = material.mat_cap_color.rgb;
+    var rim = vec3(0.);
     let world_view_x = normalize(vec3<f32>(in.V.z, 0.0, -in.V.x));
     let world_view_y = cross(in.V, world_view_x);
     let matcap_uv = vec2<f32>(dot(world_view_x, in.N), dot(world_view_y, in.N)) * 0.495 + 0.5;
     let epsilon = 0.0001;
     if((material.flags & MATCAP_TEXTURE) != 0u) {
-        rim *= textureSampleBias(matcap_texture, matcap_sampler, matcap_uv, view.mip_bias).rgb;
+        rim = material.mat_cap_color.rgb * textureSampleBias(matcap_texture, matcap_sampler, matcap_uv, view.mip_bias).rgb;
     }
 
     let parametric_rim = saturate(1.0 - dot(in.N, in.V) + material.parametric_rim_lift_factor);

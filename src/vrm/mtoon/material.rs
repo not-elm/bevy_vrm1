@@ -92,6 +92,8 @@ pub struct MToonMaterial {
     /// [VRMC_materials_mtoon-1.0](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#renderqueueoffsetnumber)
     pub depth_bias: f32,
     pub opaque_renderer_method: OpaqueRendererMethod,
+    pub render_queue_offset: f32,
+    pub transparent_with_z_write: bool,
     #[cfg_attr(feature = "reflect", reflect(ignore, clone))]
     pub cull_mode: Option<Face>,
 }
@@ -123,7 +125,27 @@ impl Material for MToonMaterial {
     }
 
     fn depth_bias(&self) -> f32 {
-        self.depth_bias
+        let bias = if matches!(self.alpha_mode, AlphaMode::Blend){
+            self.depth_bias + self.render_queue_offset
+        }else{
+            self.depth_bias
+        };
+        let offset = match (self.alpha_mode, self.transparent_with_z_write) {
+            (AlphaMode::Opaque, _) => {
+                -10000.    
+            }
+            (AlphaMode::Mask(_), _) => {
+                -1000.
+            }
+            (AlphaMode::Blend, true) => {
+                -100.  
+            }
+            (AlphaMode::Blend, false) => {
+                -10.0
+            }
+            _ => 0.
+        };
+        bias + offset
     }
 
     fn specialize(
@@ -180,6 +202,8 @@ impl Default for MToonMaterial {
             alpha_mode: AlphaMode::default(),
             double_sided: false,
             depth_bias: 0.0,
+            render_queue_offset: 0.0,
+            transparent_with_z_write: false,
             opaque_renderer_method: OpaqueRendererMethod::default(),
             cull_mode: None,
             outline: MToonOutline::default(),
@@ -311,7 +335,7 @@ impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
             emissive_color: self.emissive.to_vec4(),
             alpha_cutoff: match self.alpha_mode {
                 AlphaMode::Mask(value) => value,
-                _ => 0.5,
+                _ => 1e-3,
             },
             outline_flags: outline_flags.bits(),
             outline_color: self.outline.color.to_vec4(),

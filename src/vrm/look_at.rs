@@ -2,6 +2,7 @@
 //! - [`look at specification(ja)`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.ja.md)
 
 use crate::prelude::*;
+use crate::system_set::VrmSystemSets;
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 use bevy::render::camera::RenderTarget;
@@ -51,11 +52,10 @@ impl Plugin for LookAtPlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_systems(Update, track_looking_target);
-
         app.register_type::<LookAt>()
             .register_type::<LookAtProperties>()
-            .register_type::<LookAtType>();
+            .register_type::<LookAtType>()
+            .add_systems(Update, track_looking_target.in_set(VrmSystemSets::LookAt));
     }
 }
 

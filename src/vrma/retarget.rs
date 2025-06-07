@@ -9,10 +9,6 @@ use bevy::window::RequestRedraw;
 
 pub(crate) use expressions::VrmaExpressionNames;
 
-//TODO: あとで別のシステムセットに切り出す
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct RetargetBindingSystemSet;
-
 #[derive(Component)]
 pub(crate) struct CurrentRetargeting;
 

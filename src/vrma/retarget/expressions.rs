@@ -1,10 +1,11 @@
 //!  This module handles the retargeting of expressions from a VRM model to a mascot model.
 
 use crate::system_param::child_searcher::ChildSearcher;
+use crate::system_set::VrmSystemSets;
 use crate::vrm::expressions::VrmExpressionRegistry;
 use crate::vrm::VrmExpression;
 use crate::vrma::gltf::extensions::VrmaExtensions;
-use crate::vrma::retarget::{CurrentRetargeting, RetargetBindingSystemSet};
+use crate::vrma::retarget::CurrentRetargeting;
 use crate::vrma::{RetargetSource, RetargetTo};
 use bevy::app::{App, Update};
 use bevy::prelude::*;
@@ -16,16 +17,15 @@ impl Plugin for VrmaRetargetExpressionsPlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_systems(
-            Update,
-            (
-                retarget_expressions_to_mascot,
-                bind_expressions.in_set(RetargetBindingSystemSet),
-            ),
-        );
-
         app.register_type::<RetargetExpressionTo>()
-            .register_type::<BindExpressionNode>();
+            .register_type::<BindExpressionNode>()
+            .add_systems(
+                Update,
+                (
+                    retarget_expressions_to_mascot,
+                    bind_expressions.in_set(VrmSystemSets::Retarget),
+                ),
+            );
     }
 }
 

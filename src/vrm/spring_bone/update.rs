@@ -1,3 +1,4 @@
+use crate::system_set::VrmSystemSets;
 use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
 use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
 use bevy::app::App;
@@ -12,7 +13,10 @@ impl Plugin for SpringBoneUpdatePlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_systems(PostUpdate, update_spring_bones);
+        app.add_systems(
+            Update,
+            update_spring_bones.in_set(VrmSystemSets::SpringBone),
+        );
     }
 }
 

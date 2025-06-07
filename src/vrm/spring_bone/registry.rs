@@ -8,32 +8,24 @@ use bevy::gltf::GltfNode;
 use bevy::math::Vec3;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-#[cfg(feature = "reflect")]
-use serde::{Deserialize, Serialize};
 
 pub(super) struct SpringBoneRegistryPlugin;
 
 impl Plugin for SpringBoneRegistryPlugin {
     fn build(
         &self,
-        _app: &mut App,
+        app: &mut App,
     ) {
-        #[cfg(feature = "reflect")]
-        {
-            _app.register_type::<SpringColliderRegistry>()
-                .register_type::<SpringJointPropsRegistry>()
-                .register_type::<SpringNodeRegistry>();
-        }
+        app.register_type::<SpringColliderRegistry>()
+            .register_type::<SpringJointPropsRegistry>()
+            .register_type::<SpringNodeRegistry>();
     }
 }
 
-//TODO: serde
-#[derive(Component, Deref, Debug, Default, Clone, PartialEq)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(
-    feature = "reflect",
-    reflect(Component, Serialize, Deserialize, Default)
-)]
+#[derive(Component, Deref, Debug, Default, Clone, PartialEq, Reflect)]
+#[reflect(Component, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub(crate) struct SpringColliderRegistry(pub(crate) HashMap<Name, ColliderShape>);
 
 impl SpringColliderRegistry {
@@ -55,13 +47,10 @@ impl SpringColliderRegistry {
     }
 }
 
-//TODO: serde
-#[derive(Component, Deref, Debug, Default, Clone)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(
-    feature = "reflect",
-    reflect(Component, Serialize, Deserialize, Default)
-)]
+#[derive(Component, Deref, Debug, Default, Clone, PartialEq, Reflect)]
+#[reflect(Component, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub(crate) struct SpringJointPropsRegistry(pub(crate) HashMap<Name, SpringJointProps>);
 
 impl SpringJointPropsRegistry {
@@ -93,26 +82,20 @@ impl SpringJointPropsRegistry {
     }
 }
 
-//TODO: serde
-#[derive(Component, Debug, Default, Clone)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(
-    feature = "reflect",
-    reflect(Component, Serialize, Deserialize, Default)
-)]
+#[derive(Component, Debug, Default, Clone, PartialEq, Reflect)]
+#[reflect(Component, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub(crate) struct SpringNode {
     pub center: Option<Name>,
     pub joints: Vec<Name>,
     pub colliders: Vec<Name>,
 }
 
-//TODO: serde
-#[derive(Component, Deref, Default)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(
-    feature = "reflect",
-    reflect(Component, Serialize, Deserialize, Default)
-)]
+#[derive(Component, Deref, Default, Reflect)]
+#[reflect(Component, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub(crate) struct SpringNodeRegistry(pub Vec<SpringNode>);
 
 impl SpringNodeRegistry {

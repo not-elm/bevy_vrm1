@@ -11,9 +11,6 @@ pub mod prelude {
     pub use crate::vrma::animation::play::{PlayVrma, StopVrma};
 }
 
-#[cfg(feature = "reflect")]
-use serde::{Deserialize, Serialize};
-
 pub struct VrmaAnimationPlayersPlugin;
 
 impl Plugin for VrmaAnimationPlayersPlugin {
@@ -21,26 +18,22 @@ impl Plugin for VrmaAnimationPlayersPlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_plugins((VrmaAnimationSetupPlugin, VrmaAnimationPlayPlugin));
-        #[cfg(feature = "reflect")]
-        {
-            app.register_type::<VrmaAnimationPlayers>()
-                .register_type::<VrmAnimationGraph>();
-        }
+        app.register_type::<VrmaAnimationPlayers>()
+            .register_type::<VrmAnimationGraph>()
+            .add_plugins((VrmaAnimationSetupPlugin, VrmaAnimationPlayPlugin));
     }
 }
 
-// TODO: serde
 /// After spawn the vrma, the animation player will be spawned.
 /// This component is used to hold that entity in the root entity.
-#[derive(Component, Debug, Deref, DerefMut, Default)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
+#[derive(Component, Debug, Deref, DerefMut, Default, Reflect)]
+#[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub(crate) struct VrmaAnimationPlayers(pub Vec<Entity>);
 
-//TODO: serde
-#[derive(Component, Default)]
-#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[derive(Component, Default, Reflect)]
+#[reflect(Component)]
 pub(crate) struct VrmAnimationGraph {
     pub handle: Handle<AnimationGraph>,
     pub nodes: Vec<AnimationNodeIndex>,

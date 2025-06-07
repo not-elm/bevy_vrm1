@@ -13,24 +13,15 @@ impl Plugin for VrmaAnimationSetupPlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_systems(Update, (setup_vrma_player, trigger_loaded_vrma));
-
-        #[cfg(feature = "reflect")]
-        {
-            app.register_type::<InitializedAnimationPlayers>();
-        }
+        app.register_type::<InitializedAnimationPlayers>()
+            .add_systems(Update, (setup_vrma_player, trigger_loaded_vrma));
     }
 }
 
-#[derive(Component, Default)]
-#[cfg_attr(
-    feature = "reflect",
-    derive(Reflect, serde::Serialize, serde::Deserialize)
-)]
-#[cfg_attr(
-    feature = "reflect",
-    reflect(Component, Serialize, Deserialize, Default)
-)]
+#[derive(Component, Default, Reflect)]
+#[reflect(Component, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 struct InitializedAnimationPlayers;
 
 pub(crate) fn setup_vrma_player(

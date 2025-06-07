@@ -3,9 +3,7 @@ use bevy::math::Vec2;
 use bevy::prelude::*;
 
 /// [VRMC_materials_mtoon-1.0](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#uv-animation)
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(not(feature = "reflect"), derive(TypePath))]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Reflect)]
 pub struct UVAnimation {
     /// The unit is radians per second, so a value of 1.0 means the UV rotates once every 2π seconds.
     pub rotation_speed: f32,

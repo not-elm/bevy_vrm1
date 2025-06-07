@@ -29,7 +29,6 @@ paste = "1"
 [dev-dependencies]
 bevy = { version = "0.16.0" }
 bevy_panorbit_camera = "0.26.0"
-bevy-inspector-egui = "0.31.0"
 
 [lints.clippy]
 type_complexity = "allow"
@@ -42,7 +41,6 @@ semicolon_if_nothing_returned = "warn"
 
 [features]
 default = []
-reflect = ["bevy/serialize"]
 serde = ["bevy/serialize"]
 develop = []
 

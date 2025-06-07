@@ -104,9 +104,9 @@ pub struct Meta {
     pub version: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Component, Debug, Clone)]
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
+#[derive(Component, Debug, Clone, Reflect, Serialize, Deserialize)]
+#[reflect(Component)]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct LookAtProperties {
     /// An offset from the head bone to the lookAt reference position (between both eyes).
     #[serde(rename = "offsetFromHeadBone")]
@@ -128,9 +128,8 @@ pub struct LookAtProperties {
     pub r#type: LookAtType,
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(feature = "reflect", reflect(Serialize, Deserialize))]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct RangeMap {
     #[serde(rename = "inputMaxValue")]
     pub input_max_value: f32,
@@ -138,9 +137,8 @@ pub struct RangeMap {
     pub output_scale: f32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(feature = "reflect", reflect(Serialize, Deserialize))]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Reflect)]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 #[serde(rename_all = "snake_case")]
 pub enum LookAtType {
     Bone,

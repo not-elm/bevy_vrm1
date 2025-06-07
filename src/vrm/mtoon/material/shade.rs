@@ -1,9 +1,10 @@
 use crate::vrm::gltf::materials::VrmcMaterialsExtensitions;
 use bevy::prelude::*;
 
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(not(feature = "reflect"), derive(TypePath))]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Reflect)]
+#[reflect(Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct Shade {
     /// The shade color.
     pub color: LinearRgba,

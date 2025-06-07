@@ -14,12 +14,13 @@ macro_rules! new_type {
             Eq,
             PartialEq,
             Debug,
-            serde::Serialize,
-            serde::Deserialize,
             Clone,
             Hash,
             bevy::prelude::Deref,
         )]
+        #[reflect(Component)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
         pub struct $struct_name(pub String);
 
         impl From<&str> for $struct_name {
@@ -77,10 +78,10 @@ macro_rules! marker_component {
                 PartialEq,
                 Hash,
                 Reflect,
-                serde::Serialize,
-                serde::Deserialize,
             )]
-            #[reflect(Component, Serialize, Deserialize, Default)]
+            #[reflect(Component, Default)]
+            #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+            #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
             pub struct $name;
         };
     }

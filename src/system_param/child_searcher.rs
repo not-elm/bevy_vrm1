@@ -17,16 +17,6 @@ pub struct ChildSearcher<'w, 's> {
 }
 
 impl ChildSearcher<'_, '_> {
-    pub fn has_been_spawned_all_bones(
-        &self,
-        root: Entity,
-        bone_registry: &HumanoidBoneRegistry,
-    ) -> bool {
-        bone_registry
-            .values()
-            .all(|bone_name| self.find_from_name(root, bone_name.as_str()).is_some())
-    }
-
     pub fn find_from_name(
         &self,
         root: Entity,
@@ -41,6 +31,16 @@ impl ChildSearcher<'_, '_> {
         target_name: &VrmBone,
     ) -> Option<Entity> {
         find_entity(target_name, true, root, &self.entities)
+    }
+
+    pub(crate) fn has_been_spawned_all_bones(
+        &self,
+        root: Entity,
+        bone_registry: &HumanoidBoneRegistry,
+    ) -> bool {
+        bone_registry
+            .values()
+            .all(|bone_name| self.find_from_name(root, bone_name.as_str()).is_some())
     }
 }
 

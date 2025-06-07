@@ -1,15 +1,17 @@
+//! This module inserts [`SceneRoot`] and VRMA-related components from the loaded [`VrmaHandle`].
+
 use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, HumanoidBonesAttached};
-use crate::vrm::VrmExpression;
 use crate::vrma::animation::{VrmAnimationGraph, VrmaAnimationPlayers};
 use crate::vrma::gltf::extensions::VrmaExtensions;
 use crate::vrma::loader::VrmaAsset;
+use crate::vrma::retarget::VrmaExpressionNames;
 use crate::vrma::{RetargetTo, Vrma, VrmaDuration, VrmaHandle, VrmaPath};
 use bevy::gltf::GltfNode;
 use bevy::prelude::*;
 use bevy::scene::SceneRoot;
 use std::time::Duration;
 
-pub struct VrmaSpawnPlugin;
+pub(super) struct VrmaSpawnPlugin;
 
 impl Plugin for VrmaSpawnPlugin {
     fn build(
@@ -20,23 +22,6 @@ impl Plugin for VrmaSpawnPlugin {
     }
 }
 
-#[derive(Component, Deref, Reflect)]
-pub struct VrmaExpressionNames(Vec<VrmExpression>);
-
-impl VrmaExpressionNames {
-    pub fn new(extensions: &VrmaExtensions) -> Self {
-        let Some(expressions) = extensions.vrmc_vrm_animation.expressions.as_ref() else {
-            return Self(Vec::default());
-        };
-        Self(
-            expressions
-                .preset
-                .keys()
-                .map(|expression| VrmExpression(expression.clone()))
-                .collect(),
-        )
-    }
-}
 fn spawn_vrma(
     mut commands: Commands,
     mut animation_graphs: ResMut<Assets<AnimationGraph>>,

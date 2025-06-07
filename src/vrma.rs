@@ -1,8 +1,8 @@
-pub mod animation;
-pub mod gltf;
+pub(crate) mod animation;
+mod gltf;
 mod loader;
-pub mod retarget;
-pub mod spawn;
+mod retarget;
+mod spawn;
 
 use crate::vrma::animation::VrmaAnimationPlayersPlugin;
 use crate::vrma::loader::{VrmaAsset, VrmaLoaderPlugin};
@@ -16,6 +16,14 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub mod prelude {
+    pub use crate::vrma::{
+        animation::prelude::*, loader::VrmaAsset, LoadedVrma, VrmaHandle, VrmaPlugin,
+    };
+}
+
+/// This plugin enables support for VRMA (VRM Animation) in Bevy.
+/// Please refer to [`VrmaHandle`] for details.
 pub struct VrmaPlugin;
 
 impl Plugin for VrmaPlugin {

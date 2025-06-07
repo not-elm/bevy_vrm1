@@ -6,16 +6,22 @@ use bevy::app::{App, Plugin};
 use bevy::prelude::{ChildOf, Children, Commands, Entity, Event, Query, Trigger, With, Without};
 
 /// The trigger event to play the Vrma's animation.
+///
+/// You need to emit this via [`Trigger`] with the target entity of the VRMA you want to play the animation on.
+///
+/// If there are multiple VRMA entities, the animation of all other VRMAs will be stopped except for the one specified in the trigger.
 #[derive(Event, Debug)]
 pub struct PlayVrma {
     /// Whether to loop the animation.
     pub repeat: bool,
 }
 
+/// The trigger event to stop the Vrma's animation.
+///You need to emit this via [`Trigger`] with the target entity of the VRMA you want to stop the animation on.
 #[derive(Event, Debug)]
 pub struct StopVrma;
 
-pub struct VrmaAnimationPlayPlugin;
+pub(super) struct VrmaAnimationPlayPlugin;
 
 impl Plugin for VrmaAnimationPlayPlugin {
     fn build(

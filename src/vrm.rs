@@ -1,8 +1,8 @@
-pub mod expressions;
-pub mod gltf;
-pub mod humanoid_bone;
-pub mod loader;
-pub mod look_at;
+pub(crate) mod expressions;
+pub(crate) mod gltf;
+pub(crate) mod humanoid_bone;
+mod loader;
+mod look_at;
 mod mtoon;
 mod spawn;
 mod spring_bone;
@@ -26,8 +26,9 @@ pub mod prelude {
         gltf::prelude::*,
         humanoid_bone::*,
         loader::{VrmAsset, VrmHandle},
-        look_at::{LookAt, LookAtPlugin},
+        look_at::LookAt,
         mtoon::prelude::*,
+        Head, LeftEye, RightEye, Vrm, VrmHipsBoneTo, VrmPath, VrmPlugin,
     };
 }
 

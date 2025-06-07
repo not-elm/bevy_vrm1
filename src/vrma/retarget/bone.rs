@@ -1,3 +1,5 @@
+//! This module retargets VRMA bones to the parent VRM.
+
 use crate::macros::marker_component;
 use crate::system_param::child_searcher::ChildSearcher;
 use crate::vrm::humanoid_bone::{Hips, HumanoidBoneRegistry, HumanoidBonesAttached};
@@ -7,7 +9,7 @@ use crate::vrma::{RetargetSource, RetargetTo};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub struct VrmaRetargetingBonePlugin;
+pub(super) struct VrmaRetargetingBonePlugin;
 
 impl Plugin for VrmaRetargetingBonePlugin {
     fn build(
@@ -32,14 +34,14 @@ marker_component!(
     RetargetedHumanBones
 );
 
-pub fn retarget_bones_to_vrm(
+fn retarget_bones_to_vrm(
     par_commands: ParallelCommands,
     bones: Query<
         (Entity, &RetargetTo, &HumanoidBoneRegistry),
         (Without<RetargetedHumanBones>, With<HumanoidBonesAttached>),
     >,
     hips: Query<&VrmHipsBoneTo>,
-    _names: Query<&Name>,
+    names: Query<&Name>,
     searcher: ChildSearcher,
 ) {
     bones
@@ -53,7 +55,7 @@ pub fn retarget_bones_to_vrm(
                     continue;
                 };
                 let Some(dist_bone_entity) = searcher.find_from_bone_name(dist_hips.0, bone) else {
-                    let dist_name = _names.get(retarget.0).unwrap();
+                    let dist_name = names.get(retarget.0).unwrap();
                     error!("[Bone] {dist_name}'s {bone} not found");
                     continue;
                 };

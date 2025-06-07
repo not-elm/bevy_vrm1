@@ -1,10 +1,7 @@
 //! This example shows how to animate a VRM model using VRMA.
 
 use bevy::prelude::*;
-use bevy_vrm1::vrm::loader::VrmHandle;
-use bevy_vrm1::vrm::VrmPlugin;
-use bevy_vrm1::vrma::animation::play::PlayVrma;
-use bevy_vrm1::vrma::{LoadedVrma, VrmaHandle, VrmaPlugin};
+use bevy_vrm1::prelude::*;
 
 fn main() {
     App::new()

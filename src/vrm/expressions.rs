@@ -8,13 +8,13 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 #[derive(Reflect, Debug, Clone)]
-pub struct ExpressionNode {
+pub(crate) struct ExpressionNode {
     pub name: Name,
     pub morph_target_index: usize,
 }
 
 #[derive(Component, Deref, Reflect)]
-pub struct VrmExpressionRegistry(HashMap<VrmExpression, Vec<ExpressionNode>>);
+pub(crate) struct VrmExpressionRegistry(HashMap<VrmExpression, Vec<ExpressionNode>>);
 
 impl VrmExpressionRegistry {
     pub fn new(
@@ -42,7 +42,7 @@ impl VrmExpressionRegistry {
     }
 }
 
-pub struct VrmExpressionPlugin;
+pub(crate) struct VrmExpressionPlugin;
 
 impl Plugin for VrmExpressionPlugin {
     fn build(

@@ -1,3 +1,5 @@
+//! This module provides the functionality to load VRMA files.
+
 use bevy::app::{App, Plugin};
 use bevy::asset::io::Reader;
 use bevy::asset::{Asset, AssetLoader, LoadContext};
@@ -7,7 +9,7 @@ use bevy::prelude::*;
 use bevy::render::renderer::RenderDevice;
 use bevy::utils::default;
 
-pub struct VrmaLoaderPlugin;
+pub(super) struct VrmaLoaderPlugin;
 
 impl Plugin for VrmaLoaderPlugin {
     fn build(
@@ -33,12 +35,27 @@ impl Plugin for VrmaLoaderPlugin {
     }
 }
 
+/// Represents a VRMA asset.
+/// You can load it using [`AssetServer`].
+///
+///```no_run
+/// use bevy::prelude::*;
+/// use bevy_vrm1::prelude::*;
+/// use bevy_vrm1::vrma::VrmaHandle;
+///
+/// fn spawn_vrma(
+///    mut commands: Commands,
+///    asset_server: Res<AssetServer>,
+/// ){
+///    commands.spawn(VrmaHandle(asset_server.load("<vrma>.vrma")));
+/// }
+/// ```
 #[derive(Debug, Asset, TypePath)]
 pub struct VrmaAsset {
     pub gltf: Gltf,
 }
 
-pub struct VrmaLoader(GltfLoader);
+struct VrmaLoader(GltfLoader);
 
 impl AssetLoader for VrmaLoader {
     type Asset = VrmaAsset;

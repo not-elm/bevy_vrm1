@@ -7,13 +7,16 @@ use bevy::app::{App, Plugin, Update};
 use bevy::prelude::*;
 use bevy::window::RequestRedraw;
 
+pub(crate) use expressions::VrmaExpressionNames;
+
+//TODO: あとで別のシステムセットに切り出す
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RetargetBindingSystemSet;
 
 #[derive(Component)]
-pub struct CurrentRetargeting;
+pub(crate) struct CurrentRetargeting;
 
-pub struct VrmaRetargetPlugin;
+pub(super) struct VrmaRetargetPlugin;
 
 impl Plugin for VrmaRetargetPlugin {
     fn build(

@@ -1,23 +1,36 @@
+## v0.2.1
+
+[Relsease Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.2.1)
+I was going to add this in v0.2.0 but forgot.
+
+### Improvements
+
+- Added `VrmSystemSets` to define the system order of `Retarget`, `LookAt`, and `SpringBone`.
+
 ## v0.2.0
+
 [Relsease Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.2.0)
 
 ### Breaking Changes
 
 - `MToonOutline` is no longer a component; it has become part of the `MToonMaterial` fields.
 - `OutlineWidthMode` has been added as part of the field of `MToonOutline`.
-    - Currently only supports `OutlineWidthMode::WorldCoordinates` and `OutlineWidthMode::None`, and if `screenCoordinates` is passed, the outline will not be rendered.
+    - Currently only supports `OutlineWidthMode::WorldCoordinates` and `OutlineWidthMode::None`, and if
+      `screenCoordinates` is passed, the outline will not be rendered.
 - Fixed the rendering order of the outline to match the spec.
-  - refer to the [here](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#rendering) for more details.
+    - refer to
+      the [here](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#rendering)
+      for more details.
 - Removed `reflect` feature flag, and `serde` has been added instead.
-  - `Reflect` is now applied to most structs by default.
+    - `Reflect` is now applied to most structs by default.
 
 ### Bug Fixes
 
-- Fixed outline rendering 
+- Fixed outline rendering
 
 ## v0.1.2
 
-[Relsease Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.1.2)
+[Relsease Notes](https:/x/github.com/not-elm/bevy_vrm1/releases/tag/v0.1.2)
 
 ### Bug Fixes
 

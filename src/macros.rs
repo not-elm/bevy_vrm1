@@ -77,12 +77,37 @@ macro_rules! marker_component {
                 PartialEq,
                 Hash,
                 Reflect,
-                Serialize,
-                Deserialize,
+                serde::Serialize,
+                serde::Deserialize,
             )]
             #[reflect(Component, Serialize, Deserialize, Default)]
             pub struct $name;
         };
     }
 
+macro_rules! entity_component {
+        (
+            $(#[$meta:meta])*
+            $name: ident
+        ) => {
+            $(#[$meta])*
+            #[derive(
+                Component,
+                Debug,
+                Copy,
+                Clone,
+                Eq,
+                PartialEq,
+                Hash,
+                Reflect,
+                bevy::prelude::Deref,
+            )]
+            #[reflect(Component)]
+            #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+            #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
+            pub struct $name(pub bevy::prelude::Entity);
+        };
+    }
+
 pub(crate) use marker_component;
+pub(crate) use entity_component;

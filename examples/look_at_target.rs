@@ -38,7 +38,7 @@ fn spawn_vrm(
             MeshMaterial3d(
                 materials.add(StandardMaterial::from_color(Color::linear_rgb(1., 0., 0.))),
             ),
-            Transform::from_xyz(0.5, 2., 1.),
+            Transform::from_xyz(0.5, 1., 1.),
         ))
         .observe(apply_drag_move_cube)
         .id();

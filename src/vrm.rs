@@ -24,11 +24,15 @@ use std::path::PathBuf;
 pub mod prelude {
     pub use crate::vrm::{
         gltf::prelude::*,
-        humanoid_bone::*,
+        humanoid_bone::prelude::*,
         loader::{VrmAsset, VrmHandle},
         look_at::LookAt,
         mtoon::prelude::*,
-        Head, LeftEye, RightEye, Vrm, VrmHipsBoneTo, VrmPath, VrmPlugin,
+        Vrm,
+        VrmPath,
+        BoneRestTransform,
+        BoneRestGlobalTransform,
+        VrmPlugin,
     };
 }
 
@@ -73,29 +77,6 @@ pub struct BoneRestTransform(pub Transform);
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct BoneRestGlobalTransform(pub GlobalTransform);
 
-/// Holds the entity of the hips bone.
-#[derive(Debug, Copy, Clone, Component, Deref)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
-pub struct VrmHipsBoneTo(pub Entity);
-
-/// A marker components for left eye bone.
-#[derive(Debug, Copy, Clone, Component)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
-pub struct LeftEye(pub Entity);
-
-/// A marker components for right eye bone.
-#[derive(Debug, Copy, Clone, Component)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
-pub struct RightEye(pub Entity);
-
-/// Holds the entity of the vrm head bone.
-#[derive(Debug, Copy, Clone, Component)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
-pub struct Head(pub Entity);
 
 pub struct VrmPlugin;
 
@@ -120,11 +101,7 @@ impl Plugin for VrmPlugin {
                 .register_type::<VrmPath>()
                 .register_type::<BoneRestTransform>()
                 .register_type::<BoneRestGlobalTransform>()
-                .register_type::<VrmHipsBoneTo>()
-                .register_type::<VrmBone>()
-                .register_type::<LeftEye>()
-                .register_type::<RightEye>()
-                .register_type::<Head>();
+                .register_type::<VrmBone>();
         }
     }
 }

@@ -1,8 +1,7 @@
 //! - [`look at specification(en)`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md)
 //! - [`look at specification(ja)`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.ja.md)
 
-use crate::vrm::gltf::extensions::vrmc_vrm::{LookAtProperties, LookAtType};
-use crate::vrm::{Head, LeftEye, RightEye};
+use crate::prelude::*;
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 use bevy::render::camera::RenderTarget;
@@ -66,7 +65,7 @@ impl Plugin for LookAtPlugin {
 
 fn track_looking_target(
     par_commands: ParallelCommands,
-    vrms: Query<(&LookAt, &LookAtProperties, &Head, &LeftEye, &RightEye)>,
+    vrms: Query<(&LookAt, &LookAtProperties, &HeadBoneEntity, &LeftEyeBoneEntity, &RightEyeBoneEntity)>,
     cameras: Query<(Entity, &Camera)>,
     transforms: Query<&Transform>,
     global_transforms: Query<&GlobalTransform>,
@@ -149,8 +148,8 @@ fn calc_target_position(
 fn apply_bone(
     par_commands: &ParallelCommands,
     transforms: &Query<&Transform>,
-    left_eye: &LeftEye,
-    right_eye: &RightEye,
+    left_eye: &LeftEyeBoneEntity,
+    right_eye: &RightEyeBoneEntity,
     properties: &LookAtProperties,
     yaw: f32,
     pitch: f32,

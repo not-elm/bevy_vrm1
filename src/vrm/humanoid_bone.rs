@@ -1,7 +1,9 @@
+mod bones;
+
 use crate::system_param::child_searcher::ChildSearcher;
 use crate::vrm::gltf::extensions::VrmNode;
 use crate::vrm::{
-    BoneRestGlobalTransform, BoneRestTransform, Head, LeftEye, RightEye, VrmBone, VrmHipsBoneTo,
+    BoneRestGlobalTransform, BoneRestTransform, VrmBone,
 };
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Assets, Handle};
@@ -9,10 +11,12 @@ use bevy::gltf::GltfNode;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+use crate::vrm::humanoid_bone::bones::BonesPlugin;
+use crate::prelude::*;
 
-#[derive(Component, Reflect, Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-#[reflect(Component, Serialize, Deserialize)]
-pub struct Hips;
+pub mod prelude {
+    pub use crate::vrm::humanoid_bone::bones::*;
+}
 
 #[derive(Component, Deref, Reflect, Default)]
 pub(crate) struct HumanoidBoneRegistry(HashMap<VrmBone, Name>);
@@ -36,7 +40,7 @@ impl HumanoidBoneRegistry {
     }
 }
 
-pub struct VrmHumanoidBonePlugin;
+pub(super) struct VrmHumanoidBonePlugin;
 
 impl Plugin for VrmHumanoidBonePlugin {
     fn build(
@@ -45,15 +49,40 @@ impl Plugin for VrmHumanoidBonePlugin {
     ) {
         app.register_type::<HumanoidBonesAttached>()
             .register_type::<HumanoidBoneRegistry>()
-            .register_type::<Hips>()
-            .add_systems(Update, attach_bones);
+            .add_plugins(BonesPlugin)
+            .add_systems(Update, setup_bones);
     }
 }
 
 #[derive(Component, Reflect, Serialize, Deserialize)]
 pub struct HumanoidBonesAttached;
 
-fn attach_bones(
+macro_rules! insert_bone {
+    (
+        $commands: expr,
+        $vrm_entity: expr,
+        $bone_entity: expr,
+        $bone_name: expr,
+        $($bone: ident),+$(,)?
+    ) => {
+       
+        match $bone_name.0.to_uppercase(){
+            $(
+                x if x == stringify!($bone).to_uppercase() => {
+                    paste::paste!{
+                        $commands.entity($vrm_entity).insert([<$bone BoneEntity>]($bone_entity));
+                    }
+                    $commands.entity($bone_entity).insert($bone);
+                }
+            )+
+            _ => {
+
+            }
+        }
+    };
+}
+
+fn setup_bones(
     mut commands: Commands,
     searcher: ChildSearcher,
     vrm: Query<(Entity, &HumanoidBoneRegistry), Without<HumanoidBonesAttached>>,
@@ -76,26 +105,68 @@ fn attach_bones(
                 BoneRestTransform(*tf),
                 BoneRestGlobalTransform(*gtf),
             ));
-
-            match bone.0.as_str() {
-                "hips" => {
-                    commands
-                        .entity(vrm_entity)
-                        .insert(VrmHipsBoneTo(bone_entity));
-                    commands.entity(bone_entity).insert(Hips);
-                }
-                "leftEye" => {
-                    commands.entity(vrm_entity).insert(LeftEye(bone_entity));
-                }
-                "rightEye" => {
-                    commands.entity(vrm_entity).insert(RightEye(bone_entity));
-                }
-                "head" => {
-                    commands.entity(vrm_entity).insert(Head(bone_entity));
-                }
-                _ => {}
-            }
+            insert_bone!(
+                commands,
+                vrm_entity,
+                bone_entity,
+                bone,
+                Hips,
+                RightRingProximal,
+                RightThumbDistal,
+                RightRingIntermediate,
+                RightUpperArm,
+                LeftIndexProximal,
+                LeftUpperLeg,
+                LeftFoot,
+                LeftIndexDistal,
+                LeftThumbMetacarpal,
+                RightLowerArm,
+                LeftMiddleDistal,
+                RightUpperLeg,
+                LeftToes,
+                LeftThumbDistal,
+                RightShoulder,
+                RightThumbMetacarpal,
+                Spine,
+                LeftLowerLeg,
+                LeftShoulder,
+                LeftUpperArm,
+                UpperChest,
+                RightToes,
+                RightIndexDistal,
+                LeftMiddleProximal,
+                LeftRingProximal,
+                LeftRingDistal,
+                LeftThumbProximal,
+                LeftIndexIntermediate,
+                LeftLittleProximal,
+                LeftLittleDistal,
+                RightHand,
+                RightLittleProximal,
+                LeftRingIntermediate,
+                RightIndexIntermediate,
+                Chest,
+                LeftHand,
+                RightLittleIntermediate,
+                RightFoot,
+                RightLowerLeg,
+                LeftLittleIntermediate,
+                LeftLowerArm,
+                RightLittleDistal,
+                RightMiddleIntermediate,
+                RightMiddleProximal,
+                RightThumbProximal,
+                Neck,
+                Jaw,
+                Head,
+                LeftEye,
+                RightEye,
+                LeftMiddleIntermediate,
+                RightRingDistal,
+                RightIndexProximal,
+                RightMiddleDistal,
+            );
+            commands.entity(vrm_entity).insert(HumanoidBonesAttached);
         }
-        commands.entity(vrm_entity).insert(HumanoidBonesAttached);
     }
 }

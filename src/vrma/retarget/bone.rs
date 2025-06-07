@@ -2,12 +2,11 @@
 
 use crate::macros::marker_component;
 use crate::system_param::child_searcher::ChildSearcher;
-use crate::vrm::humanoid_bone::{Hips, HumanoidBoneRegistry, HumanoidBonesAttached};
-use crate::vrm::{BoneRestGlobalTransform, BoneRestTransform, VrmHipsBoneTo};
+use crate::vrm::humanoid_bone::{ HumanoidBoneRegistry, HumanoidBonesAttached};
 use crate::vrma::retarget::{CurrentRetargeting, RetargetBindingSystemSet};
 use crate::vrma::{RetargetSource, RetargetTo};
+use crate::prelude::*;
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 
 pub(super) struct VrmaRetargetingBonePlugin;
 
@@ -40,7 +39,7 @@ fn retarget_bones_to_vrm(
         (Entity, &RetargetTo, &HumanoidBoneRegistry),
         (Without<RetargetedHumanBones>, With<HumanoidBonesAttached>),
     >,
-    hips: Query<&VrmHipsBoneTo>,
+    hips: Query<&HipsBoneEntity>,
     names: Query<&Name>,
     searcher: ChildSearcher,
 ) {
@@ -151,10 +150,10 @@ fn calc_hips_position(
 mod tests {
     use crate::tests::{test_app, TestResult};
     use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, HumanoidBonesAttached};
-    use crate::vrm::VrmHipsBoneTo;
     use crate::vrma::retarget::bone::{
         calc_delta, calc_scaling, retarget_bones_to_vrm, RetargetedHumanBones,
     };
+    use crate::prelude::*;
     use crate::vrma::RetargetTo;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::math::Vec3;
@@ -176,7 +175,7 @@ mod tests {
     fn has_been_attached_humanoid_bones() -> TestResult {
         let mut app = test_app();
         app.world_mut().run_system_once(|mut commands: Commands| {
-            let vrm = commands.spawn(VrmHipsBoneTo(Entity::PLACEHOLDER)).id();
+            let vrm = commands.spawn(HipsBoneEntity(Entity::PLACEHOLDER)).id();
             commands.spawn((
                 HumanoidBoneRegistry::default(),
                 RetargetTo(vrm),

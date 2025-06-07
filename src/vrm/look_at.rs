@@ -6,8 +6,6 @@ use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 use bevy::render::camera::RenderTarget;
 use bevy::window::{PrimaryWindow, WindowRef};
-#[cfg(feature = "reflect")]
-use serde::{Deserialize, Serialize};
 
 /// Holds the entity of looking the target entity.
 /// This component should be inserted into the root entity of the VRM.
@@ -32,9 +30,10 @@ use serde::{Deserialize, Serialize};
 ///     ));
 /// }
 /// ```
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub enum LookAt {
     /// Look at the window cursor.
     /// The camera entity that is specified as the render target of the window must be passed.
@@ -54,12 +53,9 @@ impl Plugin for LookAtPlugin {
     ) {
         app.add_systems(Update, track_looking_target);
 
-        #[cfg(feature = "reflect")]
-        {
-            app.register_type::<LookAt>()
-                .register_type::<LookAtProperties>()
-                .register_type::<LookAtType>();
-        }
+        app.register_type::<LookAt>()
+            .register_type::<LookAtProperties>()
+            .register_type::<LookAtType>();
     }
 }
 

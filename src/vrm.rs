@@ -18,7 +18,6 @@ use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use expressions::VrmExpressionPlugin;
 use mtoon::MtoonMaterialPlugin;
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod prelude {
@@ -46,14 +45,18 @@ new_type!(
 
 /// A marker component attached to the entity of VRM.
 /// This component is automatically inserted after the [`VrmHandle`](crate::prelude::VrmHandle) is loaded.
-#[derive(Debug, Component, Reflect, Copy, Clone, Serialize, Deserialize)]
-#[reflect(Component, Serialize, Deserialize)]
+#[derive(Debug, Component, Reflect, Copy, Clone)]
+#[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct Vrm;
 
 /// The path to the VRM file.
 /// This component is automatically inserted after the [`VrmHandle`](crate::prelude::VrmHandle) is loaded.
-#[derive(Debug, Reflect, Clone, Component, Serialize, Deserialize)]
-#[reflect(Component, Serialize, Deserialize)]
+#[derive(Debug, Reflect, Clone, Component)]
+#[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct VrmPath(pub PathBuf);
 
 impl VrmPath {
@@ -64,15 +67,17 @@ impl VrmPath {
 }
 
 /// The bone's initial transform.
-#[derive(Debug, Copy, Clone, Component, Deref)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
+#[derive(Debug, Copy, Clone, Component, Deref, Reflect)]
+#[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct BoneRestTransform(pub Transform);
 
 /// The bone's initial global transform.
-#[derive(Debug, Copy, Clone, Component, Deref)]
-#[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
-#[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
+#[derive(Debug, Copy, Clone, Component, Deref, Reflect)]
+#[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct BoneRestGlobalTransform(pub GlobalTransform);
 
 /// The main plugin for VRM support in Bevy.
@@ -95,13 +100,10 @@ impl Plugin for VrmPlugin {
             LookAtPlugin,
         ));
 
-        #[cfg(feature = "reflect")]
-        {
-            app.register_type::<Vrm>()
-                .register_type::<VrmPath>()
-                .register_type::<BoneRestTransform>()
-                .register_type::<BoneRestGlobalTransform>()
-                .register_type::<VrmBone>();
-        }
+        app.register_type::<Vrm>()
+            .register_type::<VrmPath>()
+            .register_type::<BoneRestTransform>()
+            .register_type::<BoneRestGlobalTransform>()
+            .register_type::<VrmBone>();
     }
 }

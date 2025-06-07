@@ -24,16 +24,14 @@ impl Plugin for VrmaRetargetExpressionsPlugin {
             ),
         );
 
-        #[cfg(feature = "reflect")]
-        {
-            app.register_type::<RetargetExpressionTo>()
-                .register_type::<BindExpressionNode>();
-        }
+        app.register_type::<RetargetExpressionTo>()
+            .register_type::<BindExpressionNode>();
     }
 }
 
-//TODO: serde
 #[derive(Component, Deref, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub(crate) struct VrmaExpressionNames(Vec<VrmExpression>);
 
 impl VrmaExpressionNames {
@@ -51,15 +49,18 @@ impl VrmaExpressionNames {
     }
 }
 
-#[cfg_attr(feature = "reflect", derive(Reflect))]
+#[derive(Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 struct BindExpressionNode {
     pub expression_entity: Entity,
     pub index: usize,
 }
 
-#[derive(Component)]
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(feature = "reflect", reflect(Component))]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 struct RetargetExpressionTo(Vec<BindExpressionNode>);
 
 fn retarget_expressions_to_mascot(

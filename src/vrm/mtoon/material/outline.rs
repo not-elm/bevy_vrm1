@@ -3,9 +3,10 @@ use bevy::asset::Asset;
 use bevy::color::LinearRgba;
 use bevy::prelude::*;
 
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(not(feature = "reflect"), derive(TypePath))]
-#[derive(Asset, PartialEq, Debug, Clone, Default)]
+#[derive(Asset, PartialEq, Debug, Clone, Default, Reflect)]
+#[reflect(Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct MToonOutline {
     /// [`OutlineWidthMode`]
     pub mode: OutlineWidthMode,
@@ -39,6 +40,8 @@ impl From<&VrmcMaterialsExtensitions> for MToonOutline {
 
 /// Please see [`outlinewidthmode`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#outlinewidthmode) for details.
 #[derive(Reflect, Debug, Clone, Default, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub enum OutlineWidthMode {
     /// The outline will not be drawn.
     #[default]

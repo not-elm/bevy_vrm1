@@ -31,10 +31,8 @@ pub mod prelude {
 }
 
 /// [VRMC_materials_mtoon-1.0](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md)
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(feature = "reflect", reflect(Component, Default))]
-#[cfg_attr(not(feature = "reflect"), derive(TypePath))]
-#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Component)]
+#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Component, Reflect)]
+#[reflect(Component)]
 #[data(100, MToonMaterialUniform)]
 #[bind_group_data(MToonMaterialKey)]
 pub struct MToonMaterial {
@@ -94,7 +92,7 @@ pub struct MToonMaterial {
     pub opaque_renderer_method: OpaqueRendererMethod,
     pub render_queue_offset: f32,
     pub transparent_with_z_write: bool,
-    #[cfg_attr(feature = "reflect", reflect(ignore, clone))]
+    #[reflect(ignore, clone)]
     pub cull_mode: Option<Face>,
 }
 

@@ -2,9 +2,10 @@ use crate::vrm::gltf::materials::VrmcMaterialsExtensitions;
 use bevy::prelude::*;
 
 /// [VRMC_materials_mtoon-1.0](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#rim-lighting)
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(not(feature = "reflect"), derive(TypePath))]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Reflect)]
+#[reflect(Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct RimLighting {
     /// The color of the parametric rim lighting.
     pub color: LinearRgba,

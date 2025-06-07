@@ -29,15 +29,14 @@ impl Plugin for MtoonMaterialPlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_plugins(MaterialPlugin::<MToonMaterial>::default())
+        app.register_type::<MToonMaterial>()
+            .register_type::<MToonOutline>()
+            .register_type::<VrmcMaterialRegistry>()
+            .register_type::<RimLighting>()
+            .register_type::<UVAnimation>()
+            .register_type::<Shade>()
+            .add_plugins(MaterialPlugin::<MToonMaterial>::default())
             .add_plugins((MToonMaterialSetupPlugin, MToonOutlinePlugin));
-
-        #[cfg(feature = "reflect")]
-        {
-            app.register_type::<MToonMaterial>()
-                .register_type::<MToonOutline>()
-                .register_type::<VrmcMaterialRegistry>();
-        }
 
         load_internal_asset!(
             app,
@@ -60,9 +59,8 @@ impl Plugin for MtoonMaterialPlugin {
     }
 }
 
-#[derive(Component, Default, Debug)]
-#[cfg_attr(feature = "reflect", derive(Reflect))]
-#[cfg_attr(feature = "reflect", reflect(Component))]
+#[derive(Component, Default, Debug, Reflect)]
+#[reflect(Component)]
 pub struct VrmcMaterialRegistry {
     pub images: Vec<Handle<Image>>,
     pub materials: HashMap<AssetId<StandardMaterial>, VrmcMaterialsExtensitions>,

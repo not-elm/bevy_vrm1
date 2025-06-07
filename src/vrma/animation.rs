@@ -44,7 +44,7 @@ pub(crate) struct VrmAnimationGraph {
 
 impl VrmAnimationGraph {
     pub fn new(
-        clip: impl IntoIterator<Item=Handle<AnimationClip>>,
+        clip: impl IntoIterator<Item = Handle<AnimationClip>>,
         animation_graphs: &mut Assets<AnimationGraph>,
     ) -> Self {
         let (graph, nodes) = AnimationGraph::from_clips(clip);

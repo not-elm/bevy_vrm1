@@ -11,7 +11,7 @@ use bevy::prelude::*;
 #[cfg(feature = "reflect")]
 use serde::{Deserialize, Serialize};
 
-pub struct SpringBoneRegistryPlugin;
+pub(super) struct SpringBoneRegistryPlugin;
 
 impl Plugin for SpringBoneRegistryPlugin {
     fn build(
@@ -27,13 +27,14 @@ impl Plugin for SpringBoneRegistryPlugin {
     }
 }
 
+//TODO: serde
 #[derive(Component, Deref, Debug, Default, Clone, PartialEq)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(
     feature = "reflect",
     reflect(Component, Serialize, Deserialize, Default)
 )]
-pub struct SpringColliderRegistry(pub(crate) HashMap<Name, ColliderShape>);
+pub(crate) struct SpringColliderRegistry(pub(crate) HashMap<Name, ColliderShape>);
 
 impl SpringColliderRegistry {
     pub fn new(
@@ -54,13 +55,14 @@ impl SpringColliderRegistry {
     }
 }
 
+//TODO: serde
 #[derive(Component, Deref, Debug, Default, Clone)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(
     feature = "reflect",
     reflect(Component, Serialize, Deserialize, Default)
 )]
-pub struct SpringJointPropsRegistry(pub(crate) HashMap<Name, SpringJointProps>);
+pub(crate) struct SpringJointPropsRegistry(pub(crate) HashMap<Name, SpringJointProps>);
 
 impl SpringJointPropsRegistry {
     pub fn new(
@@ -91,25 +93,27 @@ impl SpringJointPropsRegistry {
     }
 }
 
+//TODO: serde
 #[derive(Component, Debug, Default, Clone)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(
     feature = "reflect",
     reflect(Component, Serialize, Deserialize, Default)
 )]
-pub struct SpringNode {
+pub(crate) struct SpringNode {
     pub center: Option<Name>,
     pub joints: Vec<Name>,
     pub colliders: Vec<Name>,
 }
 
+//TODO: serde
 #[derive(Component, Deref, Default)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(
     feature = "reflect",
     reflect(Component, Serialize, Deserialize, Default)
 )]
-pub struct SpringNodeRegistry(pub Vec<SpringNode>);
+pub(crate) struct SpringNodeRegistry(pub Vec<SpringNode>);
 
 impl SpringNodeRegistry {
     pub fn new(

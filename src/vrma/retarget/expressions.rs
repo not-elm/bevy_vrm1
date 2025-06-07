@@ -1,13 +1,15 @@
-use crate::system_param::child_searcher::ChildSearcher;
+//!  This module handles the retargeting of expressions from a VRM model to a mascot model.
 
+use crate::system_param::child_searcher::ChildSearcher;
 use crate::vrm::expressions::VrmExpressionRegistry;
+use crate::vrm::VrmExpression;
+use crate::vrma::gltf::extensions::VrmaExtensions;
 use crate::vrma::retarget::{CurrentRetargeting, RetargetBindingSystemSet};
-use crate::vrma::spawn::VrmaExpressionNames;
 use crate::vrma::{RetargetSource, RetargetTo};
 use bevy::app::{App, Update};
 use bevy::prelude::*;
 
-pub struct VrmaRetargetExpressionsPlugin;
+pub(super) struct VrmaRetargetExpressionsPlugin;
 
 impl Plugin for VrmaRetargetExpressionsPlugin {
     fn build(
@@ -27,6 +29,25 @@ impl Plugin for VrmaRetargetExpressionsPlugin {
             app.register_type::<RetargetExpressionTo>()
                 .register_type::<BindExpressionNode>();
         }
+    }
+}
+
+//TODO: serde
+#[derive(Component, Deref, Reflect)]
+pub(crate) struct VrmaExpressionNames(Vec<VrmExpression>);
+
+impl VrmaExpressionNames {
+    pub fn new(extensions: &VrmaExtensions) -> Self {
+        let Some(expressions) = extensions.vrmc_vrm_animation.expressions.as_ref() else {
+            return Self(Vec::default());
+        };
+        Self(
+            expressions
+                .preset
+                .keys()
+                .map(|expression| VrmExpression(expression.clone()))
+                .collect(),
+        )
     }
 }
 

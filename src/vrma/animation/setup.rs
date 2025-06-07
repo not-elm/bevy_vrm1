@@ -6,7 +6,7 @@ use bevy::prelude::*;
 /// At the timing when the spawn of the Vrma's animation player is completed,
 /// register the animation graph and associate the Player's entity with the root entity.
 /// register the animation graph and associate the Player's entity with the root entity.
-pub struct VrmaAnimationSetupPlugin;
+pub(super) struct VrmaAnimationSetupPlugin;
 
 impl Plugin for VrmaAnimationSetupPlugin {
     fn build(

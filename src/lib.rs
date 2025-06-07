@@ -7,7 +7,9 @@ pub mod vrm;
 pub mod vrma;
 
 pub mod prelude {
-    pub use crate::vrm::prelude::*;
+    pub use crate::{
+        error::AppResult, system_param::prelude::*, vrm::prelude::*, vrma::prelude::*,
+    };
 }
 
 #[cfg(test)]

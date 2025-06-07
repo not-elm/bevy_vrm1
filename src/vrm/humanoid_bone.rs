@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 pub struct Hips;
 
 #[derive(Component, Deref, Reflect, Default)]
-pub struct HumanoidBoneRegistry(HashMap<VrmBone, Name>);
+pub(crate) struct HumanoidBoneRegistry(HashMap<VrmBone, Name>);
 
 impl HumanoidBoneRegistry {
     pub fn new(

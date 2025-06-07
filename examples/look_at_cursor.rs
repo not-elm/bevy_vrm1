@@ -7,9 +7,7 @@
 //! Please refer to `examples/look_at_target.rs` for more details.
 
 use bevy::prelude::*;
-use bevy_vrm1::vrm::loader::VrmHandle;
-use bevy_vrm1::vrm::look_at::LookAt;
-use bevy_vrm1::vrm::VrmPlugin;
+use bevy_vrm1::prelude::*;
 
 fn main() {
     App::new()

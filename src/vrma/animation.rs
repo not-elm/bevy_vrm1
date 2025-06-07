@@ -1,4 +1,4 @@
-pub mod play;
+mod play;
 mod setup;
 
 use crate::vrma::animation::play::VrmaAnimationPlayPlugin;
@@ -6,6 +6,10 @@ use crate::vrma::animation::setup::VrmaAnimationSetupPlugin;
 use bevy::app::App;
 use bevy::asset::Handle;
 use bevy::prelude::*;
+
+pub mod prelude {
+    pub use crate::vrma::animation::play::{PlayVrma, StopVrma};
+}
 
 #[cfg(feature = "reflect")]
 use serde::{Deserialize, Serialize};
@@ -26,18 +30,19 @@ impl Plugin for VrmaAnimationPlayersPlugin {
     }
 }
 
+// TODO: serde
 /// After spawn the vrma, the animation player will be spawned.
 /// This component is used to hold that entity in the root entity.
 #[derive(Component, Debug, Deref, DerefMut, Default)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
-pub struct VrmaAnimationPlayers(pub Vec<Entity>);
+pub(crate) struct VrmaAnimationPlayers(pub Vec<Entity>);
 
+//TODO: serde
 #[derive(Component, Default)]
 #[cfg_attr(feature = "reflect", derive(Reflect))]
-pub struct VrmAnimationGraph {
+pub(crate) struct VrmAnimationGraph {
     pub handle: Handle<AnimationGraph>,
-    pub root: AnimationNodeIndex,
     pub nodes: Vec<AnimationNodeIndex>,
 }
 
@@ -47,13 +52,8 @@ impl VrmAnimationGraph {
         animation_graphs: &mut Assets<AnimationGraph>,
     ) -> Self {
         let (graph, nodes) = AnimationGraph::from_clips(clip);
-        let root = graph.root;
         let handle = animation_graphs.add(graph);
 
-        Self {
-            handle,
-            nodes,
-            root,
-        }
+        Self { handle, nodes }
     }
 }

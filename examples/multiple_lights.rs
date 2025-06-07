@@ -2,8 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
-use bevy_vrm1::vrm::loader::VrmHandle;
-use bevy_vrm1::vrm::VrmPlugin;
+use bevy_vrm1::prelude::*;
 
 #[derive(Component)]
 struct RotateCircle;

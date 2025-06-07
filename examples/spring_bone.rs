@@ -4,8 +4,7 @@
 //! Please try dragging and moving the VRM model to see the swaying of the ribbons and hair.
 
 use bevy::prelude::*;
-use bevy_vrm1::vrm::loader::VrmHandle;
-use bevy_vrm1::vrm::VrmPlugin;
+use bevy_vrm1::prelude::*;
 
 fn main() {
     App::new()

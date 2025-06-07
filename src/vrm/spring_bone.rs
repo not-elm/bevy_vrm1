@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
     feature = "reflect",
     reflect(Component, Serialize, Deserialize, Default)
 )]
-pub struct SpringJointState {
+pub(crate) struct SpringJointState {
     prev_tail: Vec3,
     current_tail: Vec3,
     bone_axis: Vec3,
@@ -35,7 +35,7 @@ pub struct SpringJointState {
     feature = "reflect",
     reflect(Component, Serialize, Deserialize, Default)
 )]
-pub struct SpringRoot {
+pub(crate) struct SpringRoot {
     /// Represents a list of entity of spring joints belonging to the spring chain.
     /// This component is inserted into the root entity of the chain.
     pub joints: SpringJoints,
@@ -50,17 +50,17 @@ pub struct SpringRoot {
 #[derive(Eq, PartialEq, Debug, Clone, Default, Deref)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Serialize, Deserialize, Default))]
-pub struct SpringJoints(pub Vec<Entity>);
+pub(crate) struct SpringJoints(pub Vec<Entity>);
 
 #[derive(Eq, PartialEq, Debug, Clone, Default, Deref)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Serialize, Deserialize, Default))]
-pub struct SpringColliders(pub Vec<Entity>);
+pub(crate) struct SpringColliders(pub Vec<Entity>);
 
 #[derive(Eq, PartialEq, Debug, Clone, Default, Deref)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Serialize, Deserialize, Default))]
-pub struct SpringCenterNode(pub Option<Entity>);
+pub(crate) struct SpringCenterNode(pub Option<Entity>);
 
 #[derive(Component, Debug, Copy, Clone, Default)]
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
@@ -68,7 +68,7 @@ pub struct SpringCenterNode(pub Option<Entity>);
     feature = "reflect",
     reflect(Component, Serialize, Deserialize, Default)
 )]
-pub struct SpringJointProps {
+pub(crate) struct SpringJointProps {
     pub drag_force: f32,
     pub gravity_dir: Vec3,
     pub gravity_power: f32,

@@ -6,6 +6,7 @@ I was going to add this in v0.2.0 but forgot.
 ### Improvements
 
 - Added `VrmSystemSets` to define the system order of `Retarget`, `LookAt`, and `SpringBone`.
+- Export several VRM(A) components that were not being exported correctly via `prelude` module.
 
 ## v0.2.0
 

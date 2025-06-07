@@ -27,7 +27,8 @@ pub mod prelude {
         loader::{VrmAsset, VrmHandle},
         look_at::LookAt,
         mtoon::prelude::*,
-        BoneRestGlobalTransform, BoneRestTransform, Vrm, VrmPath, VrmPlugin,
+        BoneRestGlobalTransform, BoneRestTransform, Vrm, VrmBone, VrmExpression, VrmPath,
+        VrmPlugin,
     };
 }
 

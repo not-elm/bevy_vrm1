@@ -17,7 +17,8 @@ use std::time::Duration;
 
 pub mod prelude {
     pub use crate::vrma::{
-        animation::prelude::*, loader::VrmaAsset, LoadedVrma, VrmaHandle, VrmaPlugin,
+        animation::prelude::*, loader::VrmaAsset, LoadedVrma, Vrma, VrmaDuration, VrmaEntity,
+        VrmaHandle, VrmaPath, VrmaPlugin,
     };
 }
 
@@ -57,6 +58,7 @@ impl Plugin for VrmaPlugin {
 /// - [`BoneRestTransform`](crate::prelude::BoneRestTransform)
 /// - [`BoneRestGlobalTransform`](crate::prelude::BoneRestGlobalTransform)
 /// - [`SceneRoot`](bevy::scene::SceneRoot)
+/// - [`VrmaAnimationPlayers`](crate::prelude::VrmaAnimationPlayers)
 /// - Components hold the entity of each bone, refer to [here](crate::vrm::humanoid_bone) for more details.
 #[derive(Debug, Component, Reflect)]
 #[reflect(Component)]

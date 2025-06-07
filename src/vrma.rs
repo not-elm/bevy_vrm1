@@ -52,6 +52,16 @@ impl Plugin for VrmaPlugin {
 }
 
 /// An asset handle to spawn VRMA.
+///
+/// After this handle is loaded, the following components are inserted. Then this handle is removed.
+///
+/// - [`Vrma`]
+/// - [`VrmaPath`]
+/// - [`VrmaDuration`]
+/// - [`BoneRestTransform`](crate::prelude::BoneRestTransform)
+/// - [`BoneRestGlobalTransform`](crate::prelude::BoneRestGlobalTransform)
+/// - [`SceneRoot`](bevy::scene::SceneRoot)
+/// - Components hold the entity of each bone, refer to [here](crate::vrm::humanoid_bone) for more details.
 #[derive(Debug, Component)]
 #[cfg_attr(feature = "reflect", derive(Reflect))]
 #[cfg_attr(feature = "reflect", reflect(Component))]

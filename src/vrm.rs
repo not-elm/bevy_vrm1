@@ -45,11 +45,13 @@ new_type!(
 );
 
 /// A marker component attached to the entity of VRM.
+/// This component is automatically inserted after the [`VrmHandle`](crate::prelude::VrmHandle) is loaded.
 #[derive(Debug, Component, Reflect, Copy, Clone, Serialize, Deserialize)]
 #[reflect(Component, Serialize, Deserialize)]
 pub struct Vrm;
 
 /// The path to the VRM file.
+/// This component is automatically inserted after the [`VrmHandle`](crate::prelude::VrmHandle) is loaded.
 #[derive(Debug, Reflect, Clone, Component, Serialize, Deserialize)]
 #[reflect(Component, Serialize, Deserialize)]
 pub struct VrmPath(pub PathBuf);
@@ -73,6 +75,9 @@ pub struct BoneRestTransform(pub Transform);
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct BoneRestGlobalTransform(pub GlobalTransform);
 
+/// The main plugin for VRM support in Bevy.
+///
+/// Please refer to [`VrmHandle`](crate::prelude::VrmHandle) for more details.
 pub struct VrmPlugin;
 
 impl Plugin for VrmPlugin {

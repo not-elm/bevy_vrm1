@@ -1,3 +1,12 @@
+//! This module handles humanoid bones.
+//! Refer to [here](https://docs.unity3d.com/ja/2019.4/ScriptReference/HumanBodyBones.html) for the list of humanoid bones.
+//!
+//! After the VRM(A) is loaded, marker components are inserted for each bone.
+//! For example, the entity of the hips bone will have [`Hips`] inserted.
+//! Additionally, a component that holds the entity will be inserted into the VRM(A) entity.
+//!
+//! The setup of these is done after all bones have been spawned, so there may be a slight delay.
+
 mod bones;
 
 use crate::prelude::*;

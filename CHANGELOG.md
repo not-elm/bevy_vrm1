@@ -7,6 +7,8 @@
     - Currently only supports `OutlineWidthMode::WorldCoordinates` and `OutlineWidthMode::None`, and if `screenCoordinates` is passed, the outline will not be rendered.
 - Fixed the rendering order of the outline to match the spec.
   - refer to the [here](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md#rendering) for more details.
+- Removed `reflect` feature flag, and `serde` has been added instead.
+  - `Reflect` is now applied to most structs by default.
 
 ### Bug Fixes
 

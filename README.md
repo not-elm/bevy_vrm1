@@ -65,15 +65,15 @@ You can play animations using VRMA.
 
 ### Features
 
-| Feature | Description                   | default |
-|---------|-------------------------------|---------|
-| reflect | derive reflect for components | no      |
+| Feature | Description                                     | default |
+|---------|-------------------------------------------------|---------|
+| serde   | derive `Serialize` and `Deserialize` for components | no      |
 
 ## Versions
 
 | bevy_vrm1 | bevy |
 |-----------|------|
-| 0.1.0     | 0.16 |
+| 0.1.0 ~   | 0.16 |
 
 ## Credits
 

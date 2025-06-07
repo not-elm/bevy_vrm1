@@ -7,10 +7,7 @@ pub mod vrm;
 pub mod vrma;
 
 pub mod prelude {
-    pub use crate::{
-        vrm::*,
-        vrm::{loader::VrmHandle, look_at::LookAt},
-    };
+    pub use crate::vrm::prelude::*;
 }
 
 #[cfg(test)]

@@ -21,6 +21,16 @@ use mtoon::MtoonMaterialPlugin;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub mod prelude {
+    pub use crate::vrm::{
+        gltf::prelude::*,
+        humanoid_bone::*,
+        loader::{VrmAsset, VrmHandle},
+        look_at::{LookAt, LookAtPlugin},
+        mtoon::prelude::*,
+    };
+}
+
 new_type!(
     /// The bone name obtained from `VRMC_vrm::humanoid`.
     name: VrmBone,

@@ -1,5 +1,4 @@
-use crate::vrm::mtoon::outline::MToonOutline;
-use crate::vrm::mtoon::{MToonMaterial, RimLighting, Shade, UVAnimation, VrmcMaterialRegistry};
+use crate::prelude::*;
 use bevy::app::{App, Plugin};
 use bevy::asset::Assets;
 use bevy::prelude::*;
@@ -62,13 +61,20 @@ fn turn_to_mtoon_material(
                         .rim_multiply_texture
                         .and_then(|tex| registry.images.get(tex.index))
                         .cloned(),
+                    outline_width_multiply_texture: extension
+                        .outline_width_multiply_texture
+                        .and_then(|tex| registry.images.get(tex.index))
+                        .cloned(),
                     shade: Shade::from(extension),
+                    outline: MToonOutline::from(extension),
                     rim_lighting: RimLighting::from(extension),
                     uv_animation: UVAnimation::from(extension),
                     gi_equalization_factor: extension.gi_equalization_factor,
                     double_sided: base.double_sided,
                     alpha_mode: base.alpha_mode,
-                    depth_bias: base.depth_bias + extension.render_queue_offset_number,
+                    depth_bias: base.depth_bias,
+                    render_queue_offset: extension.render_queue_offset_number,
+                    transparent_with_z_write: extension.transparent_with_z_write,
                     opaque_renderer_method: base.opaque_render_method,
                     base_color: base.base_color,
                     cull_mode: base.cull_mode,
@@ -77,8 +83,5 @@ fn turn_to_mtoon_material(
                     uv_transform: base.uv_transform,
                 }),
             ));
-        if extension.outline_width_mode != "none" {
-            cmd.insert(MToonOutline::from(extension));
-        }
     });
 }

@@ -27,6 +27,8 @@ pub struct VrmcMaterialsExtensitions {
     pub outline_lighting_mix_factor: f32,
     #[serde(rename = "outlineWidthFactor")]
     pub outline_width_factor: Option<f32>,
+    #[serde(rename = "outlineWidthMultiplyTexture")]
+    pub outline_width_multiply_texture: Option<OutlineWidthMultiplyTexture>,
     #[serde(rename = "outlineWidthMode")]
     pub outline_width_mode: String,
     #[serde(rename = "parametricRimColorFactor")]
@@ -91,6 +93,11 @@ pub struct MatcapTexture {
 
 #[derive(Serialize, Deserialize, Reflect, Debug, Clone, Copy)]
 pub struct RimMultiplyTexture {
+    pub index: usize,
+}
+
+#[derive(Serialize, Deserialize, Reflect, Debug, Clone, Copy)]
+pub struct OutlineWidthMultiplyTexture {
     pub index: usize,
 }
 

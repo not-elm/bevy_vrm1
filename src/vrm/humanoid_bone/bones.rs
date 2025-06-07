@@ -1,4 +1,4 @@
-use crate::macros::{marker_component, entity_component};
+use crate::macros::{entity_component, marker_component};
 use bevy::prelude::*;
 
 macro_rules! bone_marker_component {

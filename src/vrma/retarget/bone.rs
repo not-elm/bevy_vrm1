@@ -1,11 +1,11 @@
 //! This module retargets VRMA bones to the parent VRM.
 
 use crate::macros::marker_component;
+use crate::prelude::*;
 use crate::system_param::child_searcher::ChildSearcher;
-use crate::vrm::humanoid_bone::{ HumanoidBoneRegistry, HumanoidBonesAttached};
+use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, HumanoidBonesAttached};
 use crate::vrma::retarget::{CurrentRetargeting, RetargetBindingSystemSet};
 use crate::vrma::{RetargetSource, RetargetTo};
-use crate::prelude::*;
 use bevy::prelude::*;
 
 pub(super) struct VrmaRetargetingBonePlugin;
@@ -148,12 +148,12 @@ fn calc_hips_position(
 
 #[cfg(test)]
 mod tests {
+    use crate::prelude::*;
     use crate::tests::{test_app, TestResult};
     use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, HumanoidBonesAttached};
     use crate::vrma::retarget::bone::{
         calc_delta, calc_scaling, retarget_bones_to_vrm, RetargetedHumanBones,
     };
-    use crate::prelude::*;
     use crate::vrma::RetargetTo;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::math::Vec3;

@@ -28,11 +28,7 @@ pub mod prelude {
         loader::{VrmAsset, VrmHandle},
         look_at::LookAt,
         mtoon::prelude::*,
-        Vrm,
-        VrmPath,
-        BoneRestTransform,
-        BoneRestGlobalTransform,
-        VrmPlugin,
+        BoneRestGlobalTransform, BoneRestTransform, Vrm, VrmPath, VrmPlugin,
     };
 }
 
@@ -76,7 +72,6 @@ pub struct BoneRestTransform(pub Transform);
 #[cfg_attr(feature = "reflect", derive(Reflect, Serialize, Deserialize))]
 #[cfg_attr(feature = "reflect", reflect(Component, Serialize, Deserialize))]
 pub struct BoneRestGlobalTransform(pub GlobalTransform);
-
 
 pub struct VrmPlugin;
 

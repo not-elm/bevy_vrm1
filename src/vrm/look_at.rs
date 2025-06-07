@@ -65,7 +65,13 @@ impl Plugin for LookAtPlugin {
 
 fn track_looking_target(
     par_commands: ParallelCommands,
-    vrms: Query<(&LookAt, &LookAtProperties, &HeadBoneEntity, &LeftEyeBoneEntity, &RightEyeBoneEntity)>,
+    vrms: Query<(
+        &LookAt,
+        &LookAtProperties,
+        &HeadBoneEntity,
+        &LeftEyeBoneEntity,
+        &RightEyeBoneEntity,
+    )>,
     cameras: Query<(Entity, &Camera)>,
     transforms: Query<&Transform>,
     global_transforms: Query<&GlobalTransform>,

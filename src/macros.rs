@@ -109,5 +109,5 @@ macro_rules! entity_component {
         };
     }
 
-pub(crate) use marker_component;
 pub(crate) use entity_component;
+pub(crate) use marker_component;

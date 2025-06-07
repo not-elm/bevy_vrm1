@@ -1,18 +1,16 @@
 mod bones;
 
+use crate::prelude::*;
 use crate::system_param::child_searcher::ChildSearcher;
 use crate::vrm::gltf::extensions::VrmNode;
-use crate::vrm::{
-    BoneRestGlobalTransform, BoneRestTransform, VrmBone,
-};
+use crate::vrm::humanoid_bone::bones::BonesPlugin;
+use crate::vrm::{BoneRestGlobalTransform, BoneRestTransform, VrmBone};
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Assets, Handle};
 use bevy::gltf::GltfNode;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use crate::vrm::humanoid_bone::bones::BonesPlugin;
-use crate::prelude::*;
 
 pub mod prelude {
     pub use crate::vrm::humanoid_bone::bones::*;
@@ -65,7 +63,7 @@ macro_rules! insert_bone {
         $bone_name: expr,
         $($bone: ident),+$(,)?
     ) => {
-       
+
         match $bone_name.0.to_uppercase(){
             $(
                 x if x == stringify!($bone).to_uppercase() => {

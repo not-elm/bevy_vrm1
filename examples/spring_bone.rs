@@ -24,7 +24,7 @@ fn spawn_directional_light(mut commands: Commands) {
 }
 
 fn spawn_camera(mut commands: Commands) {
-    commands.spawn((Camera3d::default(), Transform::from_xyz(0.0, 0.5, 3.5)));
+    commands.spawn((Camera3d::default(), Transform::from_xyz(0.0, 0.5, 3.0)));
 }
 
 fn spawn_vrm(

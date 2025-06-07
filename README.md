@@ -3,8 +3,6 @@
 [![Crates.io](https://img.shields.io/crates/v/bevy_vrm1.svg)](https://crates.io/crates/bevy_vrm1)
 [![Docs](https://docs.rs/bevy_vrm1/badge.svg)](https://docs.rs/bevy_vrm1/latest/bevy_vrm1/)
 
-![simple](./docs/simple.jpg)
-
 > [!CAUTION]
 > This crate is in an early stage of development and may undergo breaking changes.
 

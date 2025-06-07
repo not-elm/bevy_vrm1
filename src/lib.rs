@@ -3,12 +3,14 @@
 mod error;
 mod macros;
 pub mod system_param;
+mod system_set;
 pub mod vrm;
 pub mod vrma;
 
 pub mod prelude {
     pub use crate::{
-        error::AppResult, system_param::prelude::*, vrm::prelude::*, vrma::prelude::*,
+        error::AppResult, system_param::prelude::*, system_set::VrmSystemSets, vrm::prelude::*,
+        vrma::prelude::*,
     };
 }
 

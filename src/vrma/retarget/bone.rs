@@ -3,8 +3,9 @@
 use crate::macros::marker_component;
 use crate::prelude::*;
 use crate::system_param::child_searcher::ChildSearcher;
+use crate::system_set::VrmSystemSets;
 use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, HumanoidBonesAttached};
-use crate::vrma::retarget::{CurrentRetargeting, RetargetBindingSystemSet};
+use crate::vrma::retarget::CurrentRetargeting;
 use crate::vrma::{RetargetSource, RetargetTo};
 use bevy::prelude::*;
 
@@ -19,7 +20,7 @@ impl Plugin for VrmaRetargetingBonePlugin {
             .register_type::<RetargetBoneTo>()
             // For some reason, it might not retarget unless the system runs on `PreUpdate`.
             .add_systems(PreUpdate, retarget_bones_to_vrm)
-            .add_systems(Update, bind_bone_rotations.in_set(RetargetBindingSystemSet));
+            .add_systems(Update, bind_bone_rotations.in_set(VrmSystemSets::Retarget));
     }
 }
 

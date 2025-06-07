@@ -9,7 +9,6 @@ use crate::vrm::spring_bone::{
 };
 use bevy::app::{App, Update};
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 
 pub struct SpringBoneSetupPlugin;
 

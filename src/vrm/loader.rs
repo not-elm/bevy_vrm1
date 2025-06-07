@@ -32,6 +32,29 @@ impl Plugin for VrmLoaderPlugin {
     }
 }
 
+/// A handle to load a VRM.
+/// This component is removed after the VRM is loaded.
+///
+/// This handle is used to load a VRM, and after it is loaded, the following components are automatically inserted:
+///
+/// - [`Vrm`](crate::prelude::Vrm)
+/// - [`VrmPath`](crate::prelude::VrmPath)
+/// - [`BoneRestTransform`](crate::prelude::BoneRestTransform)
+/// - [`BoneRestGlobalTransform`](crate::prelude::BoneRestGlobalTransform)
+/// - [`SceneRoot`](bevy::scene::SceneRoot)
+/// - Components hold the entity of each bone, refer to [here](crate::vrm::humanoid_bone) for more details.
+///
+/// ```no_run
+/// use bevy::prelude::*;
+/// use bevy_vrm1::prelude::*;
+///
+/// fn spawn_vrm(
+///     mut commands: Commands,
+///    asset_server: Res<AssetServer>,
+/// ){
+///     commands.spawn(VrmHandle(asset_server.load("<vrm>.vrm")));
+/// }
+/// ```
 #[derive(Debug, Component)]
 pub struct VrmHandle(pub Handle<VrmAsset>);
 

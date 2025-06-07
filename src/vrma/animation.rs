@@ -8,7 +8,10 @@ use bevy::asset::Handle;
 use bevy::prelude::*;
 
 pub mod prelude {
-    pub use crate::vrma::animation::play::{PlayVrma, StopVrma};
+    pub use crate::vrma::animation::{
+        play::{PlayVrma, StopVrma},
+        VrmaAnimationPlayers,
+    };
 }
 
 pub struct VrmaAnimationPlayersPlugin;
@@ -30,7 +33,7 @@ impl Plugin for VrmaAnimationPlayersPlugin {
 #[reflect(Component)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
-pub(crate) struct VrmaAnimationPlayers(pub Vec<Entity>);
+pub struct VrmaAnimationPlayers(pub Vec<Entity>);
 
 #[derive(Component, Default, Reflect)]
 #[reflect(Component)]
@@ -41,7 +44,7 @@ pub(crate) struct VrmAnimationGraph {
 
 impl VrmAnimationGraph {
     pub fn new(
-        clip: impl IntoIterator<Item = Handle<AnimationClip>>,
+        clip: impl IntoIterator<Item=Handle<AnimationClip>>,
         animation_graphs: &mut Assets<AnimationGraph>,
     ) -> Self {
         let (graph, nodes) = AnimationGraph::from_clips(clip);

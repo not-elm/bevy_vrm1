@@ -1,3 +1,10 @@
+## Unreleased
+
+### Bug Fixes
+
+- Fixed SpringBone colliders.
+- Changed the spring bone calculation to use the center space if a center node is set.
+
 ## v0.2.1
 
 [Relsease Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.2.1)

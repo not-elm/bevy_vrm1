@@ -132,7 +132,7 @@ fn calc_animated_uv(uv: vec2<f32>) -> vec2<f32>{
 
 fn calc_uv_time(uv: vec2<f32>) -> f32{
     if((material.flags & UV_ANIMATION_MASK_TEXTURE) != 0u) {
-        let mask = textureSample(uv_animation_mask_texture, uv_animation_mask_sampler, uv).b;
+        let mask = textureSampleBias(uv_animation_mask_texture, uv_animation_mask_sampler, uv, view.mip_bias).b;
         return mask * globals.time;
     }else{
         return globals.time;

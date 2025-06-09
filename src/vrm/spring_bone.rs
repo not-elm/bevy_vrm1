@@ -2,6 +2,7 @@ pub mod registry;
 mod setup;
 mod update;
 
+use crate::prelude::ColliderShape;
 use crate::vrm::spring_bone::registry::SpringBoneRegistryPlugin;
 use crate::vrm::spring_bone::setup::SpringBoneSetupPlugin;
 use crate::vrm::spring_bone::update::SpringBoneUpdatePlugin;
@@ -25,7 +26,7 @@ pub(crate) struct SpringJointState {
     initial_local_rotation: Quat,
 }
 
-#[derive(Component, Debug, Clone, Eq, PartialEq, Default, Reflect)]
+#[derive(Component, Debug, Clone, PartialEq, Default, Reflect)]
 #[reflect(Component, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
@@ -47,11 +48,11 @@ pub(crate) struct SpringRoot {
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub(crate) struct SpringJoints(pub Vec<Entity>);
 
-#[derive(Eq, PartialEq, Debug, Clone, Default, Deref, Reflect)]
+#[derive(PartialEq, Debug, Clone, Default, Deref, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
-pub(crate) struct SpringColliders(pub Vec<Entity>);
+pub(crate) struct SpringColliders(pub Vec<(Entity, ColliderShape)>);
 
 #[derive(Eq, PartialEq, Debug, Clone, Default, Deref, Reflect)]
 #[reflect(Default)]

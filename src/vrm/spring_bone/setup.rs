@@ -142,8 +142,9 @@ fn attach_spring_roots(
                     spring
                         .colliders
                         .iter()
-                        .filter_map(|collider| {
-                            child_searcher.find_from_name(entity, collider.as_str())
+                        .filter_map(|(collider, shape)| {
+                            let name = child_searcher.find_from_name(entity, collider.as_str())?;
+                            Some((name, *shape))
                         })
                         .collect(),
                 ),
@@ -181,9 +182,14 @@ fn init_spring_joint_states(
             let Ok(tail_gtf) = global_transforms.get(joint_entity) else {
                 continue;
             };
+            let tail_pos = root
+                .center_node
+                .and_then(|center| global_transforms.get(center).ok())
+                .map(|center_gtf| tail_gtf.reparented_to(center_gtf).translation)
+                .unwrap_or(tail_gtf.translation());
             let state = SpringJointState {
-                prev_tail: tail_gtf.translation(),
-                current_tail: tail_gtf.translation(),
+                prev_tail: tail_pos,
+                current_tail: tail_pos,
                 bone_axis: tail_tf.translation.normalize(),
                 bone_length: tail_tf.translation.length(),
                 initial_local_matrix: head_tf.compute_matrix(),

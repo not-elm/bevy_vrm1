@@ -89,7 +89,7 @@ impl SpringJointPropsRegistry {
 pub(crate) struct SpringNode {
     pub center: Option<Name>,
     pub joints: Vec<Name>,
-    pub colliders: Vec<Name>,
+    pub colliders: Vec<(Name, ColliderShape)>,
 }
 
 #[derive(Component, Deref, Default, Reflect)]
@@ -114,7 +114,7 @@ impl SpringNodeRegistry {
                         .iter()
                         .filter_map(|joint| get_node_name(joint.node, node_assets, nodes))
                         .collect(),
-                    colliders: collider_names(spring_bone, spring, node_assets, nodes),
+                    colliders: obtain_colliders(spring_bone, spring, node_assets, nodes),
                     center: spring
                         .center
                         .and_then(|index| get_node_name(index, node_assets, nodes)),
@@ -124,19 +124,22 @@ impl SpringNodeRegistry {
     }
 }
 
-fn collider_names(
+fn obtain_colliders(
     spring_bone: &VRMCSpringBone,
     spring: &Spring,
     node_assets: &Assets<GltfNode>,
     nodes: &[Handle<GltfNode>],
-) -> Vec<Name> {
+) -> Vec<(Name, ColliderShape)> {
     let Some(collider_groups) = spring.collider_groups.as_ref() else {
         return vec![];
     };
     spring_bone
         .spring_colliders(collider_groups)
         .iter()
-        .flat_map(|collider| get_node_name(collider.node, node_assets, nodes))
+        .flat_map(|collider| {
+            let name = get_node_name(collider.node, node_assets, nodes)?;
+            Some((name, collider.shape))
+        })
         .collect()
 }
 

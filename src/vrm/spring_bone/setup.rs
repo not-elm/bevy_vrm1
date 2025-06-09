@@ -184,7 +184,7 @@ fn init_spring_joint_states(
             };
             let tail_pos = root
                 .center_node
-                .and_then(|center| { global_transforms.get(center).ok() })
+                .and_then(|center| global_transforms.get(center).ok())
                 .map(|center_gtf| tail_gtf.reparented_to(center_gtf).translation)
                 .unwrap_or(tail_gtf.translation());
             let state = SpringJointState {
@@ -258,7 +258,7 @@ mod tests {
             (
                 head,
                 &SpringRoot {
-                    joints: SpringJoints(vec![head, ]),
+                    joints: SpringJoints(vec![head,]),
                     ..default()
                 }
             )
@@ -304,7 +304,7 @@ mod tests {
                 head,
                 &SpringRoot {
                     center_node: SpringCenterNode(Some(center)),
-                    joints: SpringJoints(vec![head, ]),
+                    joints: SpringJoints(vec![head,]),
                     ..default()
                 }
             )

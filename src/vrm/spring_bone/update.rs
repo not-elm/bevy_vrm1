@@ -28,6 +28,11 @@ fn update_spring_bones(
 ) {
     let delta_time = time.delta_secs();
     for spring_root in spring_roots.iter() {
+        let center_gtf = spring_root
+            .center_node
+            .and_then(|center| transforms.get(center).ok())
+            .map(|(_, gtf)| gtf)
+            .copied();
         for joint in spring_root.joints.iter().copied() {
             let Ok((child_of, mut state, props)) = joints.get_mut(joint) else {
                 continue;
@@ -42,7 +47,9 @@ fn update_spring_bones(
                 continue;
             };
 
-            let inertia = (state.current_tail - state.prev_tail) * (1. - props.drag_force);
+            let current_tail = center_local_to_global(state.current_tail, &center_gtf);
+            let prev_tail = center_local_to_global(state.prev_tail, &center_gtf);
+            let inertia = (current_tail - prev_tail) * (1. - props.drag_force);
             let stiffness = delta_time
                 * (parent_global_rotation
                 * state.initial_local_rotation
@@ -50,7 +57,7 @@ fn update_spring_bones(
                 * props.stiffness);
             let external = delta_time * props.gravity_dir * props.gravity_power;
 
-            let next_tail = state.current_tail + inertia + stiffness + external;
+            let next_tail = current_tail + inertia + stiffness + external;
             let mut next_tail =
                 head_global_pos + (next_tail - head_global_pos).normalize() * state.bone_length;
 
@@ -64,7 +71,7 @@ fn update_spring_bones(
             );
 
             state.prev_tail = state.current_tail;
-            state.current_tail = next_tail;
+            state.current_tail = global_to_center_local(next_tail, &center_gtf);
 
             let to = (parent_gtf.compute_matrix() * state.initial_local_matrix)
                 .inverse()
@@ -79,6 +86,28 @@ fn update_spring_bones(
                 state.initial_local_rotation * Quat::from_rotation_arc(state.bone_axis, to);
             *gtf = parent_gtf.mul_transform(*tf);
         }
+    }
+}
+
+fn center_local_to_global(
+    tail_pos: Vec3,
+    center_gtf: &Option<GlobalTransform>,
+) -> Vec3 {
+    if let Some(gtf) = center_gtf.as_ref() {
+        gtf.transform_point(tail_pos)
+    } else {
+        tail_pos
+    }
+}
+
+fn global_to_center_local(
+    tail_pos: Vec3,
+    center_gtf: &Option<GlobalTransform>,
+) -> Vec3 {
+    if let Some(gtf) = center_gtf.as_ref() {
+        gtf.compute_matrix().inverse().transform_point3(tail_pos)
+    } else {
+        tail_pos
     }
 }
 

@@ -24,7 +24,6 @@ fn update_spring_bones(
     mut transforms: Query<(&mut Transform, &mut GlobalTransform)>,
     mut joints: Query<(&ChildOf, &mut SpringJointState, &SpringJointProps)>,
     spring_roots: Query<&SpringRoot>,
-    colliders: Query<&ColliderShape>,
     time: Res<Time>,
 ) {
     let delta_time = time.delta_secs();
@@ -46,23 +45,22 @@ fn update_spring_bones(
             let inertia = (state.current_tail - state.prev_tail) * (1. - props.drag_force);
             let stiffness = delta_time
                 * (parent_global_rotation
-                    * state.initial_local_rotation
-                    * state.bone_axis
-                    * props.stiffness);
+                * state.initial_local_rotation
+                * state.bone_axis
+                * props.stiffness);
             let external = delta_time * props.gravity_dir * props.gravity_power;
 
             let next_tail = state.current_tail + inertia + stiffness + external;
             let mut next_tail =
                 head_global_pos + (next_tail - head_global_pos).normalize() * state.bone_length;
 
-            collision(
+            apply_collision(
                 &mut next_tail,
                 spring_root.colliders.iter().copied(),
                 props.hit_radius,
                 head_global_pos,
                 state.bone_length,
                 &transforms,
-                &colliders,
             );
 
             state.prev_tail = state.current_tail;
@@ -84,23 +82,19 @@ fn update_spring_bones(
     }
 }
 
-fn collision(
+fn apply_collision(
     next_tail: &mut Vec3,
-    collider_entities: impl Iterator<Item = Entity>,
+    collider_entities: impl Iterator<Item=(Entity, ColliderShape)>,
     joint_radius: f32,
     head_global_pos: Vec3,
     bone_length: f32,
     transforms: &Query<(&mut Transform, &mut GlobalTransform)>,
-    colliders: &Query<&ColliderShape>,
 ) {
-    for collider in collider_entities {
-        let Ok(collider_shape) = colliders.get(collider) else {
-            continue;
-        };
+    for (collider, collider_shape) in collider_entities {
         let Ok((_, collider_gtf)) = transforms.get(collider) else {
             continue;
         };
-        collider_shape.calc_collision(
+        collider_shape.apply_collision(
             next_tail,
             collider_gtf,
             head_global_pos,

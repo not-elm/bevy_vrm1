@@ -142,8 +142,9 @@ fn attach_spring_roots(
                     spring
                         .colliders
                         .iter()
-                        .filter_map(|collider| {
-                            child_searcher.find_from_name(entity, collider.as_str())
+                        .filter_map(|(collider, shape)| {
+                            let name = child_searcher.find_from_name(entity, collider.as_str())?;
+                            Some((name, *shape))
                         })
                         .collect(),
                 ),
@@ -252,7 +253,7 @@ mod tests {
             (
                 head,
                 &SpringRoot {
-                    joints: SpringJoints(vec![head,]),
+                    joints: SpringJoints(vec![head, ]),
                     ..default()
                 }
             )
@@ -298,7 +299,7 @@ mod tests {
                 head,
                 &SpringRoot {
                     center_node: SpringCenterNode(Some(center)),
-                    joints: SpringJoints(vec![head,]),
+                    joints: SpringJoints(vec![head, ]),
                     ..default()
                 }
             )

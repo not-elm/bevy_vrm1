@@ -1,3 +1,10 @@
+## Unreleased
+
+### Maintenance
+
+- Updated the Windows cursor fallback dependency to `windows` 0.62
+- Used fixed-size triangle chunks in first-person mesh classification to satisfy current Clippy
+
 ## v0.9.2
 
 [Release Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.9.2)

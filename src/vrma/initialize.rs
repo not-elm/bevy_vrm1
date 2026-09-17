@@ -7,8 +7,9 @@ use crate::vrma::animation::animation_graph::RequestUpdateAnimationGraph;
 use crate::vrma::animation::expressions::VrmaExpressionNames;
 use crate::vrma::gltf::extensions::VrmaExtensions;
 use crate::vrma::loader::VrmaAsset;
-use crate::vrma::{LoadedVrma, VrmAnimationClipHandle, Vrma, VrmaDuration, VrmaHandle, VrmaPath};
+use crate::vrma::{VrmAnimationClipHandle, Vrma, VrmaDuration, VrmaHandle, VrmaPath};
 use bevy::gltf::GltfNode;
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 use std::time::Duration;
@@ -114,19 +115,87 @@ fn obtain_vrma_duration(
 
 fn trigger_loaded(
     mut commands: Commands,
-    vrmas: Query<(Entity, &ChildOf), (Added<Initialized>, With<Vrma>)>,
+    vrmas: Query<(Has<Initialized>, Has<VrmaHandle>), Or<(With<Vrma>, With<VrmaHandle>)>>,
+    newly_initialized: Query<(Entity, &ChildOf), (Added<Initialized>, With<Vrma>)>,
+    vrm_children: Query<&Children>,
+    initialized_models: Query<(), With<Initialized>>,
 ) {
-    for (vrma_entity, child_of) in vrmas.iter() {
+    let mut requested = HashSet::new();
+    for (_, child_of) in newly_initialized.iter() {
         let vrm_entity = child_of.parent();
-        // Trigger animation graph setup first (deferred from request_initialize
-        // to ensure VrmBone components are fully applied on the parent VRM's bones)
-        commands.trigger(RequestUpdateAnimationGraph {
-            vrma: vrma_entity,
-            vrm: vrm_entity,
+        let all_vrmas_initialized = vrm_children.get(vrm_entity).ok().is_some_and(|children| {
+            children.iter().all(|child| match vrmas.get(child) {
+                Ok((initialized, pending_load)) => initialized && !pending_load,
+                Err(_) => true,
+            })
         });
-        commands.trigger(LoadedVrma {
-            vrm: vrm_entity,
-            vrma: vrma_entity,
-        });
+        if all_vrmas_initialized
+            && initialized_models.get(vrm_entity).is_ok()
+            && requested.insert(vrm_entity)
+        {
+            // Build one stable graph after every VRMA child is initialized.
+            // Rebuilding once per child changes positional node indices and can
+            // leave already-started players pointing at another clip.
+            commands.trigger(RequestUpdateAnimationGraph { vrm: vrm_entity });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct GraphRequests(Vec<Entity>);
+
+    #[test]
+    fn waits_for_unloaded_handles_and_requests_one_graph_per_model() {
+        let mut app = App::new();
+        app.init_resource::<GraphRequests>()
+            .add_systems(Update, trigger_loaded)
+            .add_observer(
+                |event: On<RequestUpdateAnimationGraph>, mut requests: ResMut<GraphRequests>| {
+                    requests.0.push(event.vrm);
+                },
+            );
+        let vrm = app.world_mut().spawn(Initialized).id();
+        app.world_mut().spawn((Vrma, Initialized, ChildOf(vrm)));
+        let pending = app
+            .world_mut()
+            .spawn((VrmaHandle(Handle::default()), ChildOf(vrm)))
+            .id();
+        app.update();
+        assert!(app.world().resource::<GraphRequests>().0.is_empty());
+
+        app.world_mut()
+            .entity_mut(pending)
+            .remove::<VrmaHandle>()
+            .insert((Vrma, Initialized));
+        app.update();
+        assert_eq!(app.world().resource::<GraphRequests>().0, vec![vrm]);
+        app.update();
+        assert_eq!(app.world().resource::<GraphRequests>().0, vec![vrm]);
+    }
+
+    #[test]
+    fn batches_simultaneously_initialized_clips_per_model() {
+        let mut app = App::new();
+        app.init_resource::<GraphRequests>()
+            .add_systems(Update, trigger_loaded)
+            .add_observer(
+                |event: On<RequestUpdateAnimationGraph>, mut requests: ResMut<GraphRequests>| {
+                    requests.0.push(event.vrm);
+                },
+            );
+        for _ in 0..2 {
+            let vrm = app.world_mut().spawn(Initialized).id();
+            for _ in 0..3 {
+                app.world_mut().spawn((Vrma, Initialized, ChildOf(vrm)));
+            }
+        }
+        app.update();
+        let requests = &app.world().resource::<GraphRequests>().0;
+        assert_eq!(requests.len(), 2);
+        assert_ne!(requests[0], requests[1]);
     }
 }

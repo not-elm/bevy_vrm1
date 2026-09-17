@@ -95,6 +95,9 @@ pub struct VrmaDuration(pub Duration);
 
 /// An event that is emitted when VRMA is loaded.
 ///
+/// Emitted once the model's pending VRMA children have initialized and the
+/// animation graph has assigned this clip a node index, so observers can play it.
+///
 /// This event is emitted as a trigger.
 /// The target of the trigger is the VRMA entity.
 #[derive(Debug, EntityEvent, Copy, Clone, Reflect)]

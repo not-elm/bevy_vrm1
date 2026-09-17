@@ -10,7 +10,9 @@ use crate::vrm::node_constraint::registry::NodeConstraintRegistry;
 use crate::vrm::spring_bone::registry::{
     SpringColliderRegistry, SpringJointPropsRegistry, SpringNodeRegistry,
 };
-use crate::vrm::{Initialized, RestGlobalTransform, RestTransform, Vrm, VrmPath};
+use crate::vrm::{
+    Initialized, RestGlobalTransform, RestTransform, RestWorldTransform, Vrm, VrmPath,
+};
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 
@@ -75,6 +77,7 @@ fn remove_vrm_components(
         // Rest transforms
         .try_remove::<RestTransform>()
         .try_remove::<RestGlobalTransform>()
+        .try_remove::<RestWorldTransform>()
         // Registries (pub)
         .try_remove::<VrmcMaterialRegistry>()
         .try_remove::<NodeConstraintRegistry>()
@@ -204,7 +207,12 @@ mod tests {
 
         let vrm_entity = app
             .world_mut()
-            .spawn((Vrm, Initialized, ExpressionEntityMap(HashMap::default())))
+            .spawn((
+                Vrm,
+                Initialized,
+                ExpressionEntityMap(HashMap::default()),
+                RestWorldTransform::default(),
+            ))
             .id();
 
         app.world_mut()
@@ -217,6 +225,7 @@ mod tests {
         assert!(!world.entity(vrm_entity).contains::<Vrm>());
         assert!(!world.entity(vrm_entity).contains::<Initialized>());
         assert!(!world.entity(vrm_entity).contains::<ExpressionEntityMap>());
+        assert!(!world.entity(vrm_entity).contains::<RestWorldTransform>());
         // Entity itself survives
         assert!(world.get_entity(vrm_entity).is_ok());
     }

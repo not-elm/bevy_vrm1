@@ -339,6 +339,7 @@ fn apply_bake_clips(world: &mut World) {
                             .get::<RetargetRotationTable>(bone)
                             .and_then(|table| table.0.get(&vrma_entity).cloned());
                         if transformation.is_none() {
+                            #[cfg(feature = "log")]
                             warn!(
                                 "[VRMA bake] dropped rotation curve for {target_id:?} \
                                  (vrma {vrma_entity:?}): no RetargetRotationTable entry"
@@ -356,6 +357,7 @@ fn apply_bake_clips(world: &mut World) {
                             .get::<RetargetTranslationTable>(bone)
                             .and_then(|table| table.0.get(&vrma_entity).cloned());
                         if transformation.is_none() {
+                            #[cfg(feature = "log")]
                             warn!(
                                 "[VRMA bake] dropped translation curve for {target_id:?} \
                                  (vrma {vrma_entity:?}): no RetargetTranslationTable entry"

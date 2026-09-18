@@ -1,26 +1,22 @@
-use crate::prelude::{RestGlobalTransform, RestTransform};
+use crate::prelude::RestTransform;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 #[derive(Component, Default, Clone, Debug, Deref, DerefMut)]
-pub(crate) struct RetargetTranslationTable(pub HashMap<AnimationNodeIndex, Transformation>);
+pub(crate) struct RetargetTranslationTable(pub HashMap<Entity, Transformation>);
 
 pub(crate) fn compute_hips_transformation(
-    node_index: AnimationNodeIndex,
     src_rest: &RestTransform,
-    src_rest_g: &RestGlobalTransform,
+    src_rest_g: Vec3,
     dist_rest: &RestTransform,
-    dist_rest_g: &RestGlobalTransform,
-) -> (AnimationNodeIndex, Transformation) {
-    (
-        node_index,
-        Transformation {
-            src_rest_local: src_rest.translation,
-            src_rest_g: src_rest_g.translation(),
-            dist_rest_local: dist_rest.translation,
-            dist_rest_g: dist_rest_g.translation(),
-        },
-    )
+    dist_rest_g: Vec3,
+) -> Transformation {
+    Transformation {
+        src_rest_local: src_rest.translation,
+        src_rest_g,
+        dist_rest_local: dist_rest.translation,
+        dist_rest_g,
+    }
 }
 
 #[derive(Debug, Copy, Clone, Reflect)]
@@ -49,8 +45,9 @@ impl Transformation {
 /// Retargets a hips bone translation from source to target model space.
 ///
 /// Uses **local** rest positions for delta computation and result placement
-/// (matching `Transform::translation` coordinate space), and **global** rest
-/// positions only for the Y-based height scaling ratio.
+/// (matching `Transform::translation` coordinate space), and **global**
+/// rest positions (in the model entity's frame, world prefix stripped) only
+/// for the Y-based height scaling ratio.
 #[inline]
 pub(crate) fn calc_hips_position(
     src_rest_local: Vec3,
@@ -77,8 +74,34 @@ fn calc_scaling(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::prelude::{RestGlobalTransform, RestWorldTransform};
+    use crate::vrma::animation::bone_rotation::strip_world_prefix;
     use crate::vrma::animation::bone_translation::{calc_hips_position, calc_scaling};
     use bevy::math::Vec3;
+
+    #[test]
+    fn hips_height_scaling_ignores_application_placement() {
+        let src_local = RestTransform(Transform::from_xyz(0.0, 0.8, 0.0));
+        let dst_local = RestTransform(Transform::from_xyz(0.0, 1.2, 0.0));
+        // Internal hierarchy offsets make model-space heights different from local heights.
+        let src_model = Transform::from_xyz(0.0, 1.0, 0.0);
+        let dst_model = Transform::from_xyz(0.0, 1.5, 0.0);
+        let src_prefix =
+            RestWorldTransform(GlobalTransform::from(Transform::from_xyz(2.0, 10.0, 3.0)));
+        let dst_prefix =
+            RestWorldTransform(GlobalTransform::from(Transform::from_xyz(-2.0, -4.0, 1.0)));
+        let src_rest = RestGlobalTransform(src_prefix.0.mul_transform(src_model));
+        let dst_rest = RestGlobalTransform(dst_prefix.0.mul_transform(dst_model));
+        let transformation = compute_hips_transformation(
+            &src_local,
+            strip_world_prefix(&src_rest, Some(&src_prefix)).translation,
+            &dst_local,
+            strip_world_prefix(&dst_rest, Some(&dst_prefix)).translation,
+        );
+        let result = transformation.transform(src_local.translation + Vec3::new(0.2, 0.1, -0.4));
+        assert!((result - Vec3::new(0.3, 1.35, -0.6)).length() < 0.0001);
+    }
 
     #[test]
     fn test_scaling() {

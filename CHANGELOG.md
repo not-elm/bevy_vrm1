@@ -1,3 +1,16 @@
+## Unreleased
+
+### Bug Fixes
+
+- Fixed VRMA retargeting baking the model entity's world placement into every clip: retarget transformations are now computed in the imported model's own frame, so a body that rotates or moves between the VRM and VRMA rest snapshots no longer ends up with a constant per-instance limb offset
+- Fixed multi-instance VRMA corruption: the animation graph is now requested once per VRM after all its VRMA children load, every clip is retargeted and baked against its own rig, retarget tables are keyed by the VRMA entity (stable across graph rebuilds), and a rebuilt graph no longer retargets already-baked clips a second time
+- Fixed humanoid rest transforms being snapshotted from the parent entity for every child; leaf bones now record their own rest
+
+### Maintenance
+
+- Updated the Windows cursor fallback dependency to `windows` 0.62
+- Used fixed-size triangle chunks in first-person mesh classification to satisfy current Clippy
+
 ## v0.9.2
 
 [Release Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.9.2)

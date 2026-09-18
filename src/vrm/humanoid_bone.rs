@@ -12,7 +12,7 @@ mod bones;
 use crate::prelude::*;
 use crate::vrm::gltf::extensions::VrmNode;
 use crate::vrm::humanoid_bone::bones::BonesPlugin;
-use crate::vrm::{RestGlobalTransform, RestTransform, VrmBone};
+use crate::vrm::{RestGlobalTransform, RestTransform, RestWorldTransform, VrmBone};
 use crate::vrma::RetargetSource;
 use bevy::animation::{AnimatedBy, AnimationTargetId};
 use bevy::app::{App, Plugin};
@@ -96,6 +96,11 @@ fn apply_insert_rest_transforms(
     transforms: Query<(&Transform, &GlobalTransform)>,
 ) {
     let vrm = trigger.event_target();
+    if let Ok((_, global)) = transforms.get(vrm) {
+        // Capture the application placement together with the bones' rests.
+        // VRM and VRMA may initialize under different world transforms.
+        commands.entity(vrm).insert(RestWorldTransform(*global));
+    }
     insert_rest_transforms_recursive(&mut commands, vrm, &childrens, &transforms);
 }
 
@@ -109,11 +114,11 @@ fn insert_rest_transforms_recursive(
         return;
     };
     for child in children {
-        let Ok((tf, gtf)) = transforms.get(entity) else {
+        let Ok((tf, gtf)) = transforms.get(*child) else {
             continue;
         };
         commands
-            .entity(entity)
+            .entity(*child)
             .insert((RestTransform(*tf), RestGlobalTransform(*gtf)));
         insert_rest_transforms_recursive(commands, *child, childrens, transforms);
     }
@@ -231,6 +236,64 @@ fn apply_initialize_humanoid_bones(
             RightRingDistal,
             RightIndexProximal,
             RightMiddleDistal,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshots_descendants_including_leaf_nodes_and_model_placement() {
+        let mut app = App::new();
+        app.add_observer(apply_insert_rest_transforms);
+        let placement = GlobalTransform::from(
+            Transform::from_xyz(5.0, 3.0, -2.0).with_rotation(Quat::from_rotation_y(0.7)),
+        );
+        let root = app
+            .world_mut()
+            .spawn((Transform::default(), placement))
+            .id();
+        let parent_local = Transform::from_xyz(0.0, 1.0, 0.0);
+        let parent_global = placement.mul_transform(parent_local);
+        let parent = app
+            .world_mut()
+            .spawn((parent_local, parent_global, ChildOf(root)))
+            .id();
+        let leaf_local =
+            Transform::from_xyz(0.2, 0.3, 0.0).with_rotation(Quat::from_rotation_z(0.4));
+        let leaf_global = parent_global.mul_transform(leaf_local);
+        let leaf = app
+            .world_mut()
+            .spawn((leaf_local, leaf_global, ChildOf(parent)))
+            .id();
+
+        app.world_mut()
+            .trigger(RequestInitializeHumanoidBones(root));
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().get::<RestWorldTransform>(root).unwrap().0,
+            placement
+        );
+        for (entity, local, global) in [
+            (parent, parent_local, parent_global),
+            (leaf, leaf_local, leaf_global),
+        ] {
+            assert_eq!(app.world().get::<RestTransform>(entity).unwrap().0, local);
+            assert_eq!(
+                app.world().get::<RestGlobalTransform>(entity).unwrap().0,
+                global
+            );
+        }
+        // A later move must not rewrite the placement captured with the rest pose.
+        app.world_mut()
+            .entity_mut(root)
+            .insert(GlobalTransform::IDENTITY);
+        assert_eq!(
+            app.world().get::<RestWorldTransform>(root).unwrap().0,
+            placement
         );
     }
 }

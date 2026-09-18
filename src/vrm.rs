@@ -33,8 +33,8 @@ use std::path::PathBuf;
 
 pub mod prelude {
     pub use crate::vrm::{
-        Initialized, RestGlobalTransform, RestTransform, Vrm, VrmBone, VrmExpression, VrmPath,
-        VrmPlugin,
+        Initialized, RestGlobalTransform, RestTransform, RestWorldTransform, Vrm, VrmBone,
+        VrmExpression, VrmPath, VrmPlugin,
         body_tracking::{BodyTracking, SmoothedGaze},
         detach::RequestDetachVrm,
         expressions::{
@@ -50,6 +50,9 @@ pub mod prelude {
         loader::{VrmAsset, VrmHandle},
         look_at::LookAt,
         mtoon::prelude::*,
+        node_constraint::{
+            AimConstraintDestinations, RollConstraintDestinations, RotationConstraintDestinations,
+        },
         spring_bone::{SpringJointProps, SpringJoints, SpringRoot},
     };
 }
@@ -108,6 +111,23 @@ pub struct RestTransform(pub Transform);
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct RestGlobalTransform(pub GlobalTransform);
 
+/// The world transform of the model entity (VRM or VRMA root) at the moment
+/// the rest transforms of its subtree were snapshotted.
+///
+/// The VRMA retarget composes source and destination rest-global
+/// rotations. Those two snapshots happen at different times — the VRM
+/// initializes before its VRMA children — and any world rotation the body
+/// gains in between would conjugate the baked pose (a constant per-instance
+/// limb offset). Stripping this prefix at retarget-table time puts both
+/// rigs into the model entity's own frame and removes that dependency.
+/// [`RestGlobalTransform`] itself stays world-space because gaze and body
+/// tracking consume it as a world-frame rotation.
+#[derive(Debug, Copy, Clone, Component, Deref, Reflect, Default)]
+#[reflect(Component)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
+pub struct RestWorldTransform(pub GlobalTransform);
+
 marker_component!(
     /// A marker component attached to the entity of VRM.
     /// This component is automatically inserted after the [`VrmHandle`](crate::prelude::VrmHandle) is loaded.
@@ -160,6 +180,7 @@ impl Plugin for VrmPlugin {
             .register_type::<VrmPath>()
             .register_type::<RestTransform>()
             .register_type::<RestGlobalTransform>()
+            .register_type::<RestWorldTransform>()
             .register_type::<VrmBone>()
             .register_type::<VrmExpression>()
             .register_type::<Initialized>();

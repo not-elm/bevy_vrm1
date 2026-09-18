@@ -442,7 +442,7 @@ fn classify_auto_mesh(
     };
     let indices: Vec<u32> = indices.iter().map(|i| i as u32).collect();
     let (mut head, mut rest) = (Vec::new(), Vec::new());
-    for tri in indices.chunks_exact(3) {
+    for tri in indices.as_chunks::<3>().0 {
         let target = if tri.iter().any(|&v| is_head_vertex[v as usize]) {
             &mut head
         } else {

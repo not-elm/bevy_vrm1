@@ -86,10 +86,18 @@ fn make_pbr_input(
     return pbr_input;
 }
 
+// Match UniVRM MToon10's alpha blending threshold (EPSILON_FP16).
+const MTOON_ALPHA_EPSILON: f32 = 0.0009765625;
+
 fn lit_color(uv: vec2<f32>) -> vec4<f32> {
     var base_color = material.base_color;
     if((material.flags & BASE_COLOR_TEXTURE) != 0u) {
         base_color *= textureSampleBias(base_color_texture, base_color_sampler, uv, view.mip_bias);
+    }
+    if ((material.flags & ALPHA_MODE_BLEND) != 0u) {
+        if (base_color.a < MTOON_ALPHA_EPSILON) {
+            discard;
+        }
     }
     if((material.flags & ALPHA_MODE_MASK) != 0u || (material.flags & ALPHA_MODE_ALPHA_TO_COVERAGE) != 0u) {
         let raw = base_color.a;

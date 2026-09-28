@@ -34,7 +34,7 @@ fn bind_roll_constraints(
 
                     let src_delta_quat = src_rest.rotation.inverse() * src_tf.rotation;
                     let delta_src_quat_in_parent =
-                        dest_rest_q * src_delta_quat * src_rest_q.inverse();
+                        src_rest_q * src_delta_quat * src_rest_q.inverse();
                     let delta_src_quat_in_dest =
                         dest_rest_q.inverse() * delta_src_quat_in_parent * dest_rest_q;
 

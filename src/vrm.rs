@@ -38,8 +38,9 @@ pub mod prelude {
         body_tracking::{BodyTracking, SmoothedGaze},
         detach::RequestDetachVrm,
         expressions::{
-            BinaryExpression, ClearExpressions, ExpressionEntityMap, ExpressionOverride,
-            ExpressionOverrideSettings, ExpressionOverrideType, ModifyExpressions, SetExpressions,
+            BinaryExpression, ClearExpressions, EffectiveExpressionWeight, ExpressionEntityMap,
+            ExpressionOverride, ExpressionOverrideSettings, ExpressionOverrideType,
+            ModifyExpressions, SetExpressions,
         },
         first_person::{
             FirstPersonCamera, FirstPersonLayers, FirstPersonRegistry, RequestDisableFirstPerson,

@@ -1,4 +1,8 @@
-## Unreleased
+## v0.10.0
+
+[Release Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.10.0)
+
+### Features
 
 - Expose `EffectiveExpressionWeight` after the expression pass for material and UV bindings.
 

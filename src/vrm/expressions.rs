@@ -66,6 +66,7 @@ impl ExpressionOverrideType {
 
 #[derive(Component, Reflect, Debug, Clone)]
 #[reflect(Component)]
+#[require(EffectiveExpressionWeight)]
 pub struct ExpressionOverrideSettings {
     pub override_mouth: ExpressionOverrideType,
     pub override_blink: ExpressionOverrideType,
@@ -94,6 +95,13 @@ pub(crate) struct ExpressionNode {
     pub morph_target_index: usize,
     pub weight: f32,
 }
+
+/// Final binary/override-adjusted weight consumed by morph bindings.
+/// Read after `VrmSystemSets::Expressions` to apply other expression bindings
+/// with exactly the same weight. Updated even for expressions without morphs.
+#[derive(Component, Reflect, Debug, Default, Clone, Copy)]
+#[reflect(Component)]
+pub struct EffectiveExpressionWeight(pub f32);
 
 /// Cached mapping from expression name to expression entity.
 /// Built during VRM initialization. Use this to query available expressions.
@@ -374,6 +382,7 @@ impl Plugin for VrmExpressionPlugin {
             .register_type::<ExpressionEntityMap>()
             .register_type::<ExpressionOverride>()
             .register_type::<ExpressionOverrideSettings>()
+            .register_type::<EffectiveExpressionWeight>()
             .register_type::<ExpressionCategoryTag>()
             .register_type::<BinaryExpression>()
             .add_observer(apply_initialize_expressions)
@@ -454,13 +463,15 @@ fn apply_initialize_expressions(
 
 fn bind_expressions(
     mut morph_query: Query<&mut MorphWeights>,
-    rig_expressions: Query<(
+    mut rig_expressions: Query<(
+        Entity,
         &Transform,
         &RetargetExpressionNodes,
         &ExpressionCategoryTag,
         &ExpressionOverrideSettings,
         Option<&ExpressionOverride>,
         Option<&BinaryExpression>,
+        &mut EffectiveExpressionWeight,
     )>,
 ) {
     // Pass 1: Collect output weights and accumulate override rates.
@@ -470,6 +481,7 @@ fn bind_expressions(
     let mut look_at_rate: f32 = 0.0;
 
     struct ExpressionEntry {
+        entity: Entity,
         output_weight: f32,
         category: ExpressionCategory,
         is_binary: bool,
@@ -479,7 +491,7 @@ fn bind_expressions(
     let mut entries: Vec<ExpressionEntry> = Vec::new();
     let mut mesh_entities: Vec<Entity> = Vec::new();
 
-    for (tf, retarget, category_tag, override_settings, maybe_override, maybe_binary) in
+    for (entity, tf, retarget, category_tag, override_settings, maybe_override, maybe_binary, _) in
         rig_expressions.iter()
     {
         let raw_weight = match maybe_override {
@@ -507,6 +519,7 @@ fn bind_expressions(
         }
 
         entries.push(ExpressionEntry {
+            entity,
             output_weight,
             category: category_tag.0,
             is_binary,
@@ -542,6 +555,9 @@ fn bind_expressions(
         } else {
             entry.output_weight * multiplier
         };
+        if let Ok((_, _, _, _, _, _, _, mut effective)) = rig_expressions.get_mut(entry.entity) {
+            effective.0 = final_weight;
+        }
         for &(entity, index, bind_weight) in &entry.binds {
             if let Ok(mut morph_weights) = morph_query.get_mut(entity) {
                 morph_weights.weights_mut()[index] += final_weight * bind_weight;
@@ -903,16 +919,28 @@ mod tests {
 
         // bind.weight = 0.5, expression weight via transform = 0.8
         // expected: 0.8 * 0.5 = 0.4
-        app.world_mut().spawn((
-            Transform::from_translation(Vec3::new(0.8, 0.0, 0.0)),
-            RetargetExpressionNodes(vec![BindExpressionNode {
-                expression_entity: mesh_entity,
-                index: 0,
-                weight: 0.5,
-            }]),
-            ExpressionCategoryTag(ExpressionCategory::Other),
-            default_override_settings(),
-        ));
+        let expression_entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(0.8, 0.0, 0.0)),
+                RetargetExpressionNodes(vec![BindExpressionNode {
+                    expression_entity: mesh_entity,
+                    index: 0,
+                    weight: 0.5,
+                }]),
+                ExpressionCategoryTag(ExpressionCategory::Other),
+                default_override_settings(),
+            ))
+            .id();
+        let empty_entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(0.8, 0.0, 0.0)),
+                RetargetExpressionNodes(Vec::new()),
+                ExpressionCategoryTag(ExpressionCategory::Other),
+                default_override_settings(),
+            ))
+            .id();
         app.update();
 
         let morph = app.world().get::<MorphWeights>(mesh_entity).unwrap();
@@ -920,6 +948,20 @@ mod tests {
             (morph.weights()[0] - 0.4).abs() < f32::EPSILON,
             "Expected 0.4, got {}",
             morph.weights()[0]
+        );
+        assert_eq!(
+            app.world()
+                .get::<super::EffectiveExpressionWeight>(expression_entity)
+                .unwrap()
+                .0,
+            0.8
+        );
+        assert_eq!(
+            app.world()
+                .get::<super::EffectiveExpressionWeight>(empty_entity)
+                .unwrap()
+                .0,
+            0.8
         );
         Ok(())
     }

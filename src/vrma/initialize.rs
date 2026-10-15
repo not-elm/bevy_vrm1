@@ -1,15 +1,21 @@
-//! This module inserts [`SceneRoot`] and VRMA-related components from the loaded [`VrmaHandle`].
+//! This module turns a loaded [`VrmaHandle`] into a playable source rig: it
+//! instantiates the `.vrma` scene, keeps the pristine clip, and stamps the
+//! source rest pose. It also tells the animation graph to rebuild whenever the
+//! avatar it is parented to finishes an attach — including a rig replacement,
+//! where the graph, the retarget and the playback are restored onto the new
+//! skeleton.
 
 use crate::error::vrm_error;
 use crate::system_param::prelude::*;
 use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
-use crate::vrm::{Initialized, RestGlobalTransform, RestTransform, RestWorldTransform};
+use crate::vrm::{Initialized, RestGlobalTransform, RestTransform, RestWorldTransform, Vrm};
 use crate::vrma::animation::animation_graph::RequestUpdateAnimationGraph;
 use crate::vrma::animation::expressions::VrmaExpressionRegistry;
 use crate::vrma::gltf::extensions::VrmaExtensions;
 use crate::vrma::loader::VrmaAsset;
 use crate::vrma::{
-    RetargetSource, VrmAnimationClipHandle, Vrma, VrmaDuration, VrmaHandle, VrmaPath,
+    RetargetSource, VrmAnimationClipHandle, VrmAnimationSourceClip, Vrma, VrmaDuration, VrmaHandle,
+    VrmaPath, VrmaPlaybackState,
 };
 use bevy::gltf::GltfNode;
 use bevy::platform::collections::HashSet;
@@ -27,8 +33,34 @@ impl Plugin for VrmaInitializePlugin {
         app.add_systems(
             Update,
             (spawn_vrma, request_initialize_vrma, trigger_loaded),
-        );
+        )
+        .add_observer(on_vrm_initialized);
     }
+}
+
+/// Every complete attach of a rig is observed through `Insert<Initialized>` on
+/// the entity carrying [`Vrm`], and asks for the animation graph to be rebuilt.
+///
+/// On a pre-existing VRMA the graph build sees a rig generation its working
+/// clip was not baked for, clones the pristine
+/// [`VrmAnimationSourceClip`](crate::vrma::VrmAnimationSourceClip) again,
+/// retargets it for the new rig and restores the recorded playback. The first
+/// attach of a fresh avatar reaches this too, but its VRMA children are usually
+/// still loading and `trigger_loaded` requests the graph again once they are
+/// ready.
+///
+/// `Initialized` is also stamped on a `.vrma`'s own source-rig entity by
+/// [`request_initialize_vrma`]; the [`Vrm`] filter excludes those.
+fn on_vrm_initialized(
+    trigger: On<Insert, Initialized>,
+    vrms: Query<(), With<Vrm>>,
+    mut commands: Commands,
+) {
+    let vrm = trigger.event_target();
+    if vrms.get(vrm).is_err() {
+        return;
+    }
+    commands.trigger(RequestUpdateAnimationGraph { vrm });
 }
 
 fn spawn_vrma(
@@ -81,19 +113,23 @@ fn spawn_vrma(
                 continue;
             }
         };
-        let Some(animation_clip_handle) = vrma.gltf.animations.first() else {
+        let Some(source_clip_handle) = vrma.gltf.animations.first() else {
             vrm_error!("[VRMA] Not found vrma animations in {name}");
             continue;
         };
-        let Some(animation_clip) = clip_assets.get(animation_clip_handle).cloned() else {
+        let Some(animation_clip) = clip_assets.get(source_clip_handle).cloned() else {
             vrm_error!("[VRMA] Not found animation clip for {name}");
             continue;
         };
-        let animation_clip_handle = clip_assets.add(animation_clip);
+        let working_clip_handle = clip_assets.add(animation_clip);
         commands.entity(handle_entity).insert((
             Vrma,
             Name::new(name),
-            VrmAnimationClipHandle(animation_clip_handle.clone()),
+            // The pristine source stays for the entity's whole life so a rig
+            // replacement can rebuild the working clip from it; the working
+            // clone is what the retarget and bake mutate.
+            VrmAnimationSourceClip(source_clip_handle.clone()),
+            VrmAnimationClipHandle(working_clip_handle),
             WorldAssetRoot(scene_root),
             VrmaDuration(obtain_vrma_duration(&clip_assets, &vrma.gltf.animations)),
             VrmaPath(vrma_path),
@@ -103,6 +139,7 @@ fn spawn_vrma(
                 &node_assets,
                 &vrma.gltf.nodes,
             ),
+            VrmaPlaybackState::default(),
         ));
     }
 }

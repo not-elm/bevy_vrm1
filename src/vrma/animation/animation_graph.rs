@@ -1,8 +1,10 @@
 use crate::prelude::{
-    ChildSearcher, RestGlobalTransform, RestTransform, RestWorldTransform, VrmBone,
+    ChildSearcher, Initialized, RestGlobalTransform, RestTransform, RestWorldTransform, VrmBone,
+    Vrma,
 };
 use crate::vrm::Vrm;
 use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
+use crate::vrm::instance::VrmGeneration;
 use crate::vrma::animation::bake::{bake_rotation_curve, bake_translation_curve};
 use crate::vrma::animation::bone_rotation::{
     RetargetRotationTable, compute_rotation_transformations, strip_world_prefix,
@@ -12,8 +14,11 @@ use crate::vrma::animation::bone_translation::{
 };
 use crate::vrma::animation::expressions::{VrmaExpressionRegistry, retarget_expression_curves};
 use crate::vrma::animation::mask::mask_group_for_bone;
-use crate::vrma::{LoadedVrma, VrmAnimationClipHandle, VrmAnimationNodeIndex};
-use bevy::animation::{AnimationTargetId, animated_field};
+use crate::vrma::{
+    LoadedVrma, VrmAnimationClipHandle, VrmAnimationNodeIndex, VrmAnimationSourceClip, VrmaLoaded,
+    VrmaNeedsRestore, VrmaPlaybackState, VrmaRetargetedFor,
+};
+use bevy::animation::{AnimationClip, AnimationTargetId, animated_field};
 use bevy::app::App;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -21,10 +26,6 @@ use bevy::prelude::*;
 /// Marker: VRMA clip needs baking.
 #[derive(Component)]
 pub(crate) struct NeedsBake;
-
-/// Rebuilding a graph must not transform an already retargeted clip again.
-#[derive(Component)]
-struct ClipRetargetRequested;
 
 #[derive(Event)]
 pub(crate) struct RequestUpdateAnimationGraph {
@@ -47,12 +48,37 @@ impl Plugin for VrmaAnimationGraphPlugin {
     }
 }
 
+/// One ready `.vrma`'s resolved clip and the work a rebuild owes it.
+struct ResolvedClip {
+    vrma: Entity,
+    handle: Handle<AnimationClip>,
+    /// The working clip still carries an older rig's destination space, so it
+    /// must be cloned from the pristine source and retargeted again.
+    retarget: bool,
+    /// The clip was playing, so the new player must be handed the snapshot.
+    restore: bool,
+}
+
 fn apply_animation_graph(
     trigger: On<RequestUpdateAnimationGraph>,
     mut commands: Commands,
     mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut clips: ResMut<Assets<AnimationClip>>,
     childrens: Query<&Children>,
-    vrmas: Query<(Entity, &VrmAnimationClipHandle, Has<ClipRetargetRequested>)>,
+    generations: Query<&VrmGeneration>,
+    // Only a `.vrma` whose own source rig has spawned has rest transforms to
+    // retarget from and a clip worth playing; a `.vrm`'s `Initialized` cannot
+    // make an unready `.vrma` ready, and `trigger_loaded` asks for the graph
+    // again once the source rig stamps it.
+    vrmas: Query<
+        (
+            Option<&VrmAnimationSourceClip>,
+            Option<&VrmAnimationClipHandle>,
+            Option<&VrmaRetargetedFor>,
+            Option<&VrmaPlaybackState>,
+        ),
+        (With<Vrma>, With<Initialized>),
+    >,
     child_searcher: ChildSearcher,
     bones: Query<(&VrmBone, &AnimationTargetId)>,
 ) {
@@ -60,7 +86,72 @@ fn apply_animation_graph(
     let Ok(children) = childrens.get(vrm_entity) else {
         return;
     };
-    let mut animation_graph = generate_animation_graph(&mut commands, &vrmas, children);
+    // A hand-built VRM carries no `VrmGeneration`; treat it as generation `0`.
+    let generation = generations
+        .get(vrm_entity)
+        .map_or(0, |generation| generation.0);
+
+    // Resolve one working clip per ready `.vrma`, re-cloning from the pristine
+    // source when the existing working clip was baked for an older rig. A
+    // working clip is never retargeted twice: the clone resets it to source
+    // space first.
+    let mut resolved: Vec<ResolvedClip> = Vec::new();
+    for child in children.iter() {
+        let Ok((source, working, retargeted, playback)) = vrmas.get(child) else {
+            continue;
+        };
+        // An absent `VrmaRetargetedFor` means no rig generation has been
+        // recorded yet, so the clip still owes its first retarget.
+        let retarget = retargeted.is_none_or(|retargeted| retargeted.0 != generation);
+        // `stale` is what forces a re-clone: the working clip already carries an
+        // older rig's destination-space curves.
+        let stale = retargeted.is_some_and(|retargeted| retargeted.0 != generation);
+        let handle = if stale || working.is_none() {
+            match source {
+                // The pristine source is the only clip a retarget may start
+                // from. Re-cloning it puts the working clip back in source
+                // space, so a curve is never transformed twice.
+                Some(source) => {
+                    let Some(pristine) = clips.get(&source.0).cloned() else {
+                        continue;
+                    };
+                    let handle = clips.add(pristine);
+                    commands
+                        .entity(child)
+                        .insert(VrmAnimationClipHandle(handle.clone()));
+                    handle
+                }
+                // A hand-built clip without a source (an inline test) has
+                // nothing to re-clone from; reuse the handle it carries.
+                None => match working {
+                    Some(working) => working.0.clone(),
+                    None => continue,
+                },
+            }
+        } else {
+            // Already in source space for this retarget, or already baked for
+            // this generation: reuse the working handle.
+            let Some(working) = working else {
+                continue;
+            };
+            working.0.clone()
+        };
+        resolved.push(ResolvedClip {
+            vrma: child,
+            handle,
+            retarget,
+            restore: playback.is_some_and(|playback| playback.active),
+        });
+    }
+
+    // An avatar with no ready `.vrma` gets no graph: building an empty one would
+    // overwrite a user's own `AnimationGraphHandle` on the root bone for nothing.
+    if resolved.is_empty() {
+        return;
+    }
+
+    let (mut animation_graph, nodes) =
+        AnimationGraph::from_clips(resolved.iter().map(|resolved| resolved.handle.clone()));
     register_mask_groups(&mut animation_graph, &bones);
     let animation_graph_handle = AnimationGraphHandle(graphs.add(animation_graph));
     // One graph per avatar, and it goes on the root bone: the root bone is the
@@ -74,40 +165,27 @@ fn apply_animation_graph(
         &mut commands,
         &child_searcher,
     );
-    // Fan out to every new clip, exactly once. Previous clips already contain
-    // destination-space curves and must not be retargeted again on a rebuild.
-    for child in children.iter() {
-        if let Ok((_, _, false)) = vrmas.get(child) {
+
+    for (resolved, node) in resolved.into_iter().zip(nodes) {
+        // The graph and node indices must exist before observers can play a
+        // clip in response to `LoadedVrma`.
+        commands
+            .entity(resolved.vrma)
+            .insert(VrmAnimationNodeIndex(node));
+        if resolved.retarget {
+            // Recorded before the retarget fires, so a rebuild that cannot
+            // reach the rig does not keep cloning the source every frame.
             commands
-                .entity(child)
-                .insert(ClipRetargetRequested)
+                .entity(resolved.vrma)
+                .insert(VrmaRetargetedFor(generation));
+            commands
+                .entity(resolved.vrma)
                 .trigger(RequestUpdateAnimationClips);
-            // The graph and node indices must exist before observers can play
-            // a clip in response to LoadedVrma.
-            commands.trigger(LoadedVrma {
-                vrm: vrm_entity,
-                vrma: child,
-            });
+        }
+        if resolved.restore {
+            commands.entity(resolved.vrma).insert(VrmaNeedsRestore);
         }
     }
-}
-
-fn generate_animation_graph(
-    commands: &mut Commands,
-    vrmas_query: &Query<(Entity, &VrmAnimationClipHandle, Has<ClipRetargetRequested>)>,
-    children: &Children,
-) -> AnimationGraph {
-    let vrmas = children
-        .iter()
-        .flat_map(|child| vrmas_query.get(child).ok())
-        .collect::<Vec<_>>();
-    let (graph, nodes) = AnimationGraph::from_clips(vrmas.iter().map(|(_, h, _)| h.0.clone()));
-    for (i, (entity, _, _)) in vrmas.iter().enumerate() {
-        commands
-            .entity(*entity)
-            .insert(VrmAnimationNodeIndex(nodes[i]));
-    }
-    graph
 }
 
 /// Puts every humanoid bone's [`AnimationTargetId`] into its `VrmMaskGroup`,
@@ -228,7 +306,6 @@ fn apply_retarget_animation_clips(
             &bones,
             &model_rests,
         );
-        commands.entity(vrma_entity).insert(NeedsBake);
     }
     // Expression tracks ride in the same clip asset, so one graph node plays the
     // face and the body together and `StopVrma` stops both. The root target is
@@ -243,6 +320,11 @@ fn apply_retarget_animation_clips(
             &source_targets,
         );
     }
+    // Scheduled for every retargeted clip, not only the humanoid ones: the bake
+    // pass is also what emits the first-load [`LoadedVrma`], so an
+    // expression-only `.vrma` has to reach it too. Its curves live on the avatar
+    // root, outside the subtree the pass bakes, and are left alone.
+    commands.entity(vrma_entity).insert(NeedsBake);
 }
 
 /// Moves every source curve of `registry` onto the avatar's own bone target.
@@ -366,7 +448,6 @@ fn apply_bake_clips(world: &mut World) {
         let Some(own_rig) = collect_own_rig_targets(world, vrm_entity) else {
             continue;
         };
-        world.entity_mut(vrma_entity).remove::<NeedsBake>();
 
         let mut new_curves: HashMap<AnimationTargetId, Vec<VariableCurve>> = HashMap::new();
 
@@ -431,8 +512,11 @@ fn apply_bake_clips(world: &mut World) {
         }
 
         // Replace the clip's curves with baked ones
-        let mut clip_assets = world.resource_mut::<Assets<AnimationClip>>();
-        if let Some(mut clip) = clip_assets.get_mut(clip_handle.id()) {
+        {
+            let mut clip_assets = world.resource_mut::<Assets<AnimationClip>>();
+            let Some(mut clip) = clip_assets.get_mut(clip_handle.id()) else {
+                continue;
+            };
             let curves = clip.curves_mut();
             curves.clear();
             for (target_id, variable_curves) in new_curves {
@@ -440,6 +524,18 @@ fn apply_bake_clips(world: &mut World) {
                     curves.entry(target_id).or_default().push(vc);
                 }
             }
+        }
+
+        // The clip is now baked into the destination rig's space, so it is what
+        // `LoadedVrma` promises: a usable graph node. Emit it once per VRMA; a
+        // reattachment restores the recorded playback instead of re-signalling.
+        world.entity_mut(vrma_entity).remove::<NeedsBake>();
+        if world.get::<VrmaLoaded>(vrma_entity).is_none() {
+            world.entity_mut(vrma_entity).insert(VrmaLoaded);
+            world.trigger(LoadedVrma {
+                vrm: vrm_entity,
+                vrma: vrma_entity,
+            });
         }
     }
 }
@@ -490,6 +586,7 @@ mod tests {
     use crate::tests::TestResult;
     use crate::vrm::gltf::extensions::VrmNode;
     use crate::vrm::gltf::handler::bone_target_id;
+    use crate::vrm::instance::VrmGeneration;
     use crate::vrma::RetargetSource;
     use crate::vrma::animation::mask::{VrmMaskGroup, VrmaMask};
     use bevy::animation::graph::{AnimationMask, AnimationNodeType};
@@ -778,6 +875,103 @@ mod tests {
         (vrma, handle)
     }
 
+    /// A rig carrying an explicit [`VrmGeneration`], so a test can simulate a
+    /// replacement by bumping it. Returns `(vrm, spine, prefix)`, `prefix` being
+    /// the rig's `RestWorldTransform`, so a replacement rest pose can be
+    /// recomposed the same way the pipeline composed the first one.
+    fn spawn_generation_rig(
+        world: &mut World,
+        rest_rotation: Quat,
+        generation: u64,
+    ) -> (Entity, Entity, GlobalTransform) {
+        let prefix = GlobalTransform::from(
+            Transform::from_xyz(3.0, 2.0, -1.0).with_rotation(Quat::from_rotation_y(0.3)),
+        );
+        let vrm = world
+            .spawn((
+                Initialized,
+                RestWorldTransform(prefix),
+                VrmGeneration(generation),
+            ))
+            .id();
+        let root = world.spawn((Name::new(Vrm::ROOT_BONE), ChildOf(vrm))).id();
+        let rest = Transform::from_rotation(rest_rotation);
+        let spine = world
+            .spawn((
+                VrmBone::from("spine"),
+                AnimationTargetId::from_name(&Name::new("destination_spine")),
+                RestTransform(rest),
+                RestGlobalTransform(prefix.mul_transform(rest)),
+                ChildOf(root),
+            ))
+            .id();
+        (vrm, spine, prefix)
+    }
+
+    /// A `.vrma` shaped the way `initialize::spawn_vrma` builds it: a pristine
+    /// [`VrmAnimationSourceClip`] next to the working clone the retarget mutates.
+    ///
+    /// Returns `(vrma, source, working)` — the handle the reload must clone from,
+    /// the handle the first bake writes into.
+    fn spawn_sourced_clip(
+        world: &mut World,
+        vrm: Entity,
+        angle: f32,
+    ) -> (Entity, Handle<AnimationClip>, Handle<AnimationClip>) {
+        let source_target = AnimationTargetId::from_name(&Name::new("source_spine"));
+        let mut clip = AnimationClip::default();
+        let pose = Quat::from_rotation_x(angle);
+        clip.add_curve_to_target(
+            source_target,
+            AnimatableCurve::new(
+                animated_field!(Transform::rotation),
+                AnimatableKeyframeCurve::new([(0.0, pose), (1.0, pose)]).unwrap(),
+            ),
+        );
+        let source = world
+            .resource_mut::<Assets<AnimationClip>>()
+            .add(clip.clone());
+        let working = world.resource_mut::<Assets<AnimationClip>>().add(clip);
+        let mut nodes = Assets::<GltfNode>::default();
+        let node = nodes.add(GltfNode {
+            index: 0,
+            name: "source_spine".into(),
+            children: vec![],
+            mesh: None,
+            skin: None,
+            transform: Transform::default(),
+            is_animation_root: false,
+            extras: None,
+        });
+        let registry = HumanoidBoneRegistry::new(
+            &HashMap::from([("spine".into(), VrmNode { node: 0 })]),
+            &nodes,
+            &[node],
+        );
+        let prefix = GlobalTransform::from(
+            Transform::from_xyz(-2.0, 8.0, 4.0).with_rotation(Quat::from_rotation_y(1.8)),
+        );
+        let vrma = world
+            .spawn((
+                Vrma,
+                Initialized,
+                registry,
+                RestWorldTransform(prefix),
+                VrmAnimationSourceClip(source.clone()),
+                VrmAnimationClipHandle(working.clone()),
+                ChildOf(vrm),
+            ))
+            .id();
+        world.spawn((
+            Name::new("source_spine"),
+            source_target,
+            RestTransform::default(),
+            RestGlobalTransform(prefix),
+            ChildOf(vrma),
+        ));
+        (vrma, source, working)
+    }
+
     fn request_graph(
         app: &mut App,
         vrm: Entity,
@@ -863,5 +1057,184 @@ mod tests {
         assert!(sample_rotation(app.world_mut(), &first_clip).angle_between(before) < 0.001);
         let expected = Quat::from_rotation_x(0.9) * rest;
         assert!(sample_rotation(app.world_mut(), &second_clip).angle_between(expected) < 0.001);
+    }
+
+    /// A reload has to rebuild the working clip from the pristine source. The
+    /// proof is the result: only the *new* rig's rest pose may appear. Re-baking
+    /// an already-baked clip would compose the two rigs' rest poses and miss the
+    /// expected rotation by more than the tolerance below.
+    #[test]
+    fn a_reloaded_rig_rebakes_from_the_pristine_source() {
+        let mut app = setup_app();
+        let rest_a = Quat::from_rotation_z(0.4);
+        let rest_b = Quat::from_rotation_z(-0.6);
+        let (vrm, spine, prefix) = spawn_generation_rig(app.world_mut(), rest_a, 1);
+        let (vrma, _source, working) = spawn_sourced_clip(app.world_mut(), vrm, 0.5);
+        request_graph(&mut app, vrm);
+        assert!(
+            sample_rotation(app.world_mut(), &working)
+                .angle_between(Quat::from_rotation_x(0.5) * rest_a)
+                < 0.001,
+            "the first bake is the first rig's retarget"
+        );
+
+        // A replacement keeps the VRMA entity — and with it the pristine source
+        // handle — and changes only the destination rest pose and generation.
+        let rest = Transform::from_rotation(rest_b);
+        app.world_mut().entity_mut(spine).insert((
+            RestTransform(rest),
+            RestGlobalTransform(prefix.mul_transform(rest)),
+        ));
+        app.world_mut().entity_mut(vrm).insert(VrmGeneration(2));
+        request_graph(&mut app, vrm);
+
+        let reloaded = app
+            .world()
+            .get::<VrmAnimationClipHandle>(vrma)
+            .expect("the reloaded clip handle")
+            .0
+            .clone();
+        assert_ne!(
+            reloaded.id(),
+            working.id(),
+            "a new generation must re-clone the working clip from the source"
+        );
+        let actual = sample_rotation(app.world_mut(), &reloaded);
+        assert!(
+            actual.angle_between(Quat::from_rotation_x(0.5) * rest_b) < 0.001,
+            "the reload must bake the new rig's rest only, got {actual:?}"
+        );
+    }
+
+    /// A reload restores the recorded playback instead of telling the app to
+    /// start the clip again, so `LoadedVrma` stays a first-load signal.
+    #[test]
+    fn a_reload_does_not_resignal_loaded_vrma() {
+        let mut app = setup_app();
+        let (vrm, _spine, _prefix) =
+            spawn_generation_rig(app.world_mut(), Quat::from_rotation_z(0.4), 1);
+        let (vrma, _source, _working) = spawn_sourced_clip(app.world_mut(), vrm, 0.5);
+        request_graph(&mut app, vrm);
+        assert_eq!(app.world().resource::<LoadNotifications>().0, vec![vrma]);
+
+        app.world_mut().entity_mut(vrm).insert(VrmGeneration(2));
+        request_graph(&mut app, vrm);
+        assert_eq!(
+            app.world().resource::<LoadNotifications>().0,
+            vec![vrma],
+            "a reattachment must not re-emit LoadedVrma"
+        );
+    }
+
+    /// A `.vrma` that only arrives after the rig is ready attaches to the
+    /// current graph: it gets a node index, is retargeted for the live
+    /// generation and signals its first load.
+    #[test]
+    fn a_vrma_that_arrives_after_the_rig_joins_the_current_graph() {
+        let mut app = setup_app();
+        let (vrm, _spine, _prefix) =
+            spawn_generation_rig(app.world_mut(), Quat::from_rotation_z(0.4), 1);
+        // No `.vrma` yet: there is nothing to build, and no signal.
+        request_graph(&mut app, vrm);
+        assert!(app.world().resource::<LoadNotifications>().0.is_empty());
+
+        let (vrma, _source, working) = spawn_sourced_clip(app.world_mut(), vrm, 0.5);
+        request_graph(&mut app, vrm);
+
+        assert!(
+            app.world().get::<VrmAnimationNodeIndex>(vrma).is_some(),
+            "the late clip joins the graph"
+        );
+        assert_eq!(app.world().resource::<LoadNotifications>().0, vec![vrma]);
+        let actual = sample_rotation(app.world_mut(), &working);
+        assert!(
+            actual.angle_between(Quat::from_rotation_x(0.5) * Quat::from_rotation_z(0.4)) < 0.001
+        );
+    }
+
+    /// Reloading one avatar must not touch another: separate working clips,
+    /// node indices and generations.
+    #[test]
+    fn a_reload_of_one_avatar_leaves_another_untouched() {
+        let mut app = setup_app();
+        let (a, _sa, _pa) = spawn_generation_rig(app.world_mut(), Quat::from_rotation_z(0.4), 1);
+        let (b, _sb, _pb) = spawn_generation_rig(app.world_mut(), Quat::from_rotation_z(-0.6), 1);
+        let (vrma_a, _src_a, work_a) = spawn_sourced_clip(app.world_mut(), a, 0.5);
+        let (vrma_b, _src_b, work_b) = spawn_sourced_clip(app.world_mut(), b, 0.9);
+        request_graph(&mut app, a);
+        request_graph(&mut app, b);
+        let before_b = sample_rotation(app.world_mut(), &work_b);
+        let index_b = app.world().get::<VrmAnimationNodeIndex>(vrma_b).unwrap().0;
+
+        app.world_mut().entity_mut(a).insert(VrmGeneration(2));
+        request_graph(&mut app, a);
+
+        assert_eq!(
+            app.world().get::<VrmAnimationNodeIndex>(vrma_b).unwrap().0,
+            index_b,
+            "the other avatar's node index is untouched"
+        );
+        assert!(
+            sample_rotation(app.world_mut(), &work_b).angle_between(before_b) < 0.001,
+            "the other avatar's baked clip is untouched"
+        );
+        let reloaded_a = app
+            .world()
+            .get::<VrmAnimationClipHandle>(vrma_a)
+            .unwrap()
+            .0
+            .clone();
+        assert_ne!(
+            reloaded_a.id(),
+            work_a.id(),
+            "the reloaded avatar did get a new working clip"
+        );
+    }
+
+    /// An app with the asset server in place, so dropping a replaced graph or
+    /// clip really frees it and a leak shows up as a growing asset store.
+    fn setup_tracked_app() -> App {
+        let mut app = crate::tests::test_app();
+        app.add_plugins((AnimationPlugin, VrmaAnimationGraphPlugin));
+        app
+    }
+
+    /// Repeated reloads must not accumulate derived assets: each replacement
+    /// frees the previous working clip and graph when it overwrites them.
+    #[test]
+    fn repeated_reloads_do_not_grow_derived_assets() {
+        let mut app = setup_tracked_app();
+        let (vrm, _spine, _prefix) =
+            spawn_generation_rig(app.world_mut(), Quat::from_rotation_z(0.4), 1);
+        let (_vrma, _source, _) = spawn_sourced_clip(app.world_mut(), vrm, 0.5);
+        request_graph(&mut app, vrm);
+        // Give the asset events of the first replacement time to drain.
+        for _ in 0..3 {
+            app.update();
+        }
+        let clips = app.world().resource::<Assets<AnimationClip>>().len();
+        let graphs = app.world().resource::<Assets<AnimationGraph>>().len();
+        assert!(clips >= 2, "source and working clips exist");
+
+        for generation in 2..6 {
+            app.world_mut()
+                .entity_mut(vrm)
+                .insert(VrmGeneration(generation));
+            request_graph(&mut app, vrm);
+            for _ in 0..3 {
+                app.update();
+            }
+        }
+
+        assert_eq!(
+            app.world().resource::<Assets<AnimationClip>>().len(),
+            clips,
+            "working clips must not accumulate across reloads"
+        );
+        assert_eq!(
+            app.world().resource::<Assets<AnimationGraph>>().len(),
+            graphs,
+            "graphs must not accumulate across reloads"
+        );
     }
 }

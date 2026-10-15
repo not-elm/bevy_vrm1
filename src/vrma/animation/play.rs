@@ -1,10 +1,12 @@
 use crate::prelude::ChildSearcher;
+use crate::vrm::Vrm;
 use crate::vrm::spring_bone::{SpringJointState, SpringRoot};
-use crate::vrma::VrmAnimationNodeIndex;
 use crate::vrma::animation::expressions::{VrmaExpressionRegistry, reset_expression_weights};
 use crate::vrma::animation::properties::VrmExpressionWeights;
+use crate::vrma::{VrmAnimationNodeIndex, VrmaNeedsRestore, VrmaPlaybackState};
+use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle};
 use bevy::animation::{AnimationPlayer, RepeatAnimation};
-use bevy::app::{App, Plugin};
+use bevy::app::{AnimationSystems, App, Plugin};
 use bevy::prelude::*;
 use std::time::Duration;
 
@@ -59,7 +61,13 @@ impl Plugin for VrmaAnimationPlayPlugin {
     ) {
         app.register_type::<PlayVrma>()
             .add_observer(apply_play_vrma)
-            .add_observer(apply_stop_vrma);
+            .add_observer(apply_stop_vrma)
+            // The snapshot runs after the whole frame so it holds the latest
+            // live time/speed/weight before the engine can replace the rig; the
+            // restore runs after the graph rebuild's commands have been applied
+            // and before bevy evaluates the new player.
+            .add_systems(Last, snapshot_vrma_playback)
+            .add_systems(PostUpdate, restore_vrma_playback.before(AnimationSystems));
     }
 }
 
@@ -78,6 +86,7 @@ fn apply_play_vrma(
     mut roots: Query<&mut VrmExpressionWeights>,
     spring_roots: Query<&SpringRoot>,
     mut joint_states: Query<&mut SpringJointState>,
+    mut playback: Query<&mut VrmaPlaybackState>,
 ) {
     let vrma_entity = trigger.event_target();
     let Ok(ChildOf(vrm_entity)) = parents.get(vrma_entity) else {
@@ -101,6 +110,16 @@ fn apply_play_vrma(
     reset_expression_weights(vrma_entity, &expression_registries, &mut roots, &parents);
     if trigger.reset_spring_bones {
         reset_spring_bone_velocities(*vrm_entity, &spring_roots, &mut joint_states, &childrens);
+    }
+    // `active` is authoritative and is what a rig replacement replays; the
+    // remaining fields are refreshed from the live animation each frame.
+    if let Ok(mut state) = playback.get_mut(vrma_entity) {
+        state.active = true;
+        state.paused = false;
+        state.seek_time = 0.0;
+        state.speed = 1.0;
+        state.weight = 1.0;
+        state.repeat = trigger.repeat;
     }
 }
 
@@ -158,11 +177,17 @@ fn apply_stop_vrma(
     expression_registries: Query<&VrmaExpressionRegistry>,
     mut roots: Query<&mut VrmExpressionWeights>,
     searcher: ChildSearcher,
+    mut playback: Query<&mut VrmaPlaybackState>,
 ) {
     let vrma_entity = trigger.event_target();
     let Ok(ChildOf(vrm)) = parents.get(vrma_entity) else {
         return;
     };
+    // Cleared before any readiness check: a stop issued while the rig is being
+    // replaced must not be lost and then replayed by the restore.
+    if let Ok(mut state) = playback.get_mut(vrma_entity) {
+        state.active = false;
+    }
     let Ok(node_index) = vrmas.get(vrma_entity) else {
         return;
     };
@@ -180,12 +205,131 @@ fn apply_stop_vrma(
     reset_expression_weights(vrma_entity, &expression_registries, &mut roots, &parents);
 }
 
+/// Records each VRMA's live playback and graph mask every frame.
+///
+/// A reattachment has to restore what the *old* player and graph were doing,
+/// and the engine destroys both together with the old rig, so the snapshot must
+/// be taken while they still exist. Only an avatar with a live root-bone player
+/// and graph is read: while a rig is being replaced there is neither, and the
+/// last snapshot must survive that gap unchanged.
+///
+/// The mask is read from the current graph node every frame because it is a
+/// property of the graph asset, not of the VRMA; a rebuild recreates the node,
+/// so the desired mask has to be captured somewhere that outlives the graph.
+fn snapshot_vrma_playback(
+    searcher: ChildSearcher,
+    avatars: Query<(Entity, &Children), With<Vrm>>,
+    mut vrmas: Query<(
+        Option<&VrmAnimationNodeIndex>,
+        Option<&mut VrmaPlaybackState>,
+    )>,
+    players: Query<&AnimationPlayer>,
+    graph_handles: Query<&AnimationGraphHandle>,
+    graphs: Option<Res<Assets<AnimationGraph>>>,
+) {
+    // A headless app without bevy's `AnimationPlugin` has no graph store; there
+    // is no live graph to snapshot then.
+    let Some(graphs) = graphs else {
+        return;
+    };
+    for (vrm, children) in avatars.iter() {
+        // No root bone, player or graph means the rig is absent (mid-replace):
+        // leave every snapshot exactly as the last live frame left it.
+        let Some(root_bone) = searcher.find_root_bone(vrm) else {
+            continue;
+        };
+        let Ok(player) = players.get(root_bone) else {
+            continue;
+        };
+        let Ok(graph_handle) = graph_handles.get(root_bone) else {
+            continue;
+        };
+        let Some(graph) = graphs.get(graph_handle.0.id()) else {
+            continue;
+        };
+        for child in children.iter() {
+            let Ok((Some(index), Some(mut state))) = vrmas.get_mut(child) else {
+                continue;
+            };
+            if let Some(node) = graph.graph.node_weight(index.0) {
+                state.mask = node.mask;
+            }
+            if let Some(active) = player.animation(index.0) {
+                state.active = true;
+                state.paused = active.is_paused();
+                state.seek_time = active.seek_time();
+                state.speed = active.speed();
+                state.repeat = active.repeat_mode();
+                state.weight = active.weight();
+            }
+        }
+    }
+}
+
+/// Re-applies a recorded playback to a freshly rebuilt graph and player.
+///
+/// Queued by the graph build for every clip that was active, so a rig
+/// replacement — and a clip-set change on the same rig — keeps the `.vrma`
+/// running at its old time, speed, repeat mode, weight and mask instead of the
+/// app's [`LoadedVrma`](crate::prelude::LoadedVrma) observer restarting it.
+///
+/// Runs after the graph rebuild's commands have been applied (the node index
+/// and graph handle are inserted through `Commands`) and before bevy evaluates
+/// the new player, so the very first evaluated frame is the restored one.
+fn restore_vrma_playback(
+    mut commands: Commands,
+    searcher: ChildSearcher,
+    parents: Query<&ChildOf>,
+    vrmas: Query<(Entity, &VrmaPlaybackState, &VrmAnimationNodeIndex), With<VrmaNeedsRestore>>,
+    mut players: Query<&mut AnimationPlayer>,
+    graph_handles: Query<&AnimationGraphHandle>,
+    mut graphs: Option<ResMut<Assets<AnimationGraph>>>,
+) {
+    for (vrma, state, index) in vrmas.iter() {
+        let Ok(parent) = parents.get(vrma) else {
+            commands.entity(vrma).remove::<VrmaNeedsRestore>();
+            continue;
+        };
+        let Some(root_bone) = searcher.find_root_bone(parent.parent()) else {
+            // The new rig is not reachable yet; retry on a later frame.
+            continue;
+        };
+        let Ok(mut player) = players.get_mut(root_bone) else {
+            continue;
+        };
+        let node = index.0;
+        // The graph build creates every node with mask `0`, so the captured
+        // mask has to be written back onto the node before it is played.
+        if let Ok(graph_handle) = graph_handles.get(root_bone)
+            && let Some(graphs) = graphs.as_mut()
+            && let Some(mut graph) = graphs.get_mut(graph_handle.0.id())
+            && let Some(node_weight) = graph.graph.node_weight_mut(node)
+        {
+            node_weight.mask = state.mask;
+        }
+        if state.active {
+            let active = player.play(node);
+            active.set_seek_time(state.seek_time);
+            active.set_speed(state.speed);
+            active.set_repeat(state.repeat);
+            active.set_weight(state.weight);
+            if state.paused {
+                active.pause();
+            }
+        }
+        commands.entity(vrma).remove::<VrmaNeedsRestore>();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
-    use crate::tests::test_app;
-    use crate::vrma::VrmAnimationNodeIndex;
+    use crate::success;
+    use crate::tests::{TestResult, test_app};
     use crate::vrma::animation::play::VrmaAnimationPlayPlugin;
+    use crate::vrma::{VrmAnimationNodeIndex, VrmaNeedsRestore, VrmaPlaybackState};
+    use bevy::animation::graph::AnimationGraph;
+    use bevy::animation::{AnimationClip, AnimationPlugin, RepeatAnimation};
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
     use bevy_test_helper::system::SystemExt;
@@ -253,5 +397,154 @@ mod tests {
                 assert!(player.all_finished());
             })
             .unwrap();
+    }
+
+    /// A recycled headless app with bevy's animation assets, a VRM root bone
+    /// carrying a one-node graph and a VRMA child. Returns
+    /// `(app, clip, graph, root_bone, vrma, node)`.
+    fn reload_fixture() -> (
+        App,
+        Handle<AnimationClip>,
+        Handle<AnimationGraph>,
+        Entity,
+        Entity,
+        AnimationNodeIndex,
+    ) {
+        let mut app = test_app();
+        app.add_plugins(AnimationPlugin);
+        let clip = app
+            .world_mut()
+            .resource_mut::<Assets<AnimationClip>>()
+            .add(AnimationClip::default());
+        let (graph, nodes) = AnimationGraph::from_clips([clip.clone()]);
+        let node = nodes[0];
+        let graph = app
+            .world_mut()
+            .resource_mut::<Assets<AnimationGraph>>()
+            .add(graph);
+        let vrm = app.world_mut().spawn(Vrm).id();
+        let root_bone = app
+            .world_mut()
+            .spawn((
+                Name::new(Vrm::ROOT_BONE),
+                AnimationPlayer::default(),
+                AnimationGraphHandle(graph.clone()),
+                ChildOf(vrm),
+            ))
+            .id();
+        let vrma = app
+            .world_mut()
+            .spawn((
+                Vrma,
+                ChildOf(vrm),
+                VrmAnimationNodeIndex(node),
+                VrmaPlaybackState {
+                    active: true,
+                    paused: false,
+                    seek_time: 0.0,
+                    speed: 1.0,
+                    repeat: RepeatAnimation::Never,
+                    weight: 1.0,
+                    mask: 0,
+                },
+                VrmaNeedsRestore,
+            ))
+            .id();
+        (app, clip, graph, root_bone, vrma, node)
+    }
+
+    /// The restore writes the recorded time, speed, repeat, weight, mask and
+    /// paused flag onto the new player and graph node, and clears the marker.
+    #[test]
+    fn a_reload_restores_time_speed_repeat_weight_mask_and_pause() -> TestResult {
+        let (mut app, clip, graph, root_bone, vrma, node) = reload_fixture();
+        app.world_mut().entity_mut(vrma).insert(VrmaPlaybackState {
+            active: true,
+            paused: true,
+            seek_time: 0.25,
+            speed: 2.0,
+            repeat: RepeatAnimation::Forever,
+            weight: 0.5,
+            mask: 0b101,
+        });
+
+        app.world_mut()
+            .run_system_once(super::restore_vrma_playback)
+            .unwrap();
+        app.world_mut().flush();
+
+        let player = app.world().get::<AnimationPlayer>(root_bone).unwrap();
+        let active = player.animation(node).expect("the clip is playing again");
+        assert!(active.is_paused(), "the paused flag is restored");
+        assert!((active.seek_time() - 0.25).abs() < 1e-4);
+        assert_eq!(active.speed(), 2.0);
+        assert_eq!(active.repeat_mode(), RepeatAnimation::Forever);
+        assert!((active.weight() - 0.5).abs() < 1e-4);
+
+        let graphs = app.world().resource::<Assets<AnimationGraph>>();
+        assert_eq!(
+            graphs
+                .get(&graph)
+                .unwrap()
+                .graph
+                .node_weight(node)
+                .unwrap()
+                .mask,
+            0b101,
+            "the graph node mask is restored"
+        );
+        assert!(
+            app.world().get::<VrmaNeedsRestore>(vrma).is_none(),
+            "the restore marker is cleared"
+        );
+        assert!(
+            app.world()
+                .resource::<Assets<AnimationClip>>()
+                .get(&clip)
+                .is_some()
+        );
+        success!()
+    }
+
+    /// The snapshot reads the live player and the live graph node, so the state
+    /// the restore later replays is the real one.
+    #[test]
+    fn the_snapshot_captures_live_playback_and_mask() -> TestResult {
+        let (mut app, _clip, graph, root_bone, vrma, node) = reload_fixture();
+        {
+            let mut root_bone_entity = app.world_mut().entity_mut(root_bone);
+            let mut player = root_bone_entity.get_mut::<AnimationPlayer>().unwrap();
+            player
+                .play(node)
+                .set_seek_time(0.5)
+                .set_speed(1.5)
+                .set_repeat(RepeatAnimation::Forever)
+                .set_weight(0.75)
+                .pause();
+        }
+        {
+            let mut graphs = app.world_mut().resource_mut::<Assets<AnimationGraph>>();
+            graphs
+                .get_mut(&graph)
+                .unwrap()
+                .graph
+                .node_weight_mut(node)
+                .unwrap()
+                .mask = 0b11;
+        }
+
+        app.world_mut()
+            .run_system_once(super::snapshot_vrma_playback)
+            .unwrap();
+
+        let state = app.world().get::<VrmaPlaybackState>(vrma).unwrap();
+        assert!(state.active, "an active animation is recorded as active");
+        assert!(state.paused);
+        assert!((state.seek_time - 0.5).abs() < 1e-4);
+        assert_eq!(state.speed, 1.5);
+        assert_eq!(state.repeat, RepeatAnimation::Forever);
+        assert!((state.weight - 0.75).abs() < 1e-4);
+        assert_eq!(state.mask, 0b11);
+        success!()
     }
 }

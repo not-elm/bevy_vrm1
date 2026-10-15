@@ -7,6 +7,8 @@ use crate::macros::{entity_component, marker_component};
 use crate::vrma::animation::VrmaAnimationPlayersPlugin;
 use crate::vrma::initialize::VrmaInitializePlugin;
 use crate::vrma::loader::{VrmaAsset, VrmaLoaderPlugin};
+use bevy::animation::RepeatAnimation;
+use bevy::animation::graph::AnimationMask;
 use bevy::app::App;
 use bevy::asset::Handle;
 use bevy::prelude::*;
@@ -47,7 +49,12 @@ impl Plugin for VrmaPlugin {
             .register_type::<VrmaDuration>()
             .register_type::<RetargetSource>()
             .register_type::<VrmAnimationClipHandle>()
-            .register_type::<VrmAnimationNodeIndex>();
+            .register_type::<VrmAnimationNodeIndex>()
+            .register_type::<VrmAnimationSourceClip>()
+            .register_type::<VrmaRetargetedFor>()
+            .register_type::<VrmaLoaded>()
+            .register_type::<VrmaNeedsRestore>()
+            .register_type::<VrmaPlaybackState>();
     }
 }
 
@@ -98,10 +105,16 @@ pub struct VrmaPath(pub PathBuf);
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct VrmaDuration(pub Duration);
 
-/// An event that is emitted when VRMA is loaded.
+/// An event that is emitted the first time a `.vrma` is playable.
 ///
-/// Emitted once the model's pending VRMA children have initialized and the
-/// animation graph has assigned this clip a node index, so observers can play it.
+/// Emitted once the model's pending VRMA children have initialized, the
+/// animation graph has assigned this clip a node index and the retarget has
+/// been baked into a playable clip, so observers can play it.
+///
+/// It is emitted **once per VRMA entity**. When a rig is replaced, the VRMA
+/// keeps playing: the engine restores the recorded playback onto the new player
+/// instead of re-emitting this event, so an observer that starts the clip does
+/// not fight the restore.
 ///
 /// This event is emitted as a trigger.
 /// The target of the trigger is the VRMA entity.
@@ -121,6 +134,81 @@ pub(crate) struct VrmAnimationClipHandle(pub Handle<AnimationClip>);
 #[derive(Debug, Component, Reflect, Copy, Clone, Default)]
 #[reflect(Component, Default)]
 pub(crate) struct VrmAnimationNodeIndex(pub AnimationNodeIndex);
+
+/// The pristine, never-retargeted animation clip a `.vrma` was loaded from.
+///
+/// [`VrmAnimationClipHandle`] is a per-instance clone the retarget and bake
+/// mutate in place, so it cannot be retargeted a second time. Replacing a rig
+/// has to start over from an untouched clip, and that is what this strong
+/// handle keeps alive for the VRMA entity's whole life.
+#[derive(Debug, Component, Reflect)]
+#[reflect(Component)]
+pub(crate) struct VrmAnimationSourceClip(pub Handle<AnimationClip>);
+
+/// The rig generation the working clip's curves were retargeted and baked for.
+///
+/// Absent means "never retargeted". A value different from the avatar's current
+/// generation (see `crate::vrm::instance::VrmGeneration`) tells the graph build
+/// to clone [`VrmAnimationSourceClip`] again before retargeting. A hand-built
+/// VRM without that component is generation `0`.
+#[derive(Debug, Component, Reflect, Copy, Clone, Default, PartialEq, Eq)]
+#[reflect(Component)]
+pub(crate) struct VrmaRetargetedFor(pub u64);
+
+/// Marker set on a VRMA once its first [`LoadedVrma`] has been emitted.
+///
+/// A reattachment restores the recorded playback instead of signalling a fresh
+/// load, so app observers do not restart the clip.
+#[derive(Debug, Component, Reflect, Default)]
+#[reflect(Component)]
+pub(crate) struct VrmaLoaded;
+
+/// A VRMA whose graph binding was just rebuilt and whose live playback must be
+/// re-applied to the new player.
+#[derive(Debug, Component, Reflect, Default)]
+#[reflect(Component)]
+pub(crate) struct VrmaNeedsRestore;
+
+/// A private snapshot of a VRMA's live playback and graph mask.
+///
+/// The player and graph live on the rig and die with it, so what they were
+/// doing is captured while they still exist and re-applied after a replacement.
+/// `active` is authoritative — written by [`PlayVrma`](crate::prelude::PlayVrma)
+/// and [`StopVrma`](crate::prelude::StopVrma) — while the remaining fields are
+/// refreshed from the live animation every frame.
+#[derive(Debug, Component, Reflect, Clone)]
+#[reflect(Component)]
+pub(crate) struct VrmaPlaybackState {
+    /// Whether the clip has been started and not stopped.
+    pub active: bool,
+    /// Whether the live animation was paused.
+    pub paused: bool,
+    /// Playback position in seconds.
+    pub seek_time: f32,
+    /// Playback speed multiplier.
+    pub speed: f32,
+    /// Repetition mode.
+    pub repeat: RepeatAnimation,
+    /// Active animation weight.
+    pub weight: f32,
+    /// The graph node's mask-out bitfield (`0` means "nothing masked out"),
+    /// as last observed.
+    pub mask: AnimationMask,
+}
+
+impl Default for VrmaPlaybackState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            paused: false,
+            seek_time: 0.0,
+            speed: 1.0,
+            repeat: RepeatAnimation::Never,
+            weight: 1.0,
+            mask: 0,
+        }
+    }
+}
 
 /// This is a component that indicates that it is the source of retargeting.
 /// This is used internally to retarget bones and expressions, and attached after vrma's entity children are spawned.

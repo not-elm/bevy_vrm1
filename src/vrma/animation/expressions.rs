@@ -318,6 +318,7 @@ mod tests {
         ExpressionCategory, ExpressionOverrideType, VrmExpressionPlugin,
     };
     use crate::vrm::gltf::extensions::VrmNode;
+    use crate::vrm::instance::VrmGeneration;
     use crate::vrma::VrmAnimationNodeIndex;
     use crate::vrma::animation::animation_graph::{
         RequestUpdateAnimationGraph, VrmaAnimationGraphPlugin,
@@ -329,7 +330,7 @@ mod tests {
         apply_expression_morph_binds,
     };
     use crate::vrma::gltf::extensions::{VRMCVrmAnimation, VrmaExpressions, VrmaHumanoid};
-    use crate::vrma::{VrmAnimationClipHandle, Vrma};
+    use crate::vrma::{VrmAnimationClipHandle, VrmAnimationSourceClip, Vrma};
     use bevy::animation::{AnimatedBy, AnimationPlugin};
 
     /// The `y` and `z` every fixture track writes. The shipped `.vrma` files
@@ -740,6 +741,66 @@ mod tests {
                 "the weight is translation.x, never y ({SCRATCH_Y}) or z ({SCRATCH_Z})"
             );
         }
+        success!()
+    }
+
+    /// A rig replacement re-clones the pristine source before retargeting, so the
+    /// expression is rebuilt and not lost. The retarget *moves* the source track
+    /// onto the root target, so re-running it on the working clip would find no
+    /// source curve and drop the face; the pristine `VrmAnimationSourceClip` is
+    /// what makes the second generation's retarget possible.
+    #[test]
+    fn a_reloaded_expression_is_re_retargeted_from_the_pristine_source() -> TestResult {
+        let mut app = setup_app(false);
+        let (vrm, _) = spawn_avatar(app.world_mut());
+        app.world_mut().entity_mut(vrm).insert(VrmGeneration(1));
+        let (vrma, working) =
+            spawn_expression_vrma(app.world_mut(), vrm, "happy", &[(0.0, 0.25), (1.0, 0.75)])?;
+        // The pristine copy the reload must clone from, taken before the first
+        // retarget moves the working clip's curves off the source node.
+        let source = {
+            let pristine = app
+                .world()
+                .resource::<Assets<AnimationClip>>()
+                .get(&working)
+                .expect("the working clip exists")
+                .clone();
+            app.world_mut()
+                .resource_mut::<Assets<AnimationClip>>()
+                .add(pristine)
+        };
+        app.world_mut()
+            .entity_mut(vrma)
+            .insert(VrmAnimationSourceClip(source));
+
+        request_graph(&mut app, vrm);
+        assert!(
+            (sample_weight(&retargeted_curves(&app, &working)[0], 0.5) - 0.5).abs() < 1e-3,
+            "the first retarget writes the weight onto the root target"
+        );
+
+        app.world_mut().entity_mut(vrm).insert(VrmGeneration(2));
+        request_graph(&mut app, vrm);
+
+        let reloaded = app
+            .world()
+            .get::<VrmAnimationClipHandle>(vrma)
+            .expect("the reloaded clip handle")
+            .0
+            .clone();
+        assert_ne!(
+            reloaded.id(),
+            working.id(),
+            "a new generation must re-clone the working clip from the source"
+        );
+        let curves = retargeted_curves(&app, &reloaded);
+        assert_eq!(
+            curves.len(),
+            1,
+            "the re-retargeted clip has the weight curve"
+        );
+        assert!((sample_weight(&curves[0], 0.25) - 0.375).abs() < 1e-3);
+        assert!((sample_weight(&curves[0], 1.0) - 0.75).abs() < 1e-3);
         success!()
     }
 

@@ -79,8 +79,14 @@ fn spawn_camera(
     ));
 }
 
-fn spawn_avatar(mut commands: Commands) {
-    spawn_vrm(&mut commands, "vrm/AliciaSolid.vrm", |_root| {});
+fn spawn_avatar(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+) {
+    commands.spawn((
+        VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
+        Transform::default(),
+    ));
 }
 
 fn rotate_circle(

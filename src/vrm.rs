@@ -5,10 +5,10 @@ pub mod detach;
 pub(crate) mod expressions;
 pub(crate) mod gltf;
 pub(crate) mod humanoid_bone;
+pub(crate) mod instance;
 mod look_at;
 mod mtoon;
 pub(crate) mod runtime;
-pub mod spawn;
 pub mod spring_bone;
 
 use crate::macros::marker_component;
@@ -17,6 +17,7 @@ use crate::system_set::VrmSystemSets;
 use crate::vrm::body_tracking::BodyTrackingPlugin;
 use crate::vrm::detach::VrmDetachPlugin;
 use crate::vrm::humanoid_bone::VrmHumanoidBonePlugin;
+use crate::vrm::instance::VrmInstancePlugin;
 use crate::vrm::look_at::LookAtPlugin;
 use crate::vrm::spring_bone::VrmSpringBonePlugin;
 use bevy::app::{AnimationSystems, App, Plugin};
@@ -45,9 +46,9 @@ pub mod prelude {
         },
         gltf::prelude::*,
         humanoid_bone::prelude::*,
+        instance::VrmHandle,
         look_at::LookAt,
         mtoon::prelude::*,
-        spawn::spawn_vrm,
         spring_bone::{SpringJointProps, SpringJoints, SpringRoot},
     };
 }
@@ -65,9 +66,12 @@ new_type!(
 );
 
 /// A marker component attached to the entity of VRM.
-/// This component is automatically inserted by the load-time glTF pipeline while
-/// the `.vrm` file loads, onto the scene root of the resulting
-/// [`WorldAsset`](bevy::world_serialization::WorldAsset).
+///
+/// It is inserted by the root-identity attach (see
+/// [`crate::vrm::instance`]) once the scene instance is ready and its root data
+/// has been bound onto the entity: the entity the application spawned with
+/// [`VrmHandle`], or the child scene root of a raw
+/// [`WorldAssetRoot`](bevy::world_serialization::WorldAssetRoot) spawn.
 #[derive(Debug, Component, Reflect, Copy, Clone)]
 #[reflect(Component)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -126,18 +130,24 @@ pub struct RestGlobalTransform(pub GlobalTransform);
 pub struct RestWorldTransform(pub GlobalTransform);
 
 marker_component!(
-    /// A marker component attached to the entity of VRM.
-    /// This component is automatically inserted by the load-time glTF pipeline
-    /// while the `.vrm` file loads.
+    /// A marker component attached to the entity of VRM, inserted **after** the
+    /// rest of its root data, so `On<Insert, Initialized>` observes a fully
+    /// populated root.
+    ///
+    /// The root-identity attach writes it exactly once per successful bind; a
+    /// re-attach (model swap, hot reload) inserts it again, which is why the
+    /// crate's own readiness hooks key on [`Insert`](bevy::ecs::lifecycle::Insert)
+    /// rather than `Add`.
     Initialized
 );
+
 /// The main plugin for VRM support in Bevy.
 ///
 /// This is the **runtime** half: it adds the systems that evaluate what
 /// [`VrmGltfPlugin`](crate::prelude::VrmGltfPlugin) wrote into the scene while
 /// the file loaded — spring bones, gaze control, expressions, node constraints
-/// and `MToon` rendering — plus the [`spawn_vrm`](crate::prelude::spawn_vrm)
-/// watchdog.
+/// and `MToon` rendering — and the root-identity pipeline that binds that
+/// load-time data onto the entity spawned with [`VrmHandle`].
 ///
 /// It does not load a `.vrm` by itself. An app also needs
 /// [`VrmGltfPlugin`](crate::prelude::VrmGltfPlugin), which is the only plugin
@@ -162,16 +172,11 @@ impl Plugin for VrmPlugin {
             VrmSpringBonePlugin,
             VrmHumanoidBonePlugin,
             VrmExpressionPlugin,
+            VrmInstancePlugin,
             MtoonMaterialPlugin,
             LookAtPlugin,
             BodyTrackingPlugin,
         ));
-
-        // The watchdog half of `spawn_vrm`: a pending spawn whose instance never
-        // arrives is warned about once and dropped, so nothing panics and no
-        // closure is held for the rest of the session.
-        app.init_resource::<spawn::PendingVrmSpawns>()
-            .add_systems(Update, spawn::warn_never_ready);
 
         // Add manual transform propagation systems to follow VRM spec update order
         // See: https://vrm.dev/api/api_update/

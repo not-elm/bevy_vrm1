@@ -2,16 +2,14 @@
 //! The VRM model will track a red cube as its target.
 //! The cube can be freely moved by dragging it with the mouse.
 //!
-//! [`spawn_vrm`]'s `configure` closure captures the cube, so `LookAt::Target`
-//! needs no `LookTarget` resource and no `Added<Initialized>` system: the
-//! closure runs on the VRM root as soon as the avatar is instantiated.
-//!
-//! # Known gap
+//! The avatar is spawned with [`VrmHandle`] on the entity that *is* the VRM
+//! root, so `LookAt::Target(cube)` goes on that same spawn: no `LookTarget`
+//! resource and no `Added<Initialized>` system are needed.
 //!
 //! `LookAt` is evaluated against the `HeadBoneEntity`, `LeftEyeBoneEntity` and
-//! `RightEyeBoneEntity` on the same entity, and only the legacy loader writes
-//! those. Until the pipeline resolves them from `VRMC_vrm.humanoid` too, the
-//! avatar does not follow the cube.
+//! `RightEyeBoneEntity` holders on that same entity. The load-time pipeline
+//! writes them from `VRMC_vrm.humanoid`, and they remap when the scene is
+//! instantiated.
 
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
@@ -49,6 +47,7 @@ fn spawn_camera(mut commands: Commands) {
 
 fn spawn_avatar(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -62,9 +61,11 @@ fn spawn_avatar(
         ))
         .observe(apply_drag_move_cube)
         .id();
-    spawn_vrm(&mut commands, "vrm/AliciaSolid.vrm", move |root| {
-        root.insert(LookAt::Target(cube));
-    });
+    commands.spawn((
+        VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
+        LookAt::Target(cube),
+        Transform::default(),
+    ));
 }
 
 fn apply_drag_move_cube(

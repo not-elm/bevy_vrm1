@@ -19,8 +19,9 @@
 //! 7. the bone markers and the `<Bone>BoneEntity` holders on the scene root,
 //!    without which gaze control and body tracking match nothing;
 //! 8. the source asset path, then firstPerson render layers and the head copies;
-//! 9. the `Initialized` marker, which is what the rest of the crate treats as
-//!    "this scene is a fully initialized VRM".
+//! 9. the private `VrmSceneRoot` marker; `Vrm` + `Initialized` are inserted by
+//!    the attach observer once the root data has been moved onto the
+//!    application's entity (see [`crate::vrm::instance`]).
 
 use bevy::animation::{AnimatedBy, AnimationPlayer};
 use bevy::asset::{Handle, LoadContext};
@@ -40,15 +41,16 @@ use super::{VrmLoadState, bone_target_id};
 use crate::error::vrm_warn;
 use crate::prelude::{
     ConstraintExecutionOrder, EffectiveExpressionWeights, ExpressionMorphBinds, ExpressionSetting,
-    ExpressionSettings, Initialized, MToonMaterial, MorphBind, PendingNodeConstraint,
-    RestGlobalTransform, RestTransform, RestWorldTransform, Vrm, VrmBone, VrmExpressionWeights,
-    VrmHeadOnly, VrmNodeConstraint, VrmPath, both_view_mesh_layers, first_person_only_mesh_layers,
+    ExpressionSettings, MToonMaterial, MorphBind, PendingNodeConstraint, RestGlobalTransform,
+    RestTransform, RestWorldTransform, Vrm, VrmBone, VrmExpressionWeights, VrmHeadOnly,
+    VrmNodeConstraint, VrmPath, both_view_mesh_layers, first_person_only_mesh_layers,
     third_person_only_mesh_layers, vrm_root_animation_target,
 };
 use crate::vrm::expressions::{ExpressionCategory, ExpressionOverrideType};
 use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
 use crate::vrm::gltf::extensions::vrmc_vrm::FirstPersonFlag;
 use crate::vrm::humanoid_bone::insert_bone_holders;
+use crate::vrm::instance::VrmSceneRoot;
 use crate::vrm::spring_bone::{
     SpringCenterNode, SpringColliders, SpringJointProps, SpringJointState, SpringJoints, SpringRoot,
 };
@@ -78,25 +80,26 @@ pub(crate) fn finalize(
     mark_initialized(scene_world, world_root_id);
 }
 
-/// The two markers every other system treats as "this scene is a fully
-/// initialized avatar".
+/// Bakes the crate-private [`VrmSceneRoot`] marker onto the root of the scene
+/// asset.
 ///
-/// * [`Vrm`] is the crate's avatar-root marker, and the one this function writes
-///   it for. [`ParentSearcher::find_vrm`](crate::system_param::ParentSearcher::find_vrm),
-///   [`VrmDetachPlugin`](crate::vrm::detach::VrmDetachPlugin) and body tracking
-///   (`src/vrm/body_tracking.rs:265`) all key on it, and a scene born from a
-///   `WorldAssetRoot` has no other way to get it.
-/// * [`Initialized`] is what the VRMA loader waits for on the parent before it
-///   spawns a `VrmaHandle` child (`src/vrma/initialize.rs:38-44`), and what
-///   `trigger_loaded` watches to request the animation graph
-///   (`src/vrma/initialize.rs:119`). It is also what
-///   [`spawn_vrm`](crate::prelude::spawn_vrm)'s observer looks for to find the
-///   VRM root of an instantiated scene.
+/// The public [`Vrm`] + [`Initialized`](crate::vrm::Initialized) pair is
+/// deliberately **not** written here. Moving root components onto the entity the
+/// application spawned fires `On<Add, Vrm>` / `Added<Initialized>` on the target;
+/// if the asset already carried them, those events would fire twice (once on the
+/// child at instantiation, once on the user's entity after the move). Baking a
+/// private marker and letting the attach observer
+/// ([`attach_vrm_instance`](crate::vrm::instance)) insert the public pair
+/// exactly once keeps the readiness lifecycle single-shot.
+///
+/// A raw `WorldAssetRoot(..)` spawn still ends up with `Vrm` + `Initialized` on
+/// the child scene root: the attach observer puts them there because the owner
+/// carries no [`VrmHandle`](crate::prelude::VrmHandle).
 fn mark_initialized(
     world: &mut World,
     root: Entity,
 ) {
-    world.entity_mut(root).insert((Vrm, Initialized));
+    world.entity_mut(root).insert(VrmSceneRoot);
 }
 
 /// Snapshots the rest pose of the whole scene.
@@ -611,8 +614,9 @@ fn setup_animation(
 /// * the first-person auto split walks up to `<Vrm, HeadBoneEntity>` to find the
 ///   head subtree (`src/vrm/first_person.rs:256`, `:358-370`).
 ///
-/// Everything else they need is already here — [`Vrm`] and [`Initialized`] on
-/// the root, and the rest poses from [`insert_rest_transforms`] on the bones.
+/// Everything else they need is already here — [`Vrm`] and
+/// [`Initialized`](crate::vrm::Initialized) on the root, and the rest poses from
+/// [`insert_rest_transforms`] on the bones.
 ///
 /// # Why the mapping is read off `VrmBone`, not off `bone_nodes`
 ///
@@ -858,8 +862,8 @@ fn insert_layers_recursive(
 mod tests {
     use super::*;
     use crate::prelude::{
-        BodyTracking, ChestBoneEntity, Head, HeadBoneEntity, Hips, HipsBoneEntity, LeftEye,
-        LeftEyeBoneEntity, LookAt, NeckBoneEntity, RightEyeBoneEntity, SpineBoneEntity,
+        BodyTracking, ChestBoneEntity, Head, HeadBoneEntity, Hips, HipsBoneEntity, Initialized,
+        LeftEye, LeftEyeBoneEntity, LookAt, NeckBoneEntity, RightEyeBoneEntity, SpineBoneEntity,
         VrmConstraintKind,
     };
     use crate::success;
@@ -1164,18 +1168,20 @@ mod tests {
         success!()
     }
 
-    /// `Vrm` and `Initialized` are the two markers every other system treats as
-    /// "this scene is a fully initialized avatar", and neither exists on a bare
-    /// scene root.
+    /// The baked marker is the crate-private [`VrmSceneRoot`], not the public
+    /// `Vrm` + `Initialized` pair: those are inserted once by the attach observer,
+    /// so a move onto the application's entity cannot fire their lifecycle events
+    /// a second time.
     #[test]
-    fn finalize_marks_the_scene_root_as_a_vrm() -> TestResult {
+    fn finalize_bakes_the_private_scene_root_marker() -> TestResult {
         let mut world = World::new();
         let root = world.spawn_empty().id();
 
         mark_initialized(&mut world, root);
 
-        assert!(world.get::<Vrm>(root).is_some());
-        assert!(world.get::<Initialized>(root).is_some());
+        assert!(world.get::<VrmSceneRoot>(root).is_some());
+        assert!(world.get::<Vrm>(root).is_none());
+        assert!(world.get::<Initialized>(root).is_none());
         success!()
     }
 
@@ -1438,6 +1444,11 @@ mod tests {
         let state = gaze_state(&scene);
 
         finalize_for_gaze(&mut app, &state, scene.root);
+        // `finalize` bakes only the private `VrmSceneRoot`; the public `Vrm`
+        // marker is written by the attach stage (`vrm::instance`), which this
+        // pipeline-level helper does not run. Body tracking reads the root
+        // `GlobalTransform` through `With<Vrm>`, so the fixture must supply it.
+        app.world_mut().entity_mut(scene.root).insert(Vrm);
 
         // Off to the right, slightly below the head: both a yaw and a pitch.
         let target = app

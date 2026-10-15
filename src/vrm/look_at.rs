@@ -9,8 +9,7 @@ use bevy::prelude::*;
 use bevy::window::Window;
 
 /// Controls what the VRM model looks at.
-/// Insert it inside [`spawn_vrm`]'s `configure` closure, which is handed the
-/// VRM root.
+/// Insert it alongside [`VrmHandle`] on the entity the avatar is spawned on.
 ///
 /// [`LookAt::Cursor`] tracks the mouse cursor across all windows.
 /// [`LookAt::Target`] looks at a specified entity.
@@ -19,11 +18,12 @@ use bevy::window::Window;
 /// use bevy::prelude::*;
 /// use bevy_vrm1::prelude::*;
 ///
-/// fn spawn_camera_and_vrm(mut commands: Commands) {
+/// fn spawn_camera_and_vrm(mut commands: Commands, asset_server: Res<AssetServer>) {
 ///     commands.spawn((Camera3d::default(), Transform::from_xyz(0.0, 1.3, 1.0)));
-///     spawn_vrm(&mut commands, "model.vrm", |root| {
-///         root.insert(LookAt::Cursor);
-///     });
+///     commands.spawn((
+///         VrmHandle(asset_server.load("model.vrm")),
+///         LookAt::Cursor,
+///     ));
 /// }
 /// ```
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Reflect)]

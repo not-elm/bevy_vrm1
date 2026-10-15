@@ -9,26 +9,25 @@
 //! 3. `VRMA_03.vrma`
 //! 4. `different_pose.vrma`
 //!
-//! The avatar is spawned through [`spawn_vrm`], and all four `.vrma` handles are
-//! attached from that call's `configure` closure. That closure is handed the VRM
-//! root, which the scene asset marks with [`Initialized`], so every VRMA lands
-//! as a child of an avatar that is already initialized - the marker
-//! `VrmaPlugin` waits for before it resolves a handle
-//! (`src/vrma/initialize.rs:38-44`). No entity id is assumed anywhere.
+//! The avatar is spawned with [`VrmHandle`] on the entity that *is* the VRM
+//! root, and all four `.vrma` handles are spawned as its children in the same
+//! call. Every VRMA lands as a child of the avatar root, which receives
+//! [`Initialized`] once the scene is bound - the marker `VrmaPlugin` waits for
+//! before it resolves a handle (`src/vrma/initialize.rs:38-44`). No entity id is
+//! assumed anywhere.
 //!
-//! The four asset loads start here, in `Startup`, in parallel with the `.vrm`;
-//! only the `VrmaHandle` components are deferred to `configure`. The `.vrma` may
-//! therefore finish loading before the avatar exists, or long after - the handle
-//! is kept alive by the closure until it runs, and by the component afterwards,
-//! so neither order is lost. This example also relies on the graph build waiting
+//! The four asset loads start here, in `Startup`, in parallel with the `.vrm`.
+//! The `.vrma` may therefore finish loading before the avatar's scene is bound,
+//! or long after - each handle is kept alive by its `VrmaHandle` component, so
+//! neither order is lost. This example also relies on the graph build waiting
 //! for *all* VRMA children before it assigns node indices
 //! (`src/vrma/initialize.rs:116-142`), which is what keeps the four transitions
 //! below addressing the same graph.
 //!
 //! # Both kinds of track transition
 //!
-//! The bone tracks this transition is about do play on a load-time-spawned
-//! avatar: the retarget resolves the destination bone by [`VrmBone`], which the
+//! The bone tracks this transition is about do play on an avatar bound from a
+//! load-time scene: the retarget resolves the destination bone by [`VrmBone`], which the
 //! pipeline writes on every bone (`src/vrm/gltf/handler/nodes.rs:39`), and the
 //! graph, its mask groups and the `AnimationPlayer` on `Vrm::ROOT_BONE` are all
 //! built from components a pipeline scene does carry
@@ -91,8 +90,8 @@ struct VrmaNo<const I: usize>;
 fn main() {
     App::new()
         // `VrmGltfPlugin` claims the `vrm` extension for `Handle<Gltf>`, which is
-        // what `spawn_vrm` loads, so it has to be in the app. `VrmaPlugin` is
-        // untouched by the migration and still owns the `.vrma` loader.
+        // what `VrmHandle` wraps, so it has to be in the app. `VrmaPlugin` still
+        // owns the `.vrma` loader.
         .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin, VrmaPlugin))
         .add_systems(
             Startup,
@@ -136,25 +135,27 @@ fn spawn_avatar(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    // Started here rather than inside `configure`, so the `.vrma` files and the
-    // `.vrm` load in parallel. Each handle is moved into the closure, which keeps
-    // it alive until `configure` runs, so no asset is dropped in between.
+    // The four loads start here, in parallel with the `.vrm`. Each handle is
+    // kept alive by its `VrmaHandle` component until it is needed.
     let vrma_01 = asset_server.load("vrma/VRMA_01.vrma");
     let vrma_02 = asset_server.load("vrma/VRMA_02.vrma");
     let vrma_03 = asset_server.load("vrma/VRMA_03.vrma");
     let different_pose = asset_server.load("vrma/different_pose.vrma");
-    spawn_vrm(&mut commands, "vrm/AliciaSolid.vrm", move |root| {
-        // Each VRMA is a child of the VRM it retargets to. `VrmaNo` survives the
-        // migration untouched: `spawn_vrma` on the VRMA side removes `VrmaHandle`
-        // and never touches the rest of the bundle, so the keys below still find
-        // these entities after the `.vrma` has loaded.
-        root.with_children(|child| {
-            child.spawn((VrmaNo::<1>, VrmaHandle(vrma_01)));
-            child.spawn((VrmaNo::<2>, VrmaHandle(vrma_02)));
-            child.spawn((VrmaNo::<3>, VrmaHandle(vrma_03)));
-            child.spawn((VrmaNo::<4>, VrmaHandle(different_pose)));
+    commands
+        .spawn((
+            VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
+            Transform::default(),
+        ))
+        .with_children(|avatar| {
+            // Each VRMA is a child of the VRM it retargets to. `VrmaNo` survives
+            // untouched: `spawn_vrma` on the VRMA side removes `VrmaHandle`
+            // and never touches the rest of the bundle, so the keys below still
+            // find these entities after the `.vrma` has loaded.
+            avatar.spawn((VrmaNo::<1>, VrmaHandle(vrma_01)));
+            avatar.spawn((VrmaNo::<2>, VrmaHandle(vrma_02)));
+            avatar.spawn((VrmaNo::<3>, VrmaHandle(vrma_03)));
+            avatar.spawn((VrmaNo::<4>, VrmaHandle(different_pose)));
         });
-    });
 }
 
 /// Transitions the avatar onto the VRMA tagged `I`.

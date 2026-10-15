@@ -1,33 +1,31 @@
 //! This example shows how to animate a VRM model using VRMA.
 //!
-//! The avatar is spawned through the load-time glTF pipeline with
-//! [`spawn_vrm`], and the `.vrma` is attached from that call's `configure`
-//! closure. That is the whole migration: the closure is handed the VRM root -
-//! the one entity the scene asset marks with [`Initialized`] - so the
-//! `VrmaHandle` it spawns is a child of an avatar that is *already* initialized.
-//! `VrmaPlugin` skips any handle whose parent lacks that marker
+//! The avatar is spawned with [`VrmHandle`] on the entity that *is* the VRM
+//! root, and the `.vrma` is spawned as its child in the same call. That is the
+//! whole shape: the entity is stable from the start, so the `VrmaHandle` is a
+//! child of the avatar root that receives [`Initialized`] once the scene is
+//! bound. `VrmaPlugin` skips any handle whose parent lacks that marker
 //! (`src/vrma/initialize.rs:38-44`), so a VRMA parented anywhere else would sit
 //! there with its handle forever.
 //!
-//! [`spawn_vrm`] also settles *when*. The closure runs the moment the avatar is
-//! instantiated, so this example never assumes an entity id and needs no
-//! `Added<Initialized>` system to find the root.
+//! Because the entity already exists at spawn time, this example never assumes
+//! an entity id and needs no `Added<Initialized>` system to find the root.
 //!
 //! # Which of the two loads finishes first does not matter
 //!
 //! The `.vrma` asset load is started right here, in `Startup`, in parallel with
-//! the `.vrm`; only the `VrmaHandle` *component* is deferred to `configure`.
-//! Both orders converge on the same state: the handle is alive from `configure`
-//! on, so the VRMA side finds `Assets<VrmaAsset>` already populated when the
-//! asset wins the race, and finds an initialized parent when the avatar does.
+//! the `.vrm`. Both orders converge on the same state: the handle is alive from
+//! the spawn on, so the VRMA side finds `Assets<VrmaAsset>` already populated
+//! when the asset wins the race, and finds an initialized parent when the
+//! avatar does.
 //!
 //! When the VRMA animation player is set up, a [`LoadedVrma`] trigger is fired.
 //! You cannot play animations until this load is complete.
 //!
 //! # Both kinds of track play
 //!
-//! A `.vrma` carries two kinds of track, and on an avatar spawned by
-//! [`spawn_vrm`] both of them reach the model.
+//! A `.vrma` carries two kinds of track, and on an avatar spawned with
+//! [`VrmHandle`] both of them reach the model.
 //!
 //! The clip's *humanoid bone* tracks resolve their destination bone by
 //! [`VrmBone`], which the pipeline writes on every bone
@@ -76,8 +74,8 @@ use std::time::Duration;
 fn main() {
     App::new()
         // `VrmGltfPlugin` claims the `vrm` extension for `Handle<Gltf>`, which is
-        // what `spawn_vrm` loads, so it has to be in the app. `VrmaPlugin` is
-        // untouched by the migration and still owns the `.vrma` loader.
+        // what `VrmHandle` wraps, so it has to be in the app. `VrmaPlugin` still
+        // owns the `.vrma` loader.
         .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin, VrmaPlugin))
         .add_systems(
             Startup,
@@ -112,17 +110,20 @@ fn spawn_avatar(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    // Started here rather than inside `configure`, so the `.vrma` and the `.vrm`
-    // load in parallel. The handle is moved into the closure, which keeps it
-    // alive until `configure` runs, so the asset cannot be dropped in between.
+    // Both loads start here, in parallel. Each handle is kept alive by the
+    // component it is put in, so the assets cannot be dropped before they are
+    // needed.
     let vrma = asset_server.load("vrma/VRMA_01.vrma");
-    spawn_vrm(&mut commands, "vrm/AliciaSolid.vrm", move |root| {
-        // You need to spawn VRMA as a child of the VRM you want to retarget.
-        // `root` is that VRM, resolved by `spawn_vrm` and not assumed here.
-        root.with_children(|child| {
-            child.spawn(VrmaHandle(vrma)).observe(apply_play_vrma);
+    commands
+        .spawn((
+            VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
+            Transform::default(),
+        ))
+        .with_children(|avatar| {
+            // You need to spawn VRMA as a child of the VRM you want to
+            // retarget. The spawned entity is that VRM root.
+            avatar.spawn(VrmaHandle(vrma)).observe(apply_play_vrma);
         });
-    });
 }
 
 /// When the VRMA animation player is set up, a [`LoadedVrma`] trigger is fired.

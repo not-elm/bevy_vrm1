@@ -6,7 +6,8 @@
 //! `VrmGltfPlugin` builds the chains while the file loads: every
 //! `VRMC_springBone` joint, collider and center node is resolved into
 //! `SpringRoot`, `SpringJointProps` and `SpringJointState` on the bones of the
-//! scene asset, so there is nothing left to initialize once the avatar appears.
+//! scene asset, so there is no spring-bone step left to run once the scene is
+//! bound to the avatar entity.
 
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
@@ -42,15 +43,23 @@ fn spawn_camera(mut commands: Commands) {
     ));
 }
 
-fn spawn_avatar(mut commands: Commands) {
-    // Spring bones need no configuration, so `configure` is empty here. The
-    // returned entity is the avatar's parent, so dragging it drags the whole
-    // model.
-    spawn_vrm(&mut commands, "vrm/AliciaSolid.vrm", |_root| {}).observe(apply_drag_move_vrm);
+fn spawn_avatar(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+) {
+    // Spring bones need no configuration. The entity spawned with `VrmHandle`
+    // is the avatar's root, so dragging it drags the whole model.
+    commands
+        .spawn((
+            VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
+            Transform::default(),
+        ))
+        .observe(apply_drag_move_vrm);
 }
 
-/// The picked mesh is a descendant of the `WorldAssetRoot` entity, which is the
-/// entity that positions the avatar, so its root ancestor is the one to move.
+/// The picked mesh is a descendant of the entity spawned with [`VrmHandle`],
+/// which is the avatar's root and the entity that positions it, so its root
+/// ancestor is the one to move.
 fn apply_drag_move_vrm(
     trigger: On<Pointer<Drag>>,
     mut transforms: Query<&mut Transform>,

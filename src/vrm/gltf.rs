@@ -5,11 +5,14 @@
 //!
 //! The point of the extension handler is that every VRM-specific component is
 //! written into the scene [`WorldAsset`](bevy::world_serialization::WorldAsset)
-//! *while the file loads*, so a `SceneRoot` of a `.vrm` is born initialized
-//! instead of being patched over several frames. `bevy_gltf` calls
-//! `on_scene_completed` at `crates/bevy_gltf/src/loader/mod.rs:1112-1120` and
-//! only then freezes the world with `WorldAsset::new(world)` at `:1122`, which
-//! is what makes writing into `scene_world` legal.
+//! *while the file loads*, instead of being patched in over several runtime
+//! frames. `bevy_gltf` calls `on_scene_completed` at
+//! `crates/bevy_gltf/src/loader/mod.rs:1112-1120` and only then freezes the
+//! world with `WorldAsset::new(world)` at `:1122`, which is what makes writing
+//! into `scene_world` legal. A scene carries the crate-private `VrmSceneRoot`
+//! marker, and the entity spawned with
+//! [`VrmHandle`](crate::prelude::VrmHandle) binds that data onto itself and
+//! becomes the public, initialized VRM root.
 //!
 //! # Exactly one loader claims `.vrm`
 //!
@@ -17,7 +20,7 @@
 //! and it is added by this plugin. Bevy's `AssetServer` resolves a loader by the
 //! asset's [`TypeId`] first and only then by extension, so
 //! `asset_server.load("….vrm")` lands here and the scene comes out a
-//! [`Gltf`](bevy::gltf::Gltf) born initialized.
+//! [`Gltf`](bevy::gltf::Gltf) whose VRM components are baked in.
 //!
 //! # `.vrma` is *not* claimed
 //!
@@ -59,6 +62,7 @@ pub mod prelude {
     };
 }
 
+use bevy::animation::{AnimatedBy, AnimationTargetId};
 use bevy::app::AnimationSystems;
 use bevy::asset::io::Reader;
 use bevy::asset::{AssetApp, AssetLoader, LoadContext};
@@ -82,6 +86,7 @@ use crate::prelude::{
 use crate::system_set::VrmSystemSets;
 use crate::vrm::gltf::handler::VrmExtensionHandler;
 use crate::vrm::humanoid_bone::register_bone_components;
+use crate::vrm::instance::VrmSceneRoot;
 
 /// Registers the VRM extension handler and the `.vrm` asset loader.
 ///
@@ -188,7 +193,22 @@ impl Plugin for VrmGltfPlugin {
             .register_type::<EffectiveExpressionWeights>()
             .register_type::<ExpressionMorphBinds>()
             .register_type::<ExpressionSettings>()
-            .register_type::<MorphBind>();
+            .register_type::<MorphBind>()
+            // The private marker baked onto the scene root by
+            // `handler::scene::mark_initialized`. An unregistered component is
+            // dropped by `ReflectComponent::apply_or_insert_mapped` during scene
+            // instantiation, so the attach observer would never see it.
+            .register_type::<VrmSceneRoot>()
+            // The animation types `handler::scene` writes onto the root bone and
+            // the scene root (`AnimationPlayer`, `AnimatedBy`, and one
+            // `AnimationTargetId` per humanoid node). Bevy registers none of these
+            // in `AnimationPlugin`, so a `.vrm` scene would panic the
+            // `WorldInstance` spawner without this. Double registration is a
+            // no-op.
+            .register_type::<AnimationPlayer>()
+            .register_type::<AnimationTransitions>()
+            .register_type::<AnimatedBy>()
+            .register_type::<AnimationTargetId>();
 
         // The bone markers written on the bone entities and the
         // `<Bone>BoneEntity` holders written on the scene root

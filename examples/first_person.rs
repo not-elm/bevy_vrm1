@@ -35,8 +35,8 @@ struct FirstPersonMode {
     saved_camera: Option<Transform>,
 }
 
-/// The avatar's head bone, published when `configure` marks the VRM root and
-/// read by [`attach_head_camera`].
+/// The avatar's head bone, published once the avatar is `Initialized` and read
+/// by [`attach_head_camera`].
 #[derive(Resource, Default)]
 struct HeadBone(Option<Entity>);
 
@@ -107,25 +107,32 @@ fn spawn_main_camera(mut commands: Commands) {
     ));
 }
 
-fn spawn_avatar(mut commands: Commands) {
-    // First-person needs nothing at load time, so `configure` only marks the root
-    // for the systems below. This is where an app would split layers or move
-    // meshes instead.
-    spawn_vrm(&mut commands, "vrm/AliciaSolid.vrm", |root| {
-        root.insert(Avatar);
-    });
+fn spawn_avatar(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+) {
+    // First-person needs nothing at load time, so the marker is enough: the
+    // scene binds itself to this entity and [`attach_head_camera`] waits for
+    // `Initialized`. This is where an app would split layers or move meshes
+    // instead.
+    commands.spawn((
+        VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
+        Avatar,
+        Transform::default(),
+    ));
 }
 
-/// Attaches a picture-in-picture camera to the head bone of a freshly configured
-/// avatar.
+/// Attaches a picture-in-picture camera to the head bone of a freshly
+/// initialized avatar.
 ///
-/// The head bone is found *inside that avatar*, so the lookup is scoped by
-/// `ChildSearcher` to the root `configure` marked, rather than by a global search
-/// over every `VrmBone` in the world.
+/// `Added<Initialized>` is the first readiness of the avatar, so the scene and
+/// its bones exist by the time this runs. The head bone is found *inside that
+/// avatar*, so the lookup is scoped by `ChildSearcher` to the avatar root,
+/// rather than by a global search over every `VrmBone` in the world.
 fn attach_head_camera(
     mut commands: Commands,
     mut head: ResMut<HeadBone>,
-    avatars: Query<Entity, Added<Avatar>>,
+    avatars: Query<Entity, (With<Avatar>, Added<Initialized>)>,
     searcher: ChildSearcher,
 ) {
     for avatar in &avatars {

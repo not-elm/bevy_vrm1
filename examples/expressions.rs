@@ -11,17 +11,19 @@
 //! - 8: ee lip-sync (`ModifyExpressions::mouth` — resets other vowels)
 //! - 0: clear all expressions (return to VRMA control)
 //!
-//! `configure` marks the VRM root, which is what the triggers below are aimed
-//! at: `SetExpressions` and `ModifyExpressions` are entity events, so they need
-//! the avatar's own entity, and the closure is where an app gets it.
+//! The avatar is spawned with [`VrmHandle`] on the entity that *is* the VRM
+//! root, so the triggers below are aimed directly at an entity the app owns:
+//! `SetExpressions` and `ModifyExpressions` are entity events, and the marker
+//! component goes on the same spawn.
 //!
-//! # Known gap
+//! The triggers write the root's `VrmExpressionWeights`, which
+//! `apply_expression_morph_binds` (scheduled by `VrmGltfPlugin`) distributes
+//! into the meshes' morph targets in the same frame.
 //!
-//! The triggers read the `ExpressionEntityMap` of the root, and only the legacy
-//! loader builds that map and the per-expression entities it points at, so the
-//! keys currently do nothing. What the pipeline does write - `VrmExpressionWeights`,
-//! `ExpressionMorphBinds` and `ExpressionSettings`, all on the same root - is read
-//! by `apply_expression_morph_binds`, which no plugin schedules yet.
+//! A trigger fired before the root is `Initialized` is still a no-op: the root
+//! has no `VrmExpressionWeights` until the scene is bound, and these events are
+//! not buffered. To set an initial expression, wait for readiness with a scoped
+//! `On<Insert, Initialized>` observer.
 
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
@@ -59,10 +61,15 @@ fn spawn_camera(mut commands: Commands) {
     ));
 }
 
-fn spawn_avatar(mut commands: Commands) {
-    spawn_vrm(&mut commands, "vrm/Elmer.vrm", |root| {
-        root.insert(Avatar);
-    });
+fn spawn_avatar(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+) {
+    commands.spawn((
+        VrmHandle(asset_server.load("vrm/Elmer.vrm")),
+        Avatar,
+        Transform::default(),
+    ));
 }
 
 fn control_expressions(

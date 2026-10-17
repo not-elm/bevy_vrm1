@@ -23,7 +23,7 @@ This crate allows you to use [VRM1.0](https://vrm.dev/en/vrm/vrm_about/) and [VR
 
 ### Loading
 
-A `.vrm` loads through the stock Bevy glTF loader. `VrmGltfPlugin` claims the `vrm` file extension and writes every VRM component into the scene asset **while the file loads**, so an instantiated avatar is already initialized and there is nothing left to do at runtime. `VrmGltfPlugin` has to be added after `DefaultPlugins`, because it registers its handler in a resource `GltfPlugin` prepares:
+A `.vrm` loads through the stock Bevy glTF loader. `VrmGltfPlugin` claims the `vrm` file extension and writes every VRM component into the scene asset **while the file loads**; those handler computations stay at load time, and a thin scene-ready step binds the root data onto the entity your app spawned. `VrmGltfPlugin` has to be added after `DefaultPlugins`, because it registers its handler in a resource `GltfPlugin` prepares:
 
 ```rust
 use bevy::prelude::*;
@@ -38,17 +38,33 @@ fn main() {
 
 `VrmPlugin` is the runtime half — spring bones, gaze control, expressions, node constraints and `MToon` rendering — and `VrmaPlugin` is added on top only when you want `.vrma` playback.
 
-`spawn_vrm` is the supported way to put an avatar into a scene. The scene is instantiated asynchronously, so the entity that carries the avatar's components is *not* the entity the spawn creates; `spawn_vrm` resolves it and hands it to your closure:
+Spawn an avatar with `VrmHandle`, which wraps the `Handle<Gltf>` the load returns, stays on the entity after it is ready, and requires a `Transform` (and `Visibility`). The entity you spawn **is** the VRM root: it receives `Initialized` and every VRM root component once the scene is bound, so put your own components on the same spawn:
 
 ```rust
-fn spawn_avatar(mut commands: Commands) {
-    spawn_vrm(&mut commands, "vrm/Elmer.vrm", |root| {
-        root.insert(LookAt::Cursor);
-    });
+fn spawn_avatar(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn((
+        VrmHandle(asset_server.load("vrm/Elmer.vrm")),
+        LookAt::Cursor,
+        Transform::from_xyz(0.0, 0.0, 1.0),
+    ));
 }
 ```
 
-If you would rather own the entity yourself, spawn the scene as a `WorldAssetRoot` — it is the same thing `spawn_vrm` does:
+That entity keeps its id, user controls such as `LookAt` and `BodyTracking`, and user-created children when the `.vrm` is hot-reloaded or its handle is replaced. File-derived root data, including `LookAtProperties`, expression settings and bone holders, is refreshed on each attachment. Apply overrides to that data in an `On<Insert, Initialized>` observer after the binding finishes. `.vrma` can be spawned as a child in the same call:
+
+```rust
+fn spawn_avatar(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands
+        .spawn(VrmHandle(asset_server.load("vrm/Elmer.vrm")))
+        .with_children(|avatar| {
+            avatar.spawn(VrmaHandle(asset_server.load("vrma/VRMA_01.vrma")));
+        });
+}
+```
+
+Readiness is plain Bevy. A scoped `On<Insert, Initialized>` observer sees every successful attachment, including hot reloads and handle swaps. `Added<Initialized>` detects additions of the marker, including when it is removed during invalidation and added again later. Expression triggers aimed at a root without expression data are not buffered. While a replacement asset loads, the last valid rig remains active; a failed or scene-less replacement ends the pending request without removing that rig.
+
+If you would rather own the scene spawn yourself, spawn a `WorldAssetRoot` instead — the scene is instantiated asynchronously and the VRM root is then a **child** of the entity you spawned. `RequestDetachVrm` accepts either that child after readiness or the scene owner, including cancellation before readiness. The child and its user-created descendants share the scene instance's lifetime:
 
 ```rust
 fn spawn_avatar(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -57,8 +73,6 @@ fn spawn_avatar(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 }
 ```
-
-Either way the VRM root is a **child** of the entity you spawned, and it is the entity carrying `Vrm` and `Initialized`.
 
 #### examples
 

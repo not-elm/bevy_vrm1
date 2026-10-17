@@ -611,12 +611,13 @@ fn setup_animation(
 /// * [`track_body_tracking`](crate::vrm::body_tracking) needs
 ///   [`HeadBoneEntity`](crate::prelude::HeadBoneEntity) and optionally the
 ///   neck / chest / spine holders (`src/vrm/body_tracking.rs:258-261`);
-/// * the first-person auto split walks up to `<Vrm, HeadBoneEntity>` to find the
-///   head subtree (`src/vrm/first_person.rs:256`, `:358-370`).
 ///
-/// Everything else they need is already here — [`Vrm`] and
-/// [`Initialized`](crate::vrm::Initialized) on the root, and the rest poses from
-/// [`insert_rest_transforms`] on the bones.
+/// The first-person auto split is a separate load-time step: it resolves the
+/// head subtree from the document's node indices rather than these holders.
+///
+/// The rest poses from [`insert_rest_transforms`] are already on the bones;
+/// [`Vrm`] and [`Initialized`](crate::vrm::Initialized) are added by the
+/// scene-ready binding after the holders reach the runtime root.
 ///
 /// # Why the mapping is read off `VrmBone`, not off `bone_nodes`
 ///

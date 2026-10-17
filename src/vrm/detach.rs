@@ -25,26 +25,28 @@
 use crate::vrm::body_tracking::{BodyTracking, SmoothedGaze};
 use crate::vrm::components::{PendingNodeConstraint, VrmHeadOnly, VrmNodeConstraint, VrmNodeIndex};
 use crate::vrm::instance::{
-    PendingVrmScene, VrmGeneration, VrmHandle, VrmInstanceState, VrmSceneRoot, remove_root_data,
+    PendingVrmScene, VrmGeneration, VrmHandle, VrmInstanceState, VrmSceneRoot, instance_entities,
+    remove_root_data,
 };
 use crate::vrm::look_at::LookAt;
 use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
 use crate::vrm::{Initialized, RestGlobalTransform, RestTransform, Vrm, VrmBone};
-use crate::vrma::{Vrma, VrmaHandle};
+use crate::vrma::{VrmAnimationGraphState, Vrma, VrmaHandle};
 use bevy::prelude::*;
-use bevy::world_serialization::WorldAssetRoot;
+use bevy::world_serialization::{WorldAssetRoot, WorldInstance, WorldInstanceSpawner};
 
 /// Triggers VRM detachment on the target entity.
 ///
 /// Removes every VRM component and despawns the child hierarchy, leaving the
 /// target entity itself alive.
 ///
-/// Trigger it on the VRM root:
+/// Trigger it on:
 ///
 /// * a [`VrmHandle`]-managed avatar — the entity the application spawned, which
 ///   is what the crate's spawn form returns;
-/// * a raw `WorldAssetRoot(..)` spawn whose instance is ready — the child scene
-///   root carrying [`Vrm`];
+/// * a raw `WorldAssetRoot(..)` spawn whose instance is ready — either the child
+///   scene root carrying [`Vrm`], or the owner that carries
+///   [`WorldAssetRoot`](bevy::world_serialization::WorldAssetRoot);
 /// * a raw `WorldAssetRoot(..)` spawn that has not instantiated yet — the owner
 ///   entity itself, to cancel it.
 ///
@@ -73,32 +75,17 @@ impl Plugin for VrmDetachPlugin {
     }
 }
 
-/// Which teardown a detach request maps to, decided while the entity is still in
-/// its pre-detach shape.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum DetachKind {
-    /// A [`VrmHandle`]-managed avatar: the target is the VRM root the
-    /// application owns.
-    Managed,
-    /// A raw `WorldAssetRoot` instance already attached: the target is the child
-    /// scene root carrying [`Vrm`].
-    RawReady,
-    /// A raw `WorldAssetRoot` instance not yet spawned: the target is the owner.
-    RawPending,
-}
-
 fn apply_detach_vrm(
     trigger: On<RequestDetachVrm>,
     managed: Query<(), With<VrmHandle>>,
-    raw_ready: Query<(), With<Vrm>>,
-    // A raw owner before the instance arrives: it has the root to remove, and is
-    // neither a managed avatar nor a `.vrma` (which also uses `WorldAssetRoot`).
-    raw_pending: Query<
+    vrm_root: Query<(), With<Vrm>>,
+    // A raw `WorldAssetRoot` owner. Excludes a `.vrma` root, which also carries a
+    // `WorldAssetRoot` but is not a VRM and is not this event's teardown.
+    raw_owner: Query<
         (),
         (
             With<WorldAssetRoot>,
             Without<VrmHandle>,
-            Without<Vrm>,
             Without<Vrma>,
             Without<VrmaHandle>,
         ),
@@ -106,34 +93,12 @@ fn apply_detach_vrm(
     mut commands: Commands,
 ) {
     let entity = trigger.event_target();
-    let kind = if managed.contains(entity) {
-        DetachKind::Managed
-    } else if raw_ready.contains(entity) {
-        DetachKind::RawReady
-    } else if raw_pending.contains(entity) {
-        DetachKind::RawPending
-    } else {
-        return;
-    };
-    // Run against the world directly: `remove_root_data` is an exclusive helper
-    // shared with the attach, and the teardown must see the entity's current
-    // children rather than the observer's snapshot.
-    commands.queue(move |world: &mut World| detach(world, entity, kind));
-}
-
-/// Applies the teardown chosen by [`apply_detach_vrm`].
-fn detach(
-    world: &mut World,
-    entity: Entity,
-    kind: DetachKind,
-) {
-    if world.get_entity(entity).is_err() {
-        return;
-    }
-    match kind {
-        DetachKind::Managed => detach_managed(world, entity),
-        DetachKind::RawReady => detach_raw_ready(world, entity),
-        DetachKind::RawPending => detach_raw_pending(world, entity),
+    if managed.contains(entity) {
+        commands.queue(move |world: &mut World| detach_managed(world, entity));
+    } else if vrm_root.contains(entity) || raw_owner.contains(entity) {
+        // Both the child VRM root and the raw owner resolve their owner and rig
+        // against the live world inside the command.
+        commands.queue(move |world: &mut World| detach_raw(world, entity));
     }
 }
 
@@ -144,11 +109,42 @@ fn detach(
 /// markers and the identity handle go. Components the application put on the
 /// entity itself (`Name`, `Transform`, `LookAt`, `BodyTracking`, …) are left
 /// alone: the entity keeps its identity and can be re-attached.
+///
+/// The generation is dropped here, unlike on an invalidation: every child of the
+/// entity is despawned, so a preserved `.vrma` cannot survive to be confused by
+/// a reset counter. Any instance node the application reparented out of the
+/// hierarchy is despawned too (captured before the `WorldAssetRoot` hook
+/// unregisters the instance), and the private [`VrmAnimationGraphState`] — whose
+/// clip handles are derived data of this rig — is removed with it.
 fn detach_managed(
     world: &mut World,
     entity: Entity,
 ) {
+    if world.get_entity(entity).is_err() {
+        return;
+    }
+    // Revalidate the shape the event was classified as: a stale event must not
+    // tear down an entity that is no longer the managed avatar (already detached,
+    // or re-created as something else).
+    if world.get::<VrmHandle>(entity).is_none() {
+        return;
+    }
+    // Capture the instance's tracked entities *before* `WorldAssetRoot` is
+    // removed: its `on_remove` unregisters the instance, after which the spawner
+    // can no longer report them. This is what lets a managed node the
+    // application reparented out of the hierarchy be despawned too.
+    let tracked = world
+        .get::<WorldInstance>(entity)
+        .map(|instance| **instance)
+        .map(|instance_id| instance_entities(world, instance_id))
+        .unwrap_or_default();
+
     remove_root_data(world, entity);
+    // `WorldAssetRoot` must be removed while `WorldInstance` is still present:
+    // its `on_remove` hook reads the latter to unregister the instance from the
+    // spawner. Removing it first is what keeps the spawner from leaking the
+    // instance.
+    world.entity_mut(entity).remove::<WorldAssetRoot>();
     world
         .entity_mut(entity)
         .remove::<Vrm>()
@@ -156,34 +152,178 @@ fn detach_managed(
         .remove::<VrmGeneration>()
         .remove::<VrmInstanceState>()
         .remove::<PendingVrmScene>()
-        // Dropping the handle ends the managed identity; dropping
-        // `WorldAssetRoot` runs bevy's `on_remove` hook, which unregisters the
-        // instance from its `WorldInstanceSpawner`.
         .remove::<VrmHandle>()
-        .remove::<WorldAssetRoot>();
+        // The engine never removes `WorldInstance` itself; without this the owner
+        // would keep naming an instance that no longer exists.
+        .remove::<WorldInstance>()
+        // The private graph state persists across an *invalidation* so a reload
+        // can rebuild into it, but a full detach drops it: its clip handles are
+        // derived data of the rig that is being torn down.
+        .remove::<VrmAnimationGraphState>();
     despawn_children(world, entity);
+    // `despawn_children` already despawned the owner's own hierarchy; this only
+    // catches tracked scene nodes that were reparented away. Dead ids are skipped.
+    for tracked_entity in tracked {
+        if tracked_entity == entity {
+            continue;
+        }
+        if world.get_entity(tracked_entity).is_ok() {
+            world.entity_mut(tracked_entity).despawn();
+        }
+    }
 }
 
-/// Detaches a raw `WorldAssetRoot` instance that is already attached.
+/// Detaches a raw `WorldAssetRoot` spawn, whether the request named the child
+/// VRM root or the owner.
 ///
-/// The target is the child scene root carrying [`Vrm`], so its rig is stripped
-/// and its children despawned. [`WorldAssetRoot`] lives on the owner, found
-/// through [`ChildOf`], and is removed there to unregister the instance; a
-/// hand-built scene that carries it on the target directly is covered too.
-fn detach_raw_ready(
+/// The true instance owner is found through [`WorldInstance`] /
+/// [`WorldInstanceSpawner`] rather than by trusting an arbitrary [`ChildOf`], so
+/// an unrelated avatar or scene in the ancestry is never unregistered. The shape
+/// is re-validated against the live world first: a stale event must not tear down
+/// a rig that has since become a managed avatar or a `.vrma`, nor touch an
+/// unrelated ancestor that merely happens to carry a `WorldAssetRoot`.
+fn detach_raw(
     world: &mut World,
     entity: Entity,
 ) {
-    if let Some(owner) = world
-        .get::<ChildOf>(entity)
-        .map(|child_of| child_of.parent())
-        && owner != entity
+    if world.get_entity(entity).is_err() {
+        return;
+    }
+    // Revalidate the raw shape the event was classified as.
+    if world.get::<VrmHandle>(entity).is_some()
+        || world.get::<Vrma>(entity).is_some()
+        || world.get::<VrmaHandle>(entity).is_some()
     {
+        return;
+    }
+    let entity_is_root = world.get::<Vrm>(entity).is_some();
+    let entity_is_owner = world.get::<WorldAssetRoot>(entity).is_some();
+    if !entity_is_root && !entity_is_owner {
+        return;
+    }
+    // A hand-built same-entity shape carries the `WorldAssetRoot` *and* the rig
+    // on one entity: it is its own owner, so it is torn down as well instead of
+    // being left registered and half-stripped.
+    let (owner, root) = if entity_is_root {
+        let owner = if entity_is_owner {
+            Some(entity)
+        } else {
+            find_raw_owner(world, entity)
+        };
+        (owner, Some(entity))
+    } else {
+        // The request named the owner: find the VRM root of its live instance, so
+        // a ready spawn is torn down too instead of being left as an orphan.
+        (Some(entity), find_raw_instance_root(world, entity))
+    };
+
+    // Collect the instance's tracked entities *before* `WorldAssetRoot` is
+    // removed: its `on_remove` unregisters the instance, after which the spawner
+    // can no longer report them. Capturing ids first lets a node the application
+    // reparented out of the hierarchy be cleaned up too, without despawning
+    // anything the instance does not own.
+    let tracked = owner
+        .and_then(|owner| world.get::<WorldInstance>(owner).map(|instance| **instance))
+        .map(|instance_id| instance_entities(world, instance_id))
+        .unwrap_or_default();
+
+    if let Some(owner) = owner
+        && world.get_entity(owner).is_ok()
+    {
+        // Removal order matters: `WorldAssetRoot`'s `on_remove` reads
+        // `WorldInstance` to unregister the instance.
         world.entity_mut(owner).remove::<WorldAssetRoot>();
     }
-    remove_root_data(world, entity);
+    if let Some(root) = root
+        && world.get_entity(root).is_ok()
+    {
+        strip_raw_root(world, root);
+    }
+    // `strip_raw_root` already despawned the root's own hierarchy; this only
+    // catches tracked nodes that were reparented away. Dead ids are skipped.
+    for tracked_entity in tracked {
+        if Some(tracked_entity) == root {
+            continue;
+        }
+        if world.get_entity(tracked_entity).is_ok() {
+            world.entity_mut(tracked_entity).despawn();
+        }
+    }
+    if let Some(owner) = owner
+        && world.get_entity(owner).is_ok()
+    {
+        world.entity_mut(owner).remove::<WorldInstance>();
+    }
+}
+
+/// Finds the [`WorldAssetRoot`] owner of the raw instance that `root` belongs to.
+///
+/// Walks the ancestors and accepts only one that actually owns `root`'s instance.
+/// The nearest-ancestor fallback is used **only when there is no
+/// [`WorldInstanceSpawner`]** at all (a hand-built scene, where there is no
+/// bookkeeping to verify against). With a spawner present but no
+/// [`WorldInstance`] on an ancestor, that ancestor cannot be verified as the
+/// owner, so it is skipped rather than trusting an unrelated nested avatar.
+fn find_raw_owner(
+    world: &World,
+    root: Entity,
+) -> Option<Entity> {
+    let spawner = world.get_resource::<WorldInstanceSpawner>();
+    let mut current = root;
+    while let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) {
+        if world.get::<WorldAssetRoot>(parent).is_some() {
+            match (
+                spawner,
+                world
+                    .get::<WorldInstance>(parent)
+                    .map(|instance| **instance),
+            ) {
+                (Some(spawner), Some(instance_id)) => {
+                    if spawner
+                        .iter_instance_entities(instance_id)
+                        .any(|entity| entity == root)
+                    {
+                        return Some(parent);
+                    }
+                    // A `WorldAssetRoot` ancestor that does not own this instance:
+                    // keep walking instead of trusting it.
+                }
+                // No spawner at all: the nearest `WorldAssetRoot` ancestor is the
+                // owner by construction.
+                (None, _) => return Some(parent),
+                // A spawner is present but this ancestor has no instance metadata:
+                // it cannot be verified as the owner, so do not touch it.
+                (Some(_), None) => {}
+            }
+        }
+        current = parent;
+    }
+    None
+}
+
+/// Finds the [`Vrm`] root of `owner`'s live instance, if it has spawned.
+fn find_raw_instance_root(
+    world: &World,
+    owner: Entity,
+) -> Option<Entity> {
+    let spawner = world.get_resource::<WorldInstanceSpawner>()?;
+    let instance_id = world
+        .get::<WorldInstance>(owner)
+        .map(|instance| **instance)?;
+    spawner
+        .iter_instance_entities(instance_id)
+        .find(|entity| world.get::<Vrm>(*entity).is_some())
+}
+
+/// Strips the VRM rig off a raw instance's child scene root and despawns its
+/// children, leaving the scene root itself alive as a plain scene.
+fn strip_raw_root(
+    world: &mut World,
+    root: Entity,
+) {
+    remove_root_data(world, root);
     world
-        .entity_mut(entity)
+        .entity_mut(root)
         .remove::<Vrm>()
         .remove::<Initialized>()
         .remove::<VrmSceneRoot>()
@@ -201,21 +341,11 @@ fn detach_raw_ready(
         .remove::<SpringRoot>()
         .remove::<SpringJointProps>()
         .remove::<SpringJointState>()
-        .remove::<VrmHeadOnly>();
-    despawn_children(world, entity);
-}
-
-/// Cancels a raw `WorldAssetRoot` spawn that has not instantiated yet.
-///
-/// There is no rig to strip; removing [`WorldAssetRoot`] unregisters the spawn.
-/// Bevy keeps a queued spawn alive across `unregister_instance`, so a late
-/// instance is cleaned up by the `WorldInstanceReady` observer in
-/// [`crate::vrm::instance`] instead.
-fn detach_raw_pending(
-    world: &mut World,
-    entity: Entity,
-) {
-    world.entity_mut(entity).remove::<WorldAssetRoot>();
+        .remove::<VrmHeadOnly>()
+        // The private VRMA graph state persisted on this raw Vrm root is derived
+        // data of the rig, so it goes with a full detach too.
+        .remove::<VrmAnimationGraphState>();
+    despawn_children(world, root);
 }
 
 /// Despawns all direct children of `entity`.
@@ -859,6 +989,27 @@ mod tests {
             app.world().get::<VrmBone>(node).is_some(),
             "a node without `Vrm` is not a VRM root and must not be stripped"
         );
+        success!()
+    }
+
+    /// A hand-built shape that carries the rig *and* its own `WorldAssetRoot` on
+    /// one entity must have that registration removed too, not left half-stripped.
+    #[test]
+    fn a_same_entity_raw_owner_is_removed() -> TestResult {
+        let mut app = setup_app();
+        let entity = app
+            .world_mut()
+            .spawn((Vrm, Initialized, WorldAssetRoot(Handle::default())))
+            .id();
+
+        trigger_detach(&mut app, entity);
+
+        assert!(app.world().get::<Vrm>(entity).is_none());
+        assert!(
+            app.world().get::<WorldAssetRoot>(entity).is_none(),
+            "the same-entity root registration is removed too"
+        );
+        assert!(app.world().get_entity(entity).is_ok());
         success!()
     }
 }

@@ -475,7 +475,7 @@ mod tests {
     /// `WorldSerializationPlugin` is deliberately not used: its `Plugin` impl is
     /// `#[cfg(feature = "serialize")]`, which is not stable across this crate's
     /// builds. The three things it would do here are done explicitly instead —
-    /// the same trade-off `crate::vrm::spawn`'s tests make.
+    /// the same trade-off `crate::vrm::instance`'s tests make.
     fn spawner_app() -> App {
         let mut app = test_app();
         app.init_asset::<WorldAsset>()
@@ -538,8 +538,8 @@ mod tests {
                 spawner.spawn_as_child(scene.clone(), first_parent);
                 spawner.spawn_as_child(scene.clone(), second_parent);
             });
-        // The spawner runs on `Update`; two frames is what `crate::vrm::spawn`'s
-        // tests allow for the same call.
+        // This harness runs the spawner on `Update`; allow its deferred ready
+        // event to be delivered before inspecting the instances.
         for _ in 0..2 {
             app.update();
         }

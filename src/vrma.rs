@@ -3,14 +3,18 @@ mod gltf;
 mod initialize;
 mod loader;
 
+#[cfg(test)]
+mod integration_tests;
+
 use crate::macros::{entity_component, marker_component};
 use crate::vrma::animation::VrmaAnimationPlayersPlugin;
 use crate::vrma::initialize::VrmaInitializePlugin;
 use crate::vrma::loader::{VrmaAsset, VrmaLoaderPlugin};
-use bevy::animation::RepeatAnimation;
-use bevy::animation::graph::AnimationMask;
+use bevy::animation::ActiveAnimation;
+use bevy::animation::graph::AnimationGraph;
 use bevy::app::App;
 use bevy::asset::Handle;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -52,8 +56,10 @@ impl Plugin for VrmaPlugin {
             .register_type::<VrmAnimationNodeIndex>()
             .register_type::<VrmAnimationSourceClip>()
             .register_type::<VrmaRetargetedFor>()
+            .register_type::<VrmaRetargetPending>()
             .register_type::<VrmaLoaded>()
             .register_type::<VrmaNeedsRestore>()
+            .register_type::<VrmAnimationGraphState>()
             .register_type::<VrmaPlaybackState>();
     }
 }
@@ -145,15 +151,19 @@ pub(crate) struct VrmAnimationNodeIndex(pub AnimationNodeIndex);
 #[reflect(Component)]
 pub(crate) struct VrmAnimationSourceClip(pub Handle<AnimationClip>);
 
-/// The rig generation the working clip's curves were retargeted and baked for.
+/// The rig generation the working clip's curves were retargeted and baked for,
+/// together with the avatar that owns it.
 ///
-/// Absent means "never retargeted". A value different from the avatar's current
-/// generation (see `crate::vrm::instance::VrmGeneration`) tells the graph build
-/// to clone [`VrmAnimationSourceClip`] again before retargeting. A hand-built
-/// VRM without that component is generation `0`.
-#[derive(Debug, Component, Reflect, Copy, Clone, Default, PartialEq, Eq)]
+/// Absent means "never retargeted". A value different from the current
+/// generation *or* owner tells the graph build to clone
+/// [`VrmAnimationSourceClip`] again before retargeting. The owner is part of the
+/// stamp because a generation counter alone aliases: a `.vrma` reparented under
+/// a second avatar that also happens to be generation `1` would otherwise look
+/// already retargeted, and its working clip would stay baked for the previous
+/// rig's rest pose. A hand-built VRM without `VrmGeneration` is generation `0`.
+#[derive(Debug, Component, Reflect, Copy, Clone, PartialEq, Eq)]
 #[reflect(Component)]
-pub(crate) struct VrmaRetargetedFor(pub u64);
+pub(crate) struct VrmaRetargetedFor(pub u64, pub Entity);
 
 /// Marker set on a VRMA once its first [`LoadedVrma`] has been emitted.
 ///
@@ -169,45 +179,90 @@ pub(crate) struct VrmaLoaded;
 #[reflect(Component)]
 pub(crate) struct VrmaNeedsRestore;
 
-/// A private snapshot of a VRMA's live playback and graph mask.
+/// A VRMA whose working clip has not yet been retargeted for the current rig.
 ///
-/// The player and graph live on the rig and die with it, so what they were
-/// doing is captured while they still exist and re-applied after a replacement.
-/// `active` is authoritative — written by [`PlayVrma`](crate::prelude::PlayVrma)
-/// and [`StopVrma`](crate::prelude::StopVrma) — while the remaining fields are
-/// refreshed from the live animation every frame.
-#[derive(Debug, Component, Reflect, Clone)]
+/// Set by the graph build when it (re)clones the working clip, cleared by the
+/// retarget once the curves are moved. The restore is gated on its absence, so
+/// an unretargeted (source-space) clip is never played, and a retry asks for the
+/// build again once the rig is reachable.
+#[derive(Debug, Component, Reflect, Default)]
+#[reflect(Component)]
+pub(crate) struct VrmaRetargetPending;
+
+/// The per-avatar animation graph and the playback bookkeeping that must outlive
+/// a rig.
+///
+/// Stored on the stable VRM root, never on the root bone: the graph asset is
+/// reused across rebuilds so every [`VrmAnimationNodeIndex`] stays valid (node
+/// indices are stable for the asset's whole life and are never remapped), and
+/// the [`AnimationTransitions`] snapshot lets a future
+/// [`PlayVrma`](crate::prelude::PlayVrma) fade out the restored main clip
+/// instead of leaving it stuck at full weight.
+///
+/// Stability does **not** mean a retired clip is retained: a `.vrma` that left
+/// the avatar has its node made inert and its clip handle released, the node is
+/// only kept so ids never shift.
+#[derive(Component, Reflect, Clone)]
+#[reflect(Component)]
+pub(crate) struct VrmAnimationGraphState {
+    /// The one graph asset this avatar plays from. A rebuild mutates this asset
+    /// in place (updating clip handles and appending nodes), it never replaces
+    /// it.
+    pub graph: Handle<AnimationGraph>,
+    /// The live [`AnimationTransitions`] of the current root bone, snapshotted
+    /// every frame and restored onto a freshly attached root bone.
+    pub transitions: AnimationTransitions,
+    /// The root bone the snapshot was taken from, used to tell a fresh rig from
+    /// a same-rig rebuild.
+    pub root_bone: Entity,
+    /// Which graph node each `.vrma` owning a node here owns, keyed by that
+    /// child's entity.
+    ///
+    /// Ownership cannot be read off the `.vrma`'s own
+    /// [`VrmAnimationNodeIndex`]: a `.vrma` reparented under another avatar
+    /// still carries the id it owned elsewhere, and reusing that id in the new
+    /// graph would overwrite a clip the new avatar owns. Membership is tracked
+    /// here, per entity, so a node is only ever reused by the child that created
+    /// it. Entries are kept for retired children so a re-added `.vrma` gets its
+    /// own node back rather than a shifted one.
+    pub(crate) nodes: HashMap<Entity, AnimationNodeIndex>,
+}
+
+impl Default for VrmAnimationGraphState {
+    fn default() -> Self {
+        Self {
+            graph: Handle::default(),
+            transitions: AnimationTransitions::default(),
+            root_bone: Entity::PLACEHOLDER,
+            nodes: HashMap::default(),
+        }
+    }
+}
+
+/// A private snapshot of a VRMA's live playback.
+///
+/// The player lives on the rig and dies with it, so what it was doing is
+/// captured while it still exists and re-applied after a replacement. `active`
+/// is authoritative — written by [`PlayVrma`](crate::prelude::PlayVrma) and
+/// [`StopVrma`](crate::prelude::StopVrma) — while `animation` is refreshed from
+/// the live player every frame the rig exists.
+#[derive(Debug, Component, Reflect, Clone, Default)]
 #[reflect(Component)]
 pub(crate) struct VrmaPlaybackState {
     /// Whether the clip has been started and not stopped.
+    ///
+    /// Kept apart from `animation` because a clip can be active before the rig's
+    /// player has ever been observed (a `PlayVrma` that arrived in the same
+    /// frame as a replacement), and because a stopped clip has no live
+    /// `ActiveAnimation` to read.
     pub active: bool,
-    /// Whether the live animation was paused.
-    pub paused: bool,
-    /// Playback position in seconds.
-    pub seek_time: f32,
-    /// Playback speed multiplier.
-    pub speed: f32,
-    /// Repetition mode.
-    pub repeat: RepeatAnimation,
-    /// Active animation weight.
-    pub weight: f32,
-    /// The graph node's mask-out bitfield (`0` means "nothing masked out"),
-    /// as last observed.
-    pub mask: AnimationMask,
-}
-
-impl Default for VrmaPlaybackState {
-    fn default() -> Self {
-        Self {
-            active: false,
-            paused: false,
-            seek_time: 0.0,
-            speed: 1.0,
-            repeat: RepeatAnimation::Never,
-            weight: 1.0,
-            mask: 0,
-        }
-    }
+    /// A verbatim copy of the live [`ActiveAnimation`] last observed.
+    ///
+    /// `ActiveAnimation` is `Copy`, so this holds every field Bevy stores —
+    /// including the private `completions`, `elapsed`, `just_completed` and
+    /// `last_seek_time` — and the restore writes it back with a single
+    /// `*live = snapshot`, so nothing restarts or resets.
+    pub animation: Option<ActiveAnimation>,
 }
 
 /// This is a component that indicates that it is the source of retargeting.

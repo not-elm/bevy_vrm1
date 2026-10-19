@@ -3,7 +3,6 @@ mod outline_pass;
 
 use crate::prelude::*;
 use crate::vrm::mtoon::outline_pass::MToonOutlinePlugin;
-use bevy::app::App;
 use bevy::asset::{load_internal_asset, uuid_handle};
 use bevy::prelude::*;
 

@@ -8,7 +8,6 @@ use crate::vrma::{
     VrmAnimationGraphState, VrmAnimationNodeIndex, VrmaNeedsRestore, VrmaPlaybackState,
     VrmaRetargetPending,
 };
-use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle};
 use bevy::animation::{ActiveAnimation, AnimationPlayer, RepeatAnimation};
 use bevy::app::{AnimationSystems, App, Plugin, SceneSpawnerSystems, SpawnScene};
 use bevy::prelude::*;
@@ -66,14 +65,7 @@ impl Plugin for VrmaAnimationPlayPlugin {
         app.register_type::<PlayVrma>()
             .add_observer(apply_play_vrma)
             .add_observer(apply_stop_vrma)
-            // The snapshot runs after the whole frame so it holds the latest
-            // live time/speed/weight before the engine can replace the rig. The
-            // restore runs after the bake (`VrmaBake`) so the first evaluated
-            // frame of a rebuilt rig already uses destination-space curves, and
-            // before bevy evaluates the new player.
             .add_systems(Last, snapshot_vrma_playback)
-            // Capture edits made in Update before the spawner can replace and
-            // despawn the old player in this same frame.
             .add_systems(
                 SpawnScene,
                 snapshot_vrma_playback.before(SceneSpawnerSystems::WorldInstanceSpawn),
@@ -116,9 +108,7 @@ fn apply_play_vrma(
     let Ok((node_index, retarget_pending, needs_bake)) = vrmas.get(vrma_entity) else {
         return;
     };
-    // A clip that still owes a bake or a retarget carries source-space curves;
-    // starting it now would evaluate them on the rig. Record the intent and let
-    // the restore start it once the retarget has run instead.
+    // An unbaked clip is started by the restore once it is ready.
     let ready = !retarget_pending && !needs_bake;
     let live = if ready {
         play_humanoid_bone_animation(
@@ -132,21 +122,11 @@ fn apply_play_vrma(
     } else {
         None
     };
-    // The expression tracks are nodes of the same clip, so the same player and
-    // the same `repeat` drive them. What still needs doing is the neutral face
-    // the transition blends out of: without it a clip that fades in over 300 ms
-    // fades out of whatever the previous one left behind.
     reset_expression_weights(vrma_entity, &expression_registries, &mut roots, &parents);
     if trigger.reset_spring_bones {
         reset_spring_bone_velocities(*vrm_entity, &spring_roots, &mut joint_states, &childrens);
     }
     let played = live.is_some();
-    // `active` is authoritative and is what a rig replacement replays. When the
-    // clip started live, the exact `ActiveAnimation` is recorded — fading state
-    // and all — so the restore writes back what actually plays rather than
-    // resetting it to a placeholder. A deferred play (not ready yet, or a rig
-    // replaced in the same frame) has no live value and falls back to a starting
-    // placeholder.
     if let Ok(mut state) = playback.get_mut(vrma_entity) {
         state.active = true;
         state.animation = Some(live.unwrap_or_else(|| {
@@ -155,11 +135,6 @@ fn apply_play_vrma(
             animation
         }));
     }
-    // The live start is the source of truth for this frame: an already-queued
-    // restore must not replay over it and lose the transition the user asked
-    // for. Anything that could not start live — a clip that still owes a
-    // retarget/bake, or an avatar with no reachable player yet — is replayed by
-    // the restore instead.
     if played {
         commands.entity(vrma_entity).remove::<VrmaNeedsRestore>();
     } else {
@@ -190,11 +165,6 @@ fn reset_spring_bone_velocities(
     }
 }
 
-/// Starts `node_index` through the root bone's transitions and returns the live
-/// [`ActiveAnimation`] it produced, so the caller can record exactly what plays.
-///
-/// `None` when the avatar has no reachable root bone with a player and
-/// transitions, i.e. there is nothing to start.
 fn play_humanoid_bone_animation(
     vrm: Entity,
     node_index: AnimationNodeIndex,
@@ -211,14 +181,15 @@ fn play_humanoid_bone_animation(
     let Ok((_, mut player, Some(mut transitions))) = players.get_mut(root_bone) else {
         return None;
     };
-    let live = transitions.play(&mut player, node_index, transition_duration);
-    live.set_repeat(repeat);
+    let live = transitions
+        .play(&mut player, node_index, transition_duration)
+        .set_repeat(repeat);
     Some(*live)
 }
 
 fn apply_stop_vrma(
     trigger: On<StopVrma>,
-    mut players: Query<&mut AnimationPlayer>,
+    mut rig_entities: Query<&mut AnimationPlayer>,
     vrmas: Query<&VrmAnimationNodeIndex>,
     parents: Query<&ChildOf>,
     expression_registries: Query<&VrmaExpressionRegistry>,
@@ -230,9 +201,6 @@ fn apply_stop_vrma(
     let Ok(ChildOf(vrm)) = parents.get(vrma_entity) else {
         return;
     };
-    // Cleared before any readiness check: a stop issued while the rig is being
-    // replaced must not be lost and then replayed by the restore. Clearing the
-    // animation too means a stale live snapshot cannot resurrect it either.
     if let Ok(mut state) = playback.get_mut(vrma_entity) {
         state.active = false;
         state.animation = None;
@@ -240,37 +208,16 @@ fn apply_stop_vrma(
     let Ok(node_index) = vrmas.get(vrma_entity) else {
         return;
     };
-    // The player is on the avatar's root bone — the same entity
-    // `play_humanoid_bone_animation` starts it on — and the node it holds plays
-    // the bone curves *and* the expression curves of this very `.vrma`, so one
-    // `stop` covers the face as well as the body.
     if let Some(root_bone) = searcher.find_root_bone(*vrm)
-        && let Ok(mut player) = players.get_mut(root_bone)
+        && let Ok(mut player) = rig_entities.get_mut(root_bone)
     {
         player.stop(node_index.0);
     }
-    // A finished animation would otherwise leave the face frozen at its last
-    // weight, since the weight lives in a map nothing else decays.
     reset_expression_weights(vrma_entity, &expression_registries, &mut roots, &parents);
 }
 
-/// Records each VRMA's live playback and the root bone's transitions every frame.
-///
-/// A reattachment has to restore what the *old* player was doing, and the engine
-/// destroys it together with the old rig, so the snapshot must be taken while it
-/// still exists. Only an avatar with a live root-bone player is read: while a rig
-/// is being replaced there is none, and the last snapshot must survive that gap
-/// unchanged.
-///
-/// The mask is left alone: the graph asset is per avatar and persistent (see
-/// [`VrmAnimationGraphState`](crate::vrma::VrmAnimationGraphState)), so a node's
-/// mask survives a rebuild by itself and never needs to be snapshotted.
-///
-/// A node that is no longer in the player means the clip was stopped — a
-/// finished fade (`AnimationTransitions` expiry) removes it — and the snapshot
-/// records `active = false` so a later reload cannot resurrect it. A clip whose
-/// restore has not run yet is skipped: its player is half-built and must not
-/// overwrite the state that is about to be replayed.
+/// Records each VRMA's live playback and the root bone's transitions, so a
+/// rebuilt rig can restore them.
 fn snapshot_vrma_playback(
     searcher: ChildSearcher,
     avatars: Query<(Entity, &Children), With<Vrm>>,
@@ -284,16 +231,12 @@ fn snapshot_vrma_playback(
     mut states: Query<&mut VrmAnimationGraphState>,
 ) {
     for (vrm, children) in avatars.iter() {
-        // No root bone or player means the rig is absent (mid-replace): leave
-        // every snapshot exactly as the last live frame left it.
         let Some(root_bone) = searcher.find_root_bone(vrm) else {
             continue;
         };
         let Ok(player) = players.get(root_bone) else {
             continue;
         };
-        // Keep the transitions with the graph: a future `PlayVrma` must fade out
-        // the restored main clip instead of leaving it stuck at full weight.
         if let Ok(live) = transitions.get(root_bone)
             && let Ok(mut state) = states.get_mut(vrm)
         {
@@ -303,25 +246,15 @@ fn snapshot_vrma_playback(
             let Ok((Some(index), Some(mut state), pending_restore)) = vrmas.get_mut(child) else {
                 continue;
             };
-            // The player is half-built: the restore has not replayed the state
-            // yet, so reading the fresh player would clear `active` and lose the
-            // clip a frame before it is restored.
             if pending_restore {
                 continue;
             }
             match player.animation(index.0) {
                 Some(active) => {
                     state.active = true;
-                    // `ActiveAnimation` is `Copy`, so this is the whole live
-                    // state — every field, including the private progress
-                    // counters.
                     state.animation = Some(*active);
                 }
                 None => {
-                    // The node left the player. Bevy removes a faded-out clip
-                    // when the transition expires, and `stop` removes it
-                    // directly; either way the clip is no longer playing and
-                    // must not be restarted by a later reload.
                     state.active = false;
                     state.animation = None;
                 }
@@ -330,23 +263,7 @@ fn snapshot_vrma_playback(
     }
 }
 
-/// Re-applies a recorded playback to a freshly rebuilt player.
-///
-/// Queued by the graph build for every clip whose player was rebuilt (a new rig,
-/// or a node that did not exist before) and left alone on a same-rig rebuild, so
-/// a same-frame `PlayVrma`/`StopVrma`/speed change survives. The playback is
-/// restarted only for a clip recorded as active; a stopped or faded-out clip
-/// stays stopped.
-///
-/// Runs after the bake (`VrmaBake`), so no evaluated frame uses an unbaked clip,
-/// and before bevy evaluates the new player. A clip that still owes a bake
-/// (`NeedsBake`) or a retarget (`VrmaRetargetPending`) is left marked, so a
-/// source-space clip is never played and the retry can finish it first.
-///
-/// The recorded [`ActiveAnimation`] is `Copy`, so `*live = snapshot` restores
-/// *every* field — including the private `completions`, `elapsed`,
-/// `just_completed` and `last_seek_time` no setter can reach — and nothing
-/// restarts or resets.
+/// Re-applies a recorded playback to a rebuilt player once the clip is baked.
 fn restore_vrma_playback(
     mut commands: Commands,
     searcher: ChildSearcher,
@@ -367,7 +284,6 @@ fn restore_vrma_playback(
             continue;
         };
         let Some(root_bone) = searcher.find_root_bone(parent.parent()) else {
-            // The new rig is not reachable yet; retry on a later frame.
             continue;
         };
         let Ok(mut player) = players.get_mut(root_bone) else {
@@ -466,8 +382,7 @@ mod tests {
             .unwrap();
     }
 
-    /// A recycled headless app with a VRM root bone carrying a player and a
-    /// VRMA child. Returns `(app, root_bone, vrma, node)`.
+    /// Returns `(app, root_bone, vrma, node)`.
     fn reload_fixture() -> (App, Entity, Entity, AnimationNodeIndex) {
         let mut app = test_app();
         let vrm = app.world_mut().spawn(Vrm).id();
@@ -493,12 +408,7 @@ mod tests {
         (app, root_bone, vrma, node)
     }
 
-    /// The snapshot is a verbatim copy of the live [`ActiveAnimation`] and the
-    /// restore writes it back whole, so *every* field survives a rebuild —
-    /// including the private `completions`, `elapsed`, `just_completed` and
-    /// `last_seek_time` that Bevy exposes no setter for. `Debug` is the only
-    /// observable that covers the private fields, so the two are compared as
-    /// formatted values.
+    /// `Debug` is the only observable covering the private fields of `ActiveAnimation`.
     #[test]
     fn a_reload_restores_every_field_of_the_live_animation() -> TestResult {
         let mut app = test_app();
@@ -556,9 +466,6 @@ mod tests {
                 .set_seek_time(0.1)
                 .set_weight(0.7);
         }
-        // One second at speed 2.0 crosses the clip's 1.0 s duration once: the
-        // live animation now carries a completion, elapsed time and a previous
-        // seek time, none of which have setters.
         app.world_mut()
             .resource_mut::<Time>()
             .advance_by(Duration::from_secs_f32(1.0));
@@ -585,8 +492,6 @@ mod tests {
             .expect("the snapshot keeps the whole live animation");
         assert_eq!(format!("{snapshot:?}"), format!("{live:?}"));
 
-        // A brand new root bone with a fresh player is what a rig replacement
-        // leaves behind.
         let new_root_bone = app
             .world_mut()
             .spawn((
@@ -619,8 +524,6 @@ mod tests {
         success!()
     }
 
-    /// A clip that left the player — a finished fade or a direct `stop` — is
-    /// recorded as inactive, so a later reload does not resurrect it.
     #[test]
     fn the_snapshot_clears_a_clip_that_left_the_player() -> TestResult {
         let (mut app, root_bone, vrma, node) = reload_fixture();
@@ -628,8 +531,6 @@ mod tests {
             let mut root_bone_entity = app.world_mut().entity_mut(root_bone);
             let mut player = root_bone_entity.get_mut::<AnimationPlayer>().unwrap();
             player.play(node);
-            // `expire_completed_transitions` removes a faded-out node the same
-            // way a direct `stop` does.
             player.stop(node);
         }
         app.world_mut().entity_mut(vrma).insert(VrmaPlaybackState {
@@ -653,9 +554,6 @@ mod tests {
         success!()
     }
 
-    /// A clip whose restore has not run yet must keep its saved state: the
-    /// player is half-built, and reading it would clear the clip a frame before
-    /// the restore replays it.
     #[test]
     fn the_snapshot_keeps_a_pending_restore() -> TestResult {
         let (mut app, _root_bone, vrma, _node) = reload_fixture();
@@ -679,8 +577,6 @@ mod tests {
         success!()
     }
 
-    /// The restore waits for the bake: playing a clip that still owes a bake
-    /// would evaluate source-space curves on the first frame.
     #[test]
     fn the_restore_waits_for_the_bake() -> TestResult {
         let (mut app, root_bone, vrma, node) = reload_fixture();
@@ -712,8 +608,6 @@ mod tests {
         success!()
     }
 
-    /// A clip whose retarget is still pending must not be played: its working
-    /// clip is source-space, and the retry has to finish before the restore.
     #[test]
     fn the_restore_blocks_an_unretargeted_clip() -> TestResult {
         let (mut app, root_bone, vrma, node) = reload_fixture();
@@ -745,8 +639,6 @@ mod tests {
         success!()
     }
 
-    /// A `StopVrma` that arrives after the rebuild marked the restore but before
-    /// the restore ran must win: the clip stays stopped.
     #[test]
     fn a_stop_before_the_restore_wins() -> TestResult {
         let (mut app, root_bone, vrma, node) = reload_fixture();

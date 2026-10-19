@@ -1,14 +1,4 @@
-//! This example shows multiple directional lights on one VRM model: one circles
-//! the avatar and one swings back and forth.
-//!
-//! Neither light sets `RenderLayers` on purpose, which makes them a worked
-//! example of `VrmLightLayersPlugin` - added here, because neither `VrmPlugin`
-//! nor `VrmGltfPlugin` adds it. A light that carries no render layers at all, or
-//! the default `{0}`, is widened to `all_vrm_render_layers`: bevy drops a mesh
-//! from a light's shadow map when the two layer sets do not intersect, and
-//! `VRMC_vrm.firstPerson` puts the head meshes that `auto` splits off on the
-//! exclusive layer 1. A light whose layers are set explicitly is left exactly as
-//! it is, so such a light has to include layers 1 and 2 itself.
+//! This library extends the original shader to support multiple directional lights.
 
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
@@ -21,16 +11,8 @@ struct RotateArc;
 
 fn main() {
     App::new()
-        .add_plugins((
-            DefaultPlugins,
-            VrmPlugin,
-            VrmGltfPlugin,
-            VrmLightLayersPlugin,
-        ))
-        .add_systems(
-            Startup,
-            (spawn_camera, spawn_avatar, spawn_directional_light),
-        )
+        .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin))
+        .add_systems(Startup, (spawn_camera, spawn_vrm, spawn_directional_light))
         .add_systems(Update, (rotate_circle, rotate_arc))
         .run();
 }
@@ -42,6 +24,7 @@ fn spawn_directional_light(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
+        all_vrm_render_layers(),
         Transform::from_xyz(3.0, 3.0, 0.3).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
@@ -51,6 +34,7 @@ fn spawn_directional_light(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
+        all_vrm_render_layers(),
         Transform::from_xyz(1.0, 1., 2.).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
@@ -62,7 +46,6 @@ fn spawn_camera(
 ) {
     commands.spawn((
         Camera3d::default(),
-        // A default camera does not render the exclusive first-person layers.
         third_person_camera_layers(),
         Transform::from_xyz(0.0, 2.5, 3.5),
     ));
@@ -79,14 +62,11 @@ fn spawn_camera(
     ));
 }
 
-fn spawn_avatar(
+fn spawn_vrm(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    commands.spawn((
-        VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
-        Transform::default(),
-    ));
+    commands.spawn(VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")));
 }
 
 fn rotate_circle(

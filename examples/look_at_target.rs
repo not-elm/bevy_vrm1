@@ -1,15 +1,6 @@
 //! This example shows how to make a VRM model look at a specific entity.
 //! The VRM model will track a red cube as its target.
 //! The cube can be freely moved by dragging it with the mouse.
-//!
-//! The avatar is spawned with [`VrmHandle`] on the entity that *is* the VRM
-//! root, so `LookAt::Target(cube)` goes on that same spawn: no `LookTarget`
-//! resource and no `Added<Initialized>` system are needed.
-//!
-//! `LookAt` is evaluated against the `HeadBoneEntity`, `LeftEyeBoneEntity` and
-//! `RightEyeBoneEntity` holders on that same entity. The load-time pipeline
-//! writes them from `VRMC_vrm.humanoid`, and they remap when the scene is
-//! instantiated.
 
 use bevy::prelude::*;
 use bevy_vrm1::prelude::*;
@@ -17,10 +8,7 @@ use bevy_vrm1::prelude::*;
 fn main() {
     App::new()
         .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin, MeshPickingPlugin))
-        .add_systems(
-            Startup,
-            (spawn_camera, spawn_avatar, spawn_directional_light),
-        )
+        .add_systems(Startup, (spawn_camera, spawn_vrm, spawn_directional_light))
         .run();
 }
 
@@ -30,7 +18,6 @@ fn spawn_directional_light(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
-        // A default light does not shadow the exclusive first-person layers.
         all_vrm_render_layers(),
         Transform::from_xyz(3.0, 3.0, 0.3).looking_at(Vec3::ZERO, Vec3::Y),
     ));
@@ -39,17 +26,16 @@ fn spawn_directional_light(mut commands: Commands) {
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
-        // A default camera does not render the exclusive first-person layers.
         third_person_camera_layers(),
         Transform::from_xyz(0.0, 1.0, 3.5),
     ));
 }
 
-fn spawn_avatar(
+fn spawn_vrm(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     let cube = commands
         .spawn((
@@ -64,7 +50,6 @@ fn spawn_avatar(
     commands.spawn((
         VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
         LookAt::Target(cube),
-        Transform::default(),
     ));
 }
 

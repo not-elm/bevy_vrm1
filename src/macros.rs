@@ -106,24 +106,6 @@ macro_rules! entity_component {
             #[reflect(Component)]
             #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
             #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
-            // `#[entities]` is mandatory, not decoration: `#[derive(Component)]`
-            // turns every `#[entities]` field into a `Component::map_entities`
-            // call on that field's type
-            // (`bevy_ecs_macro_logic/src/map_entities.rs:37-51`, wrapped in the
-            // `use bevy_ecs::entity::MapEntities` that makes it resolve at
-            // `bevy_ecs_macro_logic/src/component.rs:199-214`). That is the only
-            // hook the scene spawn pipeline consults: instantiating a
-            // `WorldAsset` runs `ReflectComponent::apply_or_insert_mapped`, which
-            // calls `C::map_entities` for every component it copies
-            // (`bevy_world_serialization/src/world_asset.rs:191-199` ->
-            // `bevy_ecs/src/reflect/component.rs:340`, `:345`, `:353`).
-            //
-            // `Entity: MapEntities` is bevy's own impl
-            // (`bevy_ecs/src/entity/map_entities.rs:62-66`), so the field needs
-            // nothing else. Omit the attribute and an instantiated avatar keeps
-            // the loader's scratch-world id: gaze control, body tracking and the
-            // first-person auto split then read a stale bone, or worse, whatever
-            // unrelated entity occupies that id. See `crate::vrm::components`.
             pub struct $name(#[entities] pub bevy::prelude::Entity);
         };
     }

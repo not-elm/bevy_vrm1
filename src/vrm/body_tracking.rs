@@ -8,8 +8,7 @@ use bevy::window::Window;
 use std::collections::HashMap;
 
 /// Optional body tracking that makes head, neck, chest, and spine bones
-/// follow the `LookAt` target. Insert it alongside [`LookAt`] and
-/// [`VrmHandle`] on the entity the avatar is spawned on.
+/// follow the `LookAt` target. Insert alongside [`LookAt`] to enable.
 ///
 /// ```no_run
 /// use bevy::prelude::*;

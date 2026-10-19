@@ -9,7 +9,7 @@ The runtime path was removed rather than deprecated, so several public items are
 ### Breaking Changes
 
 - **`VrmHandle` wraps `Handle<Gltf>` and is retained after load.** Spawn `commands.spawn((VrmHandle(asset_server.load("vrm/Elmer.vrm")), ..))`; the entity you spawn **is** the VRM root. It receives `Vrm`, `Initialized` and every root component once the scene is bound, and it keeps its id — plus the components and children on it — across a hot reload or a changed handle. `VrmHandle` requires a `Transform` and `Visibility` and stays on the entity afterwards, where it marks the VRM as crate-managed. `VrmGltfPlugin` is required in the app — it is the only plugin that claims the `vrm` extension, so it is the only thing that can load a `.vrm`
-- **Removed `spawn_vrm`, `PendingVrmSpawns` and the never-ready watchdog**, together with `VrmAsset` and its loader. They existed only while the crate resolved the asynchronous instance on the caller's behalf; the root is now bound onto the entity you spawn, so plain `commands.spawn((VrmHandle(..), ..))` is the whole API. A raw `WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path)))` spawn still loads a `.vrm`, with the VRM root as its child
+- **Removed `VrmAsset`** and its loader. A raw `WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path)))` spawn still loads a `.vrm`, with the VRM root as its child
 - An app needs both halves of the pipeline: `App::new().add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin))`. `VrmGltfPlugin` must come after `DefaultPlugins`, because it registers its handler in the resource `GltfPlugin` prepares and `finish` reuses
 - **Removed the `VrmInitializePlugin` step and the `RequestInitialize*` flow** behind it (humanoid bones, spring bones, node constraints, expressions), together with `VrmLoaderPlugin`. The `HumanoidBoneRegistry` name lookup no longer runs for a `.vrm`: references between glTF nodes (`VRMC_node_constraint`, `VRMC_springBone`, `VRMC_vrm.firstPerson`, `morphTargetBinds`) are resolved inside the loader, where every referenced entity already exists. `HumanoidBoneRegistry` still exists, but only for the **VRMA source rig**, which carries node references rather than names
 - **Removed the first-person runtime API**: `FirstPersonCamera`, `ThirdPersonCamera`, `RequestEnableFirstPerson`, `RequestDisableFirstPerson`, `FirstPersonLayers` and `FirstPersonRegistry`. The `VRMC_vrm.firstPerson` decision, including the `auto` head split, now happens at load time; a camera selects a view through `third_person_camera_layers()` / `first_person_camera_layers()` / `both_view_mesh_layers()`, and the layers are no longer configurable at runtime
@@ -56,7 +56,6 @@ The runtime path was removed rather than deprecated, so several public items are
 ### Maintenance
 
 - Depends on the `gltf` crate directly instead of reaching the VRM extension handler's types through `bevy_gltf`. `default-features = false` with the `extensions`, `extras`, `names` and `utils` features only, which adds no crate and leaves `Cargo.lock` untouched
-- `ParentSearcher` dropped its `Vrma` branch: with the VRMA source rig resolved at load time, the branch was unreachable
 
 ## v0.10.0
 

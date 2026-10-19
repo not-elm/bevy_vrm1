@@ -29,21 +29,6 @@ anyhow = "1"
 bitflags = { version = "2.9" }
 paste = "1"
 indexmap = "2"
-# The `bevy::gltf::extensions::GltfExtensionHandler` hooks are generic over the
-# external `gltf` crate's types, so the VRM extension handler has to name them
-# itself. `default-features = false` is mandatory: the default `import` feature
-# pulls in `base64`, `image` and `urlencoding`, which `bevy_gltf` does not use
-# and `Cargo.lock` therefore does not contain. The four features below are all
-# required by the handler and all already enabled by `bevy_gltf`, so the union
-# adds no crate and leaves `Cargo.lock` untouched.
-#   extensions -> `Document`/`Node`/`Material`/`Scene`/`Animation::{extensions,
-#                  extension_value}`, the only way to read `VRMC_*`.
-#   extras     -> `Node::extras` is not feature-gated, but `gltf-json` skips
-#                  deserialising extras without it, so VRMC_* payloads would be
-#                  silently empty.
-#   names      -> `Node::name`, used to label the rest-pose map.
-#   utils      -> `Primitive::reader` / `ReadOutputs`, needed to read JOINTS_0 /
-#                  WEIGHTS_0 to classify `firstPerson: auto` meshes.
 gltf = { version = "1.4.0", default-features = false, features = [
     "extensions",
     "extras",

@@ -1,22 +1,16 @@
-//! This module turns a loaded [`VrmaHandle`] into a playable source rig: it
-//! instantiates the `.vrma` scene, keeps the pristine clip, and stamps the
-//! source rest pose. It also tells the animation graph to rebuild whenever the
-//! avatar it is parented to finishes an attach — including a rig replacement,
-//! where the graph, the retarget and the playback are restored onto the new
-//! skeleton.
+//! This module inserts [`SceneRoot`] and VRMA-related components from the loaded [`VrmaHandle`].
 
 use crate::error::vrm_error;
 use crate::system_param::prelude::*;
+use crate::vrm::Initialized;
 use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
-use crate::vrm::{Initialized, RestGlobalTransform, RestTransform, RestWorldTransform, Vrm};
+use crate::vrm::{RestGlobalTransform, RestTransform, RestWorldTransform, Vrm};
 use crate::vrma::animation::animation_graph::RequestUpdateAnimationGraph;
 use crate::vrma::animation::expressions::VrmaExpressionRegistry;
 use crate::vrma::gltf::extensions::VrmaExtensions;
 use crate::vrma::loader::VrmaAsset;
-use crate::vrma::{
-    RetargetSource, VrmAnimationClipHandle, VrmAnimationSourceClip, Vrma, VrmaDuration, VrmaHandle,
-    VrmaPath, VrmaPlaybackState,
-};
+use crate::vrma::{RetargetSource, VrmAnimationSourceClip, VrmaPlaybackState};
+use crate::vrma::{VrmAnimationClipHandle, Vrma, VrmaDuration, VrmaHandle, VrmaPath};
 use bevy::gltf::GltfNode;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
@@ -38,19 +32,7 @@ impl Plugin for VrmaInitializePlugin {
     }
 }
 
-/// Every complete attach of a rig is observed through `Insert<Initialized>` on
-/// the entity carrying [`Vrm`], and asks for the animation graph to be rebuilt.
-///
-/// On a pre-existing VRMA the graph build sees a rig generation its working
-/// clip was not baked for, clones the pristine
-/// [`VrmAnimationSourceClip`](crate::vrma::VrmAnimationSourceClip) again,
-/// retargets it for the new rig and restores the recorded playback. The first
-/// attach of a fresh avatar reaches this too, but its VRMA children are usually
-/// still loading and `trigger_loaded` requests the graph again once they are
-/// ready.
-///
-/// `Initialized` is also stamped on a `.vrma`'s own source-rig entity by
-/// [`request_initialize_vrma`]; the [`Vrm`] filter excludes those.
+/// Rebuilds the animation graph whenever a VRM (re)attaches its rig.
 fn on_vrm_initialized(
     trigger: On<Insert, Initialized>,
     vrms: Query<(), With<Vrm>>,
@@ -113,23 +95,21 @@ fn spawn_vrma(
                 continue;
             }
         };
-        let Some(source_clip_handle) = vrma.gltf.animations.first() else {
+        let Some(animation_clip_handle) = vrma.gltf.animations.first() else {
             vrm_error!("[VRMA] Not found vrma animations in {name}");
             continue;
         };
-        let Some(animation_clip) = clip_assets.get(source_clip_handle).cloned() else {
+        let Some(animation_clip) = clip_assets.get(animation_clip_handle).cloned() else {
             vrm_error!("[VRMA] Not found animation clip for {name}");
             continue;
         };
-        let working_clip_handle = clip_assets.add(animation_clip);
+        let source_clip = VrmAnimationSourceClip(animation_clip_handle.clone());
+        let animation_clip_handle = clip_assets.add(animation_clip);
         commands.entity(handle_entity).insert((
             Vrma,
             Name::new(name),
-            // The pristine source stays for the entity's whole life so a rig
-            // replacement can rebuild the working clip from it; the working
-            // clone is what the retarget and bake mutate.
-            VrmAnimationSourceClip(source_clip_handle.clone()),
-            VrmAnimationClipHandle(working_clip_handle),
+            source_clip,
+            VrmAnimationClipHandle(animation_clip_handle.clone()),
             WorldAssetRoot(scene_root),
             VrmaDuration(obtain_vrma_duration(&clip_assets, &vrma.gltf.animations)),
             VrmaPath(vrma_path),
@@ -144,15 +124,7 @@ fn spawn_vrma(
     }
 }
 
-/// Stamps [`Initialized`] on a `.vrma` entity once its source rig has spawned,
-/// and captures the source rig's rest pose.
-///
-/// A `.vrm` is initialized while it loads, so the avatar root already carries the
-/// marker and the pipeline writes its rest transforms into the scene. A `.vrma`
-/// still builds its bones through the scene it instantiates and nothing writes
-/// those components, so without this the VRMA retarget finds every source bone
-/// without a `(RestTransform, RestGlobalTransform)` pair, silently moves no curve
-/// and no `.vrma` ever plays.
+/// Captures the source rig's rest pose and marks the VRMA [`Initialized`] once its bones spawn.
 fn request_initialize_vrma(
     mut commands: Commands,
     models: Query<(Entity, &HumanoidBoneRegistry), (With<Vrma>, Without<Initialized>)>,
@@ -163,8 +135,6 @@ fn request_initialize_vrma(
         if !searcher.has_been_spawned_all_bones(root, registry) {
             continue;
         }
-        // The application placement, captured together with the bones' rests:
-        // VRM and VRMA may initialize under different world transforms.
         if let Ok((_, global)) = transforms.get(root) {
             commands.entity(root).insert(RestWorldTransform(*global));
         }
@@ -284,10 +254,6 @@ mod tests {
         assert_ne!(requests[0], requests[1]);
     }
 
-    /// The regression that stopped every `.vrma` from playing: nothing stamped
-    /// `Initialized` on a `.vrma` entity and nothing captured its source rig's
-    /// rest transforms, so `trigger_loaded` never fired and the retarget found
-    /// every source bone without a `(RestTransform, RestGlobalTransform)` pair.
     #[test]
     fn a_vrma_is_initialized_and_its_rests_are_captured_once_its_bones_are_spawned() {
         use crate::vrm::VrmBone;
@@ -306,7 +272,6 @@ mod tests {
             ))
             .id();
 
-        // The source rig has not arrived yet: the marker must not be stamped.
         app.update();
         assert!(app.world().get::<Initialized>(vrma).is_none());
 

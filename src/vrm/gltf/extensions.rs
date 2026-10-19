@@ -22,8 +22,6 @@ impl VrmExtensions {
     pub fn new(json: &serde_json::map::Map<String, serde_json::Value>) -> AppResult<Self> {
         Ok(Self {
             vrmc_vrm: serde_json::from_value(obtain_vrmc_vrm(json)?)?,
-            // A malformed spring bone extension costs the avatar its hair physics,
-            // not the whole load.
             vrmc_spring_bone: obtain_vrmc_springs(json).ok().and_then(|value| {
                 match serde_json::from_value(value) {
                     Ok(spring_bone) => Some(spring_bone),

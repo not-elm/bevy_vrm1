@@ -66,12 +66,7 @@ new_type!(
 );
 
 /// A marker component attached to the entity of VRM.
-///
-/// It is inserted by the root-identity attach (see
-/// [`crate::vrm::instance`]) once the scene instance is ready and its root data
-/// has been bound onto the entity: the entity the application spawned with
-/// [`VrmHandle`], or the child scene root of a raw
-/// [`WorldAssetRoot`](bevy::world_serialization::WorldAssetRoot) spawn.
+/// This component is automatically inserted after the [`VrmHandle`](crate::prelude::VrmHandle) is loaded.
 #[derive(Debug, Component, Reflect, Copy, Clone)]
 #[reflect(Component)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -83,8 +78,7 @@ impl Vrm {
 }
 
 /// The path to the VRM file.
-/// This component is automatically inserted by the load-time glTF pipeline while
-/// the `.vrm` file loads, from the loader's `LoadContext`.
+/// This component is automatically inserted after the [`VrmHandle`](crate::prelude::VrmHandle) is loaded.
 #[derive(Debug, Reflect, Clone, Component)]
 #[reflect(Component)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -130,36 +124,14 @@ pub struct RestGlobalTransform(pub GlobalTransform);
 pub struct RestWorldTransform(pub GlobalTransform);
 
 marker_component!(
-    /// A marker component attached to the entity of VRM, inserted **after** the
-    /// rest of its root data, so `On<Insert, Initialized>` observes a fully
-    /// populated root.
-    ///
-    /// The root-identity attach writes it exactly once per successful bind; a
-    /// re-attach (model swap, hot reload) inserts it again, which is why the
-    /// crate's own readiness hooks key on [`Insert`](bevy::ecs::lifecycle::Insert)
-    /// rather than `Add`.
+    /// A marker component attached to the entity of VRM.
+    /// This component is automatically inserted after the [`VrmHandle`](crate::prelude::VrmHandle) is loaded.
     Initialized
 );
-
 /// The main plugin for VRM support in Bevy.
 ///
-/// This is the **runtime** half: it adds the systems that evaluate what
-/// [`VrmGltfPlugin`](crate::prelude::VrmGltfPlugin) wrote into the scene while
-/// the file loaded — spring bones, gaze control, expressions, node constraints
-/// and `MToon` rendering — and the root-identity pipeline that binds that
-/// load-time data onto the entity spawned with [`VrmHandle`].
-///
-/// It does not load a `.vrm` by itself. An app also needs
-/// [`VrmGltfPlugin`](crate::prelude::VrmGltfPlugin), which is the only plugin
-/// that claims the `vrm` extension; add `VrmaPlugin` on top for `.vrma`
-/// playback.
-///
-/// ```no_run
-/// # use bevy::prelude::*;
-/// # use bevy_vrm1::prelude::*;
-/// # let mut app = App::new();
-/// app.add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin));
-/// ```
+/// Please refer to [`VrmHandle`](crate::prelude::VrmHandle) for more details.
+/// Loading a `.vrm` also requires [`VrmGltfPlugin`](crate::prelude::VrmGltfPlugin).
 pub struct VrmPlugin;
 
 impl Plugin for VrmPlugin {

@@ -11,12 +11,6 @@ use bevy::animation::{AnimationEntityMut, animated_field};
 use bevy::prelude::*;
 
 /// Samples per second when baking curves.
-///
-/// Shared with the expression retarget
-/// ([`crate::vrma::animation::expressions::expression_weight_curve`]), which
-/// resamples a `Transform::translation` curve into a weight curve for the same
-/// reason and at the same rate: `AnimationCurve` is not `Downcast`, so a source
-/// curve's keyframes cannot be read back and must be sampled instead.
 pub(crate) const SAMPLE_RATE: f32 = 120.0;
 
 /// Bake a rotation [`VariableCurve`]: sample the original curve via the

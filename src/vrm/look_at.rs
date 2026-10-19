@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use bevy::window::Window;
 
 /// Controls what the VRM model looks at.
-/// Insert it alongside [`VrmHandle`] on the entity the avatar is spawned on.
+/// This component should be inserted into the root entity of the VRM.
 ///
 /// [`LookAt::Cursor`] tracks the mouse cursor across all windows.
 /// [`LookAt::Target`] looks at a specified entity.
@@ -18,7 +18,10 @@ use bevy::window::Window;
 /// use bevy::prelude::*;
 /// use bevy_vrm1::prelude::*;
 ///
-/// fn spawn_camera_and_vrm(mut commands: Commands, asset_server: Res<AssetServer>) {
+/// fn spawn_camera_and_vrm(
+///     mut commands: Commands,
+///     asset_server: Res<AssetServer>,
+/// ) {
 ///     commands.spawn((Camera3d::default(), Transform::from_xyz(0.0, 1.3, 1.0)));
 ///     commands.spawn((
 ///         VrmHandle(asset_server.load("model.vrm")),
@@ -118,9 +121,6 @@ pub(crate) fn track_looking_target(
                     );
                 }
                 LookAtType::Expression => {
-                    // This runs every frame, so a bare `vrm_warn!` would flood the log.
-                    // `once!` is the same one-shot guard that `bevy::log::warn_once!` uses
-                    // internally, so the warning is emitted once per process instead.
                     bevy::utils::once!(vrm_warn!(
                         "Expression look at is not supported yet, skipping gaze control"
                     ));
@@ -351,8 +351,6 @@ mod tests {
         }
     }
 
-    /// A VRM declaring `VRMC_vrm.lookAt.type == "expression"` is not supported yet, but it
-    /// must leave the eyes alone instead of aborting the whole app every frame.
     #[test]
     fn expression_look_at_leaves_the_eyes_untouched() -> TestResult {
         let mut app = test_app();
@@ -380,7 +378,6 @@ mod tests {
             RightEyeBoneEntity(eyes),
         ));
 
-        // Used to abort on `todo!("Expression look at is not supported yet")`.
         app.world_mut()
             .run_system_once(track_looking_target)
             .expect("Failed to run system");

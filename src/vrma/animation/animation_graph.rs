@@ -19,7 +19,7 @@ use crate::vrma::{
     VrmAnimationSourceClip, VrmaLoaded, VrmaNeedsRestore, VrmaPlaybackState, VrmaRetargetPending,
     VrmaRetargetedFor,
 };
-use bevy::animation::{AnimationClip, AnimationTargetId, animated_field};
+use bevy::animation::{AnimationTargetId, animated_field};
 use bevy::app::App;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
@@ -28,14 +28,7 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub(crate) struct NeedsBake;
 
-/// The bake step of the rebuild pipeline.
-///
-/// A rig replacement attaches in `SpawnScene`, which Bevy runs **after**
-/// `Update`, so baking in `Update` would leave the freshly retargeted clip
-/// unbaked for the rest of the frame — and `AnimationSystems` evaluates in
-/// `PostUpdate`. Baking is therefore a `PostUpdate` step, ordered before
-/// `restore_vrma_playback` so the first evaluated frame of the new rig already
-/// uses destination-space curves.
+/// Bakes in `PostUpdate`, so a rig attached in `SpawnScene` is baked before it is evaluated.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct VrmaBake;
 
@@ -61,24 +54,7 @@ impl Plugin for VrmaAnimationGraphPlugin {
     }
 }
 
-/// Re-asks for the graph build when a `.vrma` silently joins or leaves an
-/// avatar.
-///
-/// Adding, reparenting or despawning a `.vrma` emits no event, so the build
-/// would only notice on some unrelated rebuild and would keep the removed clip's
-/// node (and its strong handle) alive until then. This runs once per ready
-/// avatar and requests a refresh only when the set of live `.vrma` children
-/// differs from the entities the state has bound to an *active clip* node.
-///
-/// A retired node is inert (`Blend`), so it is not part of the bound set: once
-/// the removal has been reconciled the two sets agree and no further request is
-/// made. An avatar with no ready rig (still loading, or between a detach and the
-/// next attach) is skipped by the `Initialized` filter — its `.vrma` children
-/// are not ready either, and `trigger_loaded` asks for the build once they are.
-///
-/// An avatar with no graph at all still counts: a `.vrma` reparented into one
-/// was already initialized elsewhere, so no `Added<Initialized>` fires here and
-/// nothing else would ever build the graph for it.
+/// Rebuilds the graph when the VRMA children differ from the clips bound to it.
 fn reconcile_vrma_membership(
     mut commands: Commands,
     states: Query<(Entity, Option<&VrmAnimationGraphState>), (With<Vrm>, With<Initialized>)>,
@@ -120,13 +96,7 @@ fn reconcile_vrma_membership(
     }
 }
 
-/// Re-asks for the graph build while a retarget is still pending.
-///
-/// A retarget that could not reach a rig exits without recording the
-/// generation, and nothing else would bring it back: the build is otherwise
-/// driven only by an attach or a freshly initialized `.vrma`. Once a root bone
-/// exists the build is requested again, and on success the retarget clears the
-/// pending marker so this stops.
+/// Rebuilds the graph while a retarget is pending and the rig is reachable.
 fn retry_pending_retargets(
     mut commands: Commands,
     child_searcher: ChildSearcher,
@@ -148,10 +118,6 @@ fn apply_animation_graph(
     mut clips: ResMut<Assets<AnimationClip>>,
     childrens: Query<&Children>,
     generations: Query<&VrmGeneration>,
-    // Only a `.vrma` whose own source rig has spawned has rest transforms to
-    // retarget from and a clip worth playing; a `.vrm`'s `Initialized` cannot
-    // make an unready `.vrma` ready, and `trigger_loaded` asks for the graph
-    // again once the source rig stamps it.
     mut vrmas: Query<
         (
             Option<&VrmAnimationSourceClip>,
@@ -173,21 +139,14 @@ fn apply_animation_graph(
         return;
     };
     let existing = states.get(vrm_entity).ok().cloned();
-    // An avatar that has no graph yet and no ready `.vrma` gets none: building an
-    // empty one would overwrite a user's own `AnimationGraphHandle` on the root
-    // bone for nothing. Once a graph exists the build still runs, so removing the
-    // last `.vrma` can retire its node instead of leaking its clip.
     if existing.is_none() && !children.iter().any(|child| vrmas.get(child).is_ok()) {
         return;
     }
-    // A hand-built VRM carries no `VrmGeneration`; treat it as generation `0`.
     let generation = generations
         .get(vrm_entity)
         .map_or(0, |generation| generation.0);
 
-    // The graph asset is per avatar and persistent: reusing it keeps every
-    // `VrmAnimationNodeIndex` valid, so a same-rig clip addition never remaps
-    // the playback and a reattachment restores onto the same node ids.
+    // The graph is reused so every `VrmAnimationNodeIndex` stays valid.
     let graph_handle = match &existing {
         Some(state) => state.graph.clone(),
         None => graphs.add(AnimationGraph::new()),
@@ -200,12 +159,7 @@ fn apply_animation_graph(
         (Some(state), Some(root)) => state.root_bone != root,
     };
 
-    // Snapshot the rig being replaced before anything is mutated. A live player
-    // that still holds this avatar's nodes is authoritative; a fresh new rig
-    // (no player yet) must not overwrite the saved state. When the old rig is
-    // already gone there is nothing left to read, and the `Last` snapshot of the
-    // previous frame is the most this can recover — one frame of a same-frame
-    // change is unavoidably lost if the scene root is destroyed before `Last`.
+    // Snapshot the playback of the rig being replaced while it still exists.
     let mut stored_transitions = existing
         .as_ref()
         .map(|state| state.transitions.clone())
@@ -238,22 +192,13 @@ fn apply_animation_graph(
     }
     if let Some(root_bone) = root_bone {
         if new_rig {
-            // A fresh root bone starts empty; install the rig being replaced's
-            // transitions so a later `PlayVrma` still fades the restored main.
             if let Ok(mut live) = transitions.get_mut(root_bone) {
                 *live = stored_transitions.clone();
             }
         } else if let Ok(live) = transitions.get(root_bone) {
-            // Same rig: the live transitions are fresher than the `Last`
-            // snapshot could be, so a change made earlier this frame is kept.
             stored_transitions = live.clone();
         }
     }
-    // One graph per avatar, and it goes on the root bone: the root bone is the
-    // entity every target of this graph names through `AnimatedBy`
-    // (`handler::scene::setup_animation`), so it is the only entity whose player
-    // can play any clip of it. A `.vrma`'s expression tracks are nodes of the
-    // same graph, so they need no graph of their own.
     insert_animation_graph_into_root_bone(
         vrm_entity,
         AnimationGraphHandle(graph_handle.clone()),
@@ -267,9 +212,6 @@ fn apply_animation_graph(
     register_mask_groups(&mut graph, &bones);
     let root = graph.root;
 
-    // Node ownership is keyed by the `.vrma` entity, so a `.vrma` reparented
-    // under another avatar cannot seize a node the new avatar owns: it is simply
-    // appended there.
     let mut nodes = existing
         .as_ref()
         .map(|state| state.nodes.clone())
@@ -279,10 +221,8 @@ fn apply_animation_graph(
         .filter(|child| vrmas.get(*child).is_ok())
         .collect();
 
-    // A `.vrma` that left this avatar retires its node. The DiGraph node stays —
-    // removing it would shift every later id — but it is disconnected, made
-    // inert and its clip handle released, and any player still holding it is
-    // stopped. Its id is kept in `nodes` so a re-added `.vrma` gets it back.
+    // A VRMA that left this VRM retires its node: it is kept so ids never
+    // shift, but disconnected, made inert and its clip released.
     for (retired, node) in existing
         .as_ref()
         .map(|state| state.nodes.iter())
@@ -294,8 +234,6 @@ fn apply_animation_graph(
         }
         graph.remove_edge(root, *node);
         if let Some(node_weight) = graph.get_mut(*node) {
-            // Disconnection and stopping make the node inert. Keep its mask so
-            // readmitting this `.vrma` preserves the application's body layer.
             node_weight.node_type = AnimationNodeType::Blend;
             node_weight.weight = 0.0;
         }
@@ -310,19 +248,12 @@ fn apply_animation_graph(
         let Ok((source, working, retargeted, _, _)) = vrmas.get_mut(child) else {
             continue;
         };
-        // An absent stamp means no rig generation has been recorded yet, so the
-        // clip still owes its first retarget. The owner is compared too: the
-        // same generation under a new avatar is not the same rig.
         let retarget =
             retargeted.is_none_or(|stamp| stamp.0 != generation || stamp.1 != vrm_entity);
-        // `stale` forces a re-clone: the working clip already carries an older
-        // rig's destination-space curves. Re-cloning from the pristine source
-        // resets it to source space so a curve is never transformed twice.
+        // A clip retargeted for another rig is re-cloned from the pristine source.
         let stale = retargeted.is_some_and(|stamp| stamp.0 != generation || stamp.1 != vrm_entity);
         let handle = if stale || working.is_none() {
             match source {
-                // The pristine source is the only clip a retarget may start
-                // from.
                 Some(source) => {
                     let Some(pristine) = clips.get(&source.0).cloned() else {
                         continue;
@@ -333,26 +264,18 @@ fn apply_animation_graph(
                         .insert(VrmAnimationClipHandle(handle.clone()));
                     handle
                 }
-                // A hand-built clip without a source (an inline test) has
-                // nothing to re-clone from; reuse the handle it carries.
                 None => match working {
                     Some(working) => working.0.clone(),
                     None => continue,
                 },
             }
         } else {
-            // Already in source space for this retarget, or already baked for
-            // this generation: reuse the working handle.
             let Some(working) = working else {
                 continue;
             };
             working.0.clone()
         };
 
-        // Reuse the node this very `.vrma` owns when the asset still holds it,
-        // so its index — and every player or transition that names it — stays
-        // valid. Anything else (a new `.vrma`, or one reparented in from another
-        // avatar) appends a node; ids are never reused across avatars or shifted.
         let owned = nodes
             .get(&child)
             .copied()
@@ -370,37 +293,25 @@ fn apply_animation_graph(
             .get(node)
             .is_some_and(|node| !matches!(node.node_type, AnimationNodeType::Clip(_)));
         if was_retired {
-            // Retirement disconnected the node so it would not evaluate; a
-            // re-added `.vrma` reuses the node, so the edge has to come back or
-            // the clip would never be traversed from the root.
             graph.add_edge(root, node);
         }
         if let Some(node_weight) = graph.get_mut(node) {
             if was_retired {
-                // Give the retired node a playable weight; its mask was kept.
                 node_weight.weight = 1.0;
             }
             node_weight.node_type = AnimationNodeType::Clip(handle);
         }
         commands.entity(child).insert(VrmAnimationNodeIndex(node));
 
-        // The generation is recorded by the retarget itself, not here, so a
-        // retarget that cannot reach the rig is retried.
         if retarget {
             commands.entity(child).insert(VrmaRetargetPending);
             commands.entity(child).trigger(RequestUpdateAnimationClips);
         }
-        // Only a rebuilt player needs the recorded playback re-applied: a new
-        // rig, a node that did not exist before, or one restored from a retired
-        // node. A same-rig rebuild leaves the live player alone, so same-frame
-        // changes survive.
         if new_rig || appended || was_retired {
             commands.entity(child).insert(VrmaNeedsRestore);
         }
     }
 
-    // Membership and the re-created state are written once, at the end, so the
-    // map always reflects the build that just ran.
     commands.entity(vrm_entity).insert(VrmAnimationGraphState {
         graph: graph_handle.clone(),
         transitions: stored_transitions,
@@ -409,28 +320,7 @@ fn apply_animation_graph(
     });
 }
 
-/// Puts every humanoid bone's [`AnimationTargetId`] into its `VrmMaskGroup`,
-/// which is what makes `VrmaMask` a working knob: bevy skips a clip node for a
-/// target whose own group mask intersects the node's computed mask
-/// (`bevy_animation/src/lib.rs:1192-1201`), so a layer can be masked down to
-/// part of the body by setting one node's `mask`.
-///
-/// # Why these are the destination ids
-///
-/// The ids registered are the ones `replace_bone_animation_clips` writes the
-/// curves onto — `bone_target_id` of the VRM bone name, put on the bone by
-/// `handler::scene::setup_animation`. Registering a source id instead would
-/// mask a rig that is never played, because the source curves are *moved* rather
-/// than copied.
-///
-/// # Why the query is world-wide
-///
-/// A graph belongs to one avatar, but a bone's mask group is a property of the
-/// bone, not of the graph, and the same avatar may be reached through several
-/// graphs. One pass over every entity that carries both components therefore
-/// keeps every graph consistent, and a target that belongs to no rig at all is
-/// inert: an unregistered target has mask `0`
-/// (`bevy_animation/src/lib.rs:1123-1128`).
+/// Puts every humanoid bone's [`AnimationTargetId`] into its `VrmMaskGroup`.
 fn register_mask_groups(
     graph: &mut AnimationGraph,
     bones: &Query<(&VrmBone, &AnimationTargetId)>,
@@ -452,13 +342,7 @@ fn insert_animation_graph_into_root_bone(
     commands.entity(root_bone).insert(animation_graph_handle);
 }
 
-/// Points one `.vrma` clip at the avatar: the humanoid bone curves onto the
-/// avatar's own bone targets, the expression tracks onto the avatar root's
-/// synthetic target.
-///
-/// Both halves write into the *same* `AnimationClip` asset, which is what makes
-/// one graph node play the face and the body together — and therefore what makes
-/// a single `RepeatAnimation` and a single `StopVrma` cover both.
+/// Retargets the humanoid bone curves and the expression tracks of one VRMA clip.
 fn apply_retarget_animation_clips(
     trigger: On<RequestUpdateAnimationClips>,
     mut commands: Commands,
@@ -469,8 +353,6 @@ fn apply_retarget_animation_clips(
     expression_registries: Query<&VrmaExpressionRegistry>,
     bones: Query<(&RestTransform, &RestGlobalTransform, &AnimationTargetId)>,
     model_rests: Query<&RestWorldTransform>,
-    // The `.vrma`'s expression nodes carry no rest transforms, so they are not
-    // in `bones`; the expression retarget only needs their target ids.
     source_targets: Query<&AnimationTargetId>,
     generations: Query<&VrmGeneration>,
     searcher: ChildSearcher,
@@ -489,12 +371,6 @@ fn apply_retarget_animation_clips(
     let Some(mut clip) = clips.get_mut(vrm_animation_clip_handle.0.id()) else {
         return;
     };
-    // The humanoid map describes the *source* rig, so it is read off the `.vrma`
-    // entity — `initialize::spawn_vrma` writes it there, next to
-    // `VrmAnimationClipHandle`. A `.vrma` that declares no `humanoid` block has
-    // an empty map, never a missing one, so the two retargets below can be
-    // gated independently: an expression-only `.vrma` still needs its curves
-    // moved, and a bone-only one needs no `expressions`.
     if let Ok(registry) = vrms.get(vrma_entity) {
         let transformations = compute_rotation_transformations(
             vrma_entity,
@@ -529,10 +405,6 @@ fn apply_retarget_animation_clips(
             &model_rests,
         );
     }
-    // Expression tracks ride in the same clip asset, so one graph node plays the
-    // face and the body together and `StopVrma` stops both. The root target is
-    // outside the bone-root subtree `apply_bake_clips` collects, so the bake pass
-    // leaves these curves alone.
     if let Ok(expressions) = expression_registries.get(vrma_entity) {
         retarget_expression_curves(
             &mut clip,
@@ -542,16 +414,7 @@ fn apply_retarget_animation_clips(
             &source_targets,
         );
     }
-    // Scheduled for every retargeted clip, not only the humanoid ones: the bake
-    // pass is also what emits the first-load [`LoadedVrma`], so an
-    // expression-only `.vrma` has to reach it too. Its curves live on the avatar
-    // root, outside the subtree the pass bakes, and are left alone.
-    //
-    // Both the generation and the bake are recorded only here, after the curves
-    // were actually moved, and the pending marker is dropped in the same breath:
-    // a retarget that bailed above (no rig bone, no clip asset) leaves it set, so
-    // the restore is blocked and `retry_pending_retargets` asks for the build
-    // again instead of playing source-space curves.
+    // Recorded only after the curves were moved, so a failed retarget is retried.
     let generation = generations
         .get(*vrm_entity)
         .map_or(0, |generation| generation.0);
@@ -561,26 +424,6 @@ fn apply_retarget_animation_clips(
     commands.entity(vrma_entity).remove::<VrmaRetargetPending>();
 }
 
-/// Moves every source curve of `registry` onto the avatar's own bone target.
-///
-/// # The two lookups are deliberately different
-///
-/// * the **destination** bone is found by its [`VrmBone`] component
-///   (`find_by_bone_name`), which is what `handler::scene::setup_animation`
-///   writes onto a `.vrm`'s bones;
-/// * the **source** bone is found by the glTF node `Name` the registry was built
-///   from, because `HumanoidBoneRegistry` maps `VrmBone -> Name` and a `.vrma`
-///   carries node *references*, so its source rig is built at load time from the
-///   file's own `vrmc_vrm_animation.humanoid` (`VrmaLoaderPlugin`,
-///   `vrma/loader.rs:14`).
-///
-/// Switching the source lookup to `VrmBone` as well would remove the last
-/// name-based step — glTF node names are optional and collide inside one file,
-/// and a collision resolves two bones to the same entity — but it has to happen
-/// in `compute_rotation_transformations` (`bone_rotation.rs`) at the same time,
-/// or the retarget table would be computed for one entity while the curves are
-/// moved onto another. Both source and destination bones already carry
-/// `VrmBone`, so that change is a two-line follow-up with no schema impact.
 fn replace_bone_animation_clips(
     commands: &mut Commands,
     clip: &mut AnimationClip,
@@ -682,6 +525,7 @@ fn apply_bake_clips(world: &mut World) {
         let Some(own_rig) = collect_own_rig_targets(world, vrm_entity) else {
             continue;
         };
+        world.entity_mut(vrma_entity).remove::<NeedsBake>();
 
         let mut new_curves: HashMap<AnimationTargetId, Vec<VariableCurve>> = HashMap::new();
 
@@ -746,11 +590,8 @@ fn apply_bake_clips(world: &mut World) {
         }
 
         // Replace the clip's curves with baked ones
-        {
-            let mut clip_assets = world.resource_mut::<Assets<AnimationClip>>();
-            let Some(mut clip) = clip_assets.get_mut(clip_handle.id()) else {
-                continue;
-            };
+        let mut clip_assets = world.resource_mut::<Assets<AnimationClip>>();
+        if let Some(mut clip) = clip_assets.get_mut(clip_handle.id()) {
             let curves = clip.curves_mut();
             curves.clear();
             for (target_id, variable_curves) in new_curves {
@@ -760,10 +601,7 @@ fn apply_bake_clips(world: &mut World) {
             }
         }
 
-        // The clip is now baked into the destination rig's space, so it is what
-        // `LoadedVrma` promises: a usable graph node. Emit it once per VRMA; a
-        // reattachment restores the recorded playback instead of re-signalling.
-        world.entity_mut(vrma_entity).remove::<NeedsBake>();
+        // Emitted once per VRMA, after its clip is baked.
         if world.get::<VrmaLoaded>(vrma_entity).is_none() {
             world.entity_mut(vrma_entity).insert(VrmaLoaded);
             world.trigger(LoadedVrma {
@@ -781,6 +619,7 @@ fn collect_own_rig_targets(
 ) -> Option<HashMap<AnimationTargetId, Entity>> {
     // ChildSearcher is a system param and cannot be used from an exclusive
     // system, so the root bone is found by name here the same way.
+    // A managed VRM is searched from its scene root, like `ChildSearcher`.
     let search_root = match world.get::<crate::vrm::instance::VrmInstanceState>(vrm_entity) {
         Some(instance) => instance.scene_root,
         None if world
@@ -890,11 +729,7 @@ mod tests {
         vrm
     }
 
-    /// The destination avatar exactly as `handler::scene` writes it, which
-    /// differs from [`spawn_rig`] in the two ways that matter to the graph
-    /// build: the scene root is a *different* entity from the root bone, and the
-    /// root bone — the animation root — carries the player.
-    ///
+    /// The destination avatar as `handler::scene` writes it.
     /// Returns `(vrm, root_bone, spine)`.
     fn spawn_pipeline_rig(
         world: &mut World,
@@ -935,9 +770,6 @@ mod tests {
         (vrm, root_bone, spine)
     }
 
-    /// The retarget table and the destination-space curves are what
-    /// `PlayVrma` needs to move a bone, so their presence is the acceptance
-    /// criterion for a load-time scene.
     #[test]
     fn a_hand_built_pipeline_root_is_accepted_by_the_graph_build() -> TestResult {
         let mut app = setup_app();
@@ -946,12 +778,8 @@ mod tests {
 
         request_graph(&mut app, vrm);
 
-        // The graph goes on the root bone, which is where `find_root_bone`
-        // resolves it and where `PlayVrma` plays it.
         assert!(app.world().get::<AnimationGraphHandle>(root_bone).is_some());
         assert!(app.world().get::<AnimationPlayer>(root_bone).is_some());
-        // `apply_play_vrma` bails without this, and the index has to address a
-        // node of the graph the root bone now points at.
         let node = app.world().get::<VrmAnimationNodeIndex>(vrma).unwrap().0;
         let graph = app
             .world()
@@ -969,7 +797,6 @@ mod tests {
                 .node_type,
             AnimationNodeType::Clip(_)
         ));
-        // The retarget resolved the destination bone by `VrmBone`, not by name.
         assert!(app.world().get::<RetargetRotationTable>(spine).is_some());
         let curves = app
             .world()
@@ -985,14 +812,9 @@ mod tests {
         success!()
     }
 
-    /// The mask groups the graph build registers are the ones bevy's evaluator
-    /// reads, so a layer masked to part of the body really does leave the rest
-    /// alone. `spine` is `VrmMaskGroup::UpperBody`, which `VrmaMask::LOWER_BODY`
-    /// hides.
     #[test]
     fn a_masked_node_does_not_move_a_bone_in_its_group() -> TestResult {
         let mut app = crate::tests::test_app();
-        // bevy's own plugin, so the graph this crate builds is evaluated at all.
         app.add_plugins((AnimationPlugin, VrmaAnimationGraphPlugin));
         let (vrm, root_bone, spine) = spawn_pipeline_rig(app.world_mut(), Quat::IDENTITY);
         let (vrma, _) = spawn_clip(app.world_mut(), vrm, 0.5);
@@ -1031,9 +853,7 @@ mod tests {
         success!()
     }
 
-    /// Sets one clip node's mask-out bitfield. `Assets::get_mut` emits
-    /// `AssetEvent::Modified`, which is what makes bevy rebuild its
-    /// `ThreadedAnimationGraph` (whose `computed_masks` the evaluator reads).
+    /// Sets one clip node's mask-out bitfield.
     fn set_node_mask(
         app: &mut App,
         graph: &AnimationGraphHandle,
@@ -1049,8 +869,7 @@ mod tests {
             .mask = mask;
     }
 
-    /// Starts a clip without a transition: `AnimationTransitions::play` ramps
-    /// the weight from zero over 300 ms, which is not what this test measures.
+    /// Starts a clip without a transition.
     fn play(
         app: &mut App,
         root_bone: Entity,
@@ -1063,10 +882,7 @@ mod tests {
             .play(node);
     }
 
-    /// Three frames: the asset event that a tracked `Assets::get_mut` queues is
-    /// drained at the end of one `PostUpdate` and turned into threaded masks in
-    /// the next, and `animate_targets` is unordered against that rebuild, so the
-    /// third frame is the first whose evaluation is guaranteed to see it.
+    /// Three frames, so the evaluation is guaranteed to see the updated graph.
     fn run_frames(app: &mut App) {
         for _ in 0..3 {
             app.update();
@@ -1129,10 +945,7 @@ mod tests {
         (vrma, handle)
     }
 
-    /// A rig carrying an explicit [`VrmGeneration`], so a test can simulate a
-    /// replacement by bumping it. Returns `(vrm, spine, prefix)`, `prefix` being
-    /// the rig's `RestWorldTransform`, so a replacement rest pose can be
-    /// recomposed the same way the pipeline composed the first one.
+    /// Returns `(vrm, spine, prefix)`.
     fn spawn_generation_rig(
         world: &mut World,
         rest_rotation: Quat,
@@ -1162,11 +975,7 @@ mod tests {
         (vrm, spine, prefix)
     }
 
-    /// A `.vrma` shaped the way `initialize::spawn_vrma` builds it: a pristine
-    /// [`VrmAnimationSourceClip`] next to the working clone the retarget mutates.
-    ///
-    /// Returns `(vrma, source, working)` — the handle the reload must clone from,
-    /// the handle the first bake writes into.
+    /// Returns `(vrma, source, working)`.
     fn spawn_sourced_clip(
         world: &mut World,
         vrm: Entity,
@@ -1313,10 +1122,6 @@ mod tests {
         assert!(sample_rotation(app.world_mut(), &second_clip).angle_between(expected) < 0.001);
     }
 
-    /// A reload has to rebuild the working clip from the pristine source. The
-    /// proof is the result: only the *new* rig's rest pose may appear. Re-baking
-    /// an already-baked clip would compose the two rigs' rest poses and miss the
-    /// expected rotation by more than the tolerance below.
     #[test]
     fn a_reloaded_rig_rebakes_from_the_pristine_source() {
         let mut app = setup_app();
@@ -1332,8 +1137,6 @@ mod tests {
             "the first bake is the first rig's retarget"
         );
 
-        // A replacement keeps the VRMA entity — and with it the pristine source
-        // handle — and changes only the destination rest pose and generation.
         let rest = Transform::from_rotation(rest_b);
         app.world_mut().entity_mut(spine).insert((
             RestTransform(rest),
@@ -1360,8 +1163,6 @@ mod tests {
         );
     }
 
-    /// A reload restores the recorded playback instead of telling the app to
-    /// start the clip again, so `LoadedVrma` stays a first-load signal.
     #[test]
     fn a_reload_does_not_resignal_loaded_vrma() {
         let mut app = setup_app();
@@ -1380,15 +1181,11 @@ mod tests {
         );
     }
 
-    /// A `.vrma` that only arrives after the rig is ready attaches to the
-    /// current graph: it gets a node index, is retargeted for the live
-    /// generation and signals its first load.
     #[test]
     fn a_vrma_that_arrives_after_the_rig_joins_the_current_graph() {
         let mut app = setup_app();
         let (vrm, _spine, _prefix) =
             spawn_generation_rig(app.world_mut(), Quat::from_rotation_z(0.4), 1);
-        // No `.vrma` yet: there is nothing to build, and no signal.
         request_graph(&mut app, vrm);
         assert!(app.world().resource::<LoadNotifications>().0.is_empty());
 
@@ -1406,8 +1203,6 @@ mod tests {
         );
     }
 
-    /// Reloading one avatar must not touch another: separate working clips,
-    /// node indices and generations.
     #[test]
     fn a_reload_of_one_avatar_leaves_another_untouched() {
         let mut app = setup_app();
@@ -1445,16 +1240,13 @@ mod tests {
         );
     }
 
-    /// An app with the asset server in place, so dropping a replaced graph or
-    /// clip really frees it and a leak shows up as a growing asset store.
+    /// An app in which dropped assets are really freed.
     fn setup_tracked_app() -> App {
         let mut app = crate::tests::test_app();
         app.add_plugins((AnimationPlugin, VrmaAnimationGraphPlugin));
         app
     }
 
-    /// Repeated reloads must not accumulate derived assets: each replacement
-    /// frees the previous working clip and graph when it overwrites them.
     #[test]
     fn repeated_reloads_do_not_grow_derived_assets() {
         let mut app = setup_tracked_app();
@@ -1492,11 +1284,7 @@ mod tests {
         );
     }
 
-    /// The destination rig as the real pipeline writes it, plus an explicit
-    /// `VrmGeneration` so a swap can be simulated. Returns
-    /// `(vrm, root_bone, spine, prefix)`; the spine is a live animation target
-    /// (`AnimatedBy` + `AnimationTargetId`), so bevy's `animate_targets` really
-    /// evaluates it.
+    /// Returns `(vrm, root_bone, spine, prefix)`.
     fn spawn_live_rig(
         world: &mut World,
         rest_rotation: Quat,
@@ -1542,11 +1330,6 @@ mod tests {
         (vrm, root_bone, spine, prefix)
     }
 
-    /// The mask of a clip that is not playing must survive a rebuild.
-    ///
-    /// The graph asset is per avatar and persistent, so a node's mask is never
-    /// re-applied: a same-rig rebuild reuses the node and its mask is simply
-    /// still there.
     #[test]
     fn an_inactive_clips_mask_survives_a_rebuild() -> TestResult {
         let mut app = crate::tests::test_app();
@@ -1601,9 +1384,6 @@ mod tests {
         success!()
     }
 
-    /// A retarget that cannot reach a rig must not record the generation: the
-    /// clip still owes a retarget, and recording it would make the next build
-    /// treat the source-space clip as baked.
     #[test]
     fn a_failed_retarget_does_not_record_the_generation() {
         let mut app = setup_app();
@@ -1629,9 +1409,6 @@ mod tests {
         );
     }
 
-    /// A managed holdover across a swap to a hand-built, generation-0 rig: with
-    /// no `VrmGeneration` the fallback is generation `0`, which differs from the
-    /// recorded `1`, so the clip is retargeted for the new rest.
     #[test]
     fn a_reattach_to_a_hand_built_generation_zero_rig_rebakes() -> TestResult {
         let mut app = setup_app();
@@ -1664,8 +1441,7 @@ mod tests {
         success!()
     }
 
-    /// A model swap, armed to run where a managed reload attaches: `SpawnScene`,
-    /// which bevy runs after `Update`.
+    /// A model swap run in `SpawnScene`, after `Update`.
     #[derive(Resource)]
     struct ReloadPlan {
         vrm: Entity,
@@ -1699,9 +1475,6 @@ mod tests {
         world.trigger(RequestUpdateAnimationGraph { vrm });
     }
 
-    /// The rebuild runs in `SpawnScene`, after `Update`; the bake therefore has
-    /// to run in `PostUpdate` before the restore, or the frame ends with an
-    /// unbaked clip while `AnimationSystems` is about to evaluate it.
     #[test]
     fn a_rebuild_in_spawn_scene_bakes_before_the_next_evaluation() -> TestResult {
         let mut app = crate::tests::test_app();
@@ -1733,8 +1506,6 @@ mod tests {
         app.add_systems(SpawnScene, reload_in_spawn_scene);
         app.update();
 
-        // `NeedsBake` must not survive the frame the rebuild ran in: that is
-        // exactly the window in which an unbaked clip could be evaluated.
         assert!(
             app.world().get::<NeedsBake>(vrma).is_none(),
             "a rebuild must bake before the frame's evaluation"
@@ -1751,9 +1522,6 @@ mod tests {
             "the clip is baked for the new rest in the rebuild frame, got {sampled:?}"
         );
 
-        // The next frame is the first the engine can evaluate a newly added
-        // graph (its asset event is drained after `thread_animation_graphs`),
-        // and it must already show the baked pose.
         app.update();
         let rotation = app.world().get::<Transform>(spine).unwrap().rotation;
         assert!(
@@ -1763,14 +1531,6 @@ mod tests {
         success!()
     }
 
-    /// Adds a `.vrma` at the *front* of the avatar's children and rebuilds: the
-    /// persistent graph appends nodes, so the existing clip must keep the node
-    /// id it already owns instead of being remapped to the new child order.
-    ///
-    /// This is the regression guard for a rebuild that reassigned indices from
-    /// child order (`AnimationGraph::from_clips`): a new clip inserted before an
-    /// existing one would have shifted that clip's index and left every player
-    /// and transition that named it pointing at the wrong node.
     #[test]
     fn adding_a_vrma_at_the_front_does_not_shift_existing_node_indices() -> TestResult {
         let mut app = setup_app();
@@ -1823,17 +1583,11 @@ mod tests {
         success!()
     }
 
-    /// A removed `.vrma` retires its node: the sibling clip keeps its id, the
-    /// retired node is made inert and its clip released (not held alive by the
-    /// graph forever), and repeated rebuilds do not grow the derived asset
-    /// stores.
     #[test]
     fn removing_a_vrma_releases_its_clip_and_keeps_the_sibling_node() -> TestResult {
         let mut app = setup_tracked_app();
         let (vrm, root_bone, _spine, _prefix) =
             spawn_live_rig(app.world_mut(), Quat::from_rotation_z(0.4), 1);
-        // Wildcard the handles: nothing outside the entities must keep these
-        // clips alive, or the release could not be observed.
         let (vrma_a, _, _) = spawn_sourced_clip(app.world_mut(), vrm, 0.5);
         let (vrma_b, _, _) = spawn_sourced_clip(app.world_mut(), vrm, 0.9);
         request_graph(&mut app, vrm);
@@ -1888,8 +1642,6 @@ mod tests {
             );
         }
 
-        // The retired clip is released, and further rebuilds plateau: only the
-        // surviving `.vrma`'s source and working clips remain.
         let clips = app.world().resource::<Assets<AnimationClip>>().len();
         for _ in 0..4 {
             request_graph(&mut app, vrm);
@@ -1905,9 +1657,6 @@ mod tests {
         success!()
     }
 
-    /// A `.vrma` the app removes without asking for a rebuild is still retired:
-    /// the membership reconciliation notices the drift and releases its clip,
-    /// leaving the surviving node and its mask alone.
     #[test]
     fn despawning_a_vrma_without_a_manual_rebuild_releases_its_clip() -> TestResult {
         let mut app = setup_tracked_app();
@@ -1972,8 +1721,6 @@ mod tests {
         success!()
     }
 
-    /// Readmitting a `.vrma` to the avatar that retired it preserves its mask
-    /// and reconnects its node, so the clip animates only its intended bones.
     #[test]
     fn a_readded_vrma_preserves_its_mask_and_reconnects_its_node() -> TestResult {
         let mut app = crate::tests::test_app();
@@ -2065,10 +1812,6 @@ mod tests {
         success!()
     }
 
-    /// Reparenting a `.vrma` under a second avatar must re-clone its working
-    /// clip for the new rest pose even when both avatars report the same
-    /// generation: the retarget stamp is scoped to the owner, so it cannot
-    /// alias and leave the clip baked for the previous rig.
     #[test]
     fn reparenting_a_vrma_reclones_for_the_new_owner() -> TestResult {
         let mut app = setup_app();
@@ -2161,10 +1904,7 @@ mod tests {
         success!()
     }
 
-    /// Reinstantiates the destination rig the way the pipeline does after a
-    /// model swap: the old root bone subtree is gone and a brand new root bone
-    /// (with a fresh player and transitions) and spine take its place. Returns
-    /// `(root_bone, spine)`.
+    /// Replaces the root bone subtree with a fresh one. Returns `(root_bone, spine)`.
     fn reattach_rig(
         world: &mut World,
         vrm: Entity,
@@ -2223,9 +1963,6 @@ mod tests {
             });
     }
 
-    /// A replacement must carry the live [`AnimationTransitions`] to the new root
-    /// bone. Without it the next `PlayVrma` sees no main animation to fade out,
-    /// so the clip the restore started stays stuck at full weight forever.
     #[test]
     fn a_reattach_carries_the_transitions_and_the_next_play_fades_the_restored_clip() -> TestResult
     {
@@ -2249,8 +1986,6 @@ mod tests {
         let node_a = app.world().get::<VrmAnimationNodeIndex>(vrma_a).unwrap().0;
         let node_b = app.world().get::<VrmAnimationNodeIndex>(vrma_b).unwrap().0;
 
-        // Start the first clip with no fade, so the snapshot records it as the
-        // rig's main animation.
         play_vrma(app.world_mut(), vrma_a, Duration::ZERO);
         app.update();
 
@@ -2264,8 +1999,6 @@ mod tests {
             "the snapshot keeps the live transitions"
         );
 
-        // Replace the whole rig: a new root bone with a fresh player and
-        // transitions, and a new spine under it.
         let (new_root, _new_spine) =
             reattach_rig(app.world_mut(), vrm, Quat::from_rotation_z(-0.6));
         app.world_mut().entity_mut(vrm).insert(VrmGeneration(2));
@@ -2288,8 +2021,6 @@ mod tests {
             "the restored clip is playing on the new player"
         );
 
-        // The next `PlayVrma` must fade the restored clip out, not leave it at
-        // full weight.
         play_vrma(app.world_mut(), vrma_b, Duration::from_millis(300));
         app.update();
         assert_eq!(

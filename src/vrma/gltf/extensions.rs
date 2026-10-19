@@ -6,22 +6,9 @@ use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
-/// `VRMC_vrm_animation.expressions`.
-///
-/// Both families are read, because the spec defines both and the shipped
-/// `.vrma` files only happen to leave `custom` empty: a file is free to animate
-/// an arbitrary custom expression, and dropping the map would silently discard
-/// its tracks. `custom` has a `Default`, so a file that omits the key (or the
-/// whole `expressions` object) still deserializes.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(default)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct VrmaExpressions {
-    /// `VRMC_vrm_animation.expressions.preset`: `VRMC_vrm` preset names that
-    /// must not be one of `lookUp` / `lookDown` / `lookLeft` / `lookRight`.
     pub preset: HashMap<String, VrmNode>,
-    /// `VRMC_vrm_animation.expressions.custom`: any name that is not a preset
-    /// name.
-    pub custom: HashMap<String, VrmNode>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

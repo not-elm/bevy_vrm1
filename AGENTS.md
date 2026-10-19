@@ -2,7 +2,6 @@
 
 ## Project Structure & Module Organization
 - `src/` holds the Rust crate. VRM runtime lives under `src/vrm/`, VRMA animation under `src/vrma/`, and shared system helpers in `src/system_param/` and `src/system_set.rs`.
-- A `.vrm` is loaded and initialized entirely at load time: `src/vrm/gltf.rs` holds `VrmLoader` + `VrmGltfPlugin`, and `src/vrm/gltf/handler/` holds the `GltfExtensionHandler` hooks (`root`, `nodes`, `materials`, `first_person`, `scene`) that write the VRM components into the scene asset. There is no runtime initialization step.
 - `examples/` contains runnable demos such as `spring_bone.rs`, `look_at_cursor.rs`, and `vrma.rs`.
 - `assets/` includes sample VRM/VRMA content used by examples and tests.
 - `docs/` provides images and documentation assets referenced by the README.

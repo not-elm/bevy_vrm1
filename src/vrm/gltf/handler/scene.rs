@@ -66,13 +66,28 @@ pub(crate) fn finalize(
     resolve_constraints(state, scene_world, world_root_id);
     build_expressions(state, scene_world, world_root_id);
     build_look_at(state, scene_world, world_root_id);
-    setup_animation(state, scene_world, world_root_id);
+    name_and_animate(state, scene_world, world_root_id);
     insert_humanoid_bone_holders(scene_world, world_root_id);
     insert_source_path(load_context, scene_world, world_root_id);
-    insert_name(state, scene_world, world_root_id);
     apply_first_person(state, load_context, scene_world);
 
     mark_initialized(scene_world, world_root_id);
+}
+
+/// Names the scene root after the model, then attaches the animation targets
+/// and the player.
+///
+/// The order matters when `hips` is a top-level glTF node: its parent, and so
+/// the root bone, is then the scene root itself, and the `Vrm::ROOT_BONE` name
+/// that `ChildSearcher::find_root_bone` and the VRMA bake look the root bone up
+/// by has to win over the model name, or no `.vrma` can ever play on it.
+fn name_and_animate(
+    state: &VrmLoadState,
+    world: &mut World,
+    root: Entity,
+) {
+    insert_name(state, world, root);
+    setup_animation(state, world, root);
 }
 
 /// Bakes the crate-private [`VrmSceneRoot`] marker onto the root of the scene
@@ -172,7 +187,13 @@ fn build_spring_chains(
     let mut resolved_colliders: Vec<Option<(Entity, ColliderShape)>> = Vec::new();
     for collider in &spring_bone.colliders {
         let resolved = match state.node_entities.get(&collider.node).copied() {
-            Some(entity) => Some((entity, collider.shape)),
+            Some(entity) => {
+                // The shape is also a component of the collider node, as the
+                // runtime initializer used to put it, so collider gizmos and app
+                // code can find it there.
+                world.entity_mut(entity).insert(collider.shape);
+                Some((entity, collider.shape))
+            }
             None => {
                 vrm_warn!(format!(
                     "VRM springBone: collider refers to a missing node {}, skipping it",
@@ -993,6 +1014,49 @@ mod tests {
         success!()
     }
 
+    /// A collider's shape is a component of its node, besides being listed in
+    /// the `SpringColliders` of the chains that use it.
+    #[test]
+    fn a_collider_node_carries_its_shape() -> TestResult {
+        let state = VrmLoadState {
+            spring_bone: Some(std::sync::Arc::new(serde_json::from_str(
+                r#"{
+                    "specVersion": "1.0",
+                    "colliders": [{"node": 2, "shape": {"sphere": {"offset": [0, 0, 0], "radius": 0.25}}}],
+                    "colliderGroups": [{"colliders": [0]}],
+                    "springs": [{"joints": [{"node": 0}, {"node": 1}], "colliderGroups": [0]}]
+                }"#,
+            )?)),
+            ..Default::default()
+        };
+        let mut world = World::new();
+        let head = world.spawn(Transform::default()).id();
+        let tail = world
+            .spawn((Transform::from_xyz(0.0, 1.0, 0.0), ChildOf(head)))
+            .id();
+        let collider = world.spawn(Transform::default()).id();
+        let state = VrmLoadState {
+            node_entities: [(0, head), (1, tail), (2, collider)].into_iter().collect(),
+            ..state
+        };
+        insert_rest_transforms(&mut world, head);
+
+        build_spring_chains(&state, &mut world);
+
+        let shape = world
+            .get::<ColliderShape>(collider)
+            .copied()
+            .expect("the collider node carries its shape");
+        assert!(matches!(shape, ColliderShape::Sphere(sphere) if sphere.radius == 0.25));
+        assert_eq!(
+            world
+                .get::<SpringRoot>(head)
+                .map(|root| root.colliders.0.clone()),
+            Some(vec![(collider, shape)])
+        );
+        success!()
+    }
+
     /// Sources are evaluated before the destinations that read them.
     #[test]
     fn constraints_are_sorted_source_before_destination() -> TestResult {
@@ -1224,6 +1288,36 @@ mod tests {
         // The scene root is not the animation root, so it must not hold a
         // player of its own: no `AnimatedBy` points at it.
         assert!(world.get::<AnimationPlayer>(root).is_none());
+        success!()
+    }
+
+    /// A `hips` listed directly in the glTF scene is a child of the scene root,
+    /// so the scene root is the root bone. It has to keep `Vrm::ROOT_BONE`, the
+    /// name the runtime finds the root bone by, rather than the model name.
+    #[test]
+    fn a_top_level_hips_keeps_the_root_bone_name_on_the_scene_root() -> TestResult {
+        let mut world = World::new();
+        let root = world.spawn(Name::new("Scene0")).id();
+        let hips = world.spawn(ChildOf(root)).id();
+        let state = VrmLoadState {
+            bone_nodes: [("hips".to_owned(), 0)].into_iter().collect(),
+            node_entities: [(0, hips)].into_iter().collect(),
+            ..state_with(vrm(
+                r#"{"specVersion": "1.0", "humanoid": {"humanBones": {}}, "meta": {"name": "Alicia"}}"#,
+            ))
+        };
+
+        name_and_animate(&state, &mut world, root);
+
+        assert_eq!(
+            world.get::<Name>(root).map(|name| name.as_str()),
+            Some(Vrm::ROOT_BONE)
+        );
+        assert!(world.get::<AnimationPlayer>(root).is_some());
+        assert_eq!(
+            world.get::<AnimatedBy>(hips).map(|animated| animated.0),
+            Some(root)
+        );
         success!()
     }
 

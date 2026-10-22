@@ -165,8 +165,12 @@ fn detach_raw(
     {
         strip_raw_root(world, root);
     }
+    // The entity the request named stays alive. When that is the owner, the
+    // instance's scene root is just another instance entity and goes with the
+    // rest; only a request that named the root itself keeps it (stripped).
+    let kept_root = root.filter(|_| entity_is_root);
     for tracked_entity in tracked {
-        if Some(tracked_entity) == root {
+        if Some(tracked_entity) == kept_root {
             continue;
         }
         if world.get_entity(tracked_entity).is_ok() {
@@ -260,20 +264,17 @@ fn strip_raw_root(
     despawn_children(world, root);
 }
 
-/// Despawns all direct children of the entity.
+/// Despawns all descendants of the entity.
 ///
-/// Bevy 0.18's `despawn()` is recursive, so this also despawns all descendants.
+/// `EntityWorldMut::despawn_children` skips a child that something else (an
+/// application observer reacting to an earlier despawn) already removed, where
+/// despawning each child through `World::entity_mut` would panic.
 fn despawn_children(
     world: &mut World,
     entity: Entity,
 ) {
-    let children = world
-        .get::<Children>(entity)
-        .map(|children| children.to_vec());
-    if let Some(children) = children {
-        for child in children {
-            world.entity_mut(child).despawn();
-        }
+    if let Ok(mut entity) = world.get_entity_mut(entity) {
+        entity.despawn_children();
     }
 }
 

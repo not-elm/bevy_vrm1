@@ -20,7 +20,10 @@ pub struct VrmcVrm {
 pub struct Expressions {
     #[serde(default)]
     pub preset: HashMap<String, VrmPreset>,
-    #[serde(default)]
+    /// Read leniently: a malformed custom expression is dropped on its own
+    /// instead of failing the whole `VRMC_vrm` parse, which would cost the
+    /// avatar every other extension it declares.
+    #[serde(default, deserialize_with = "lenient_map")]
     pub custom: HashMap<String, VrmPreset>,
 }
 
@@ -84,16 +87,35 @@ fn default_uv_scale() -> [f32; 2] {
     [1.0, 1.0]
 }
 
-/// Reads a list, dropping the entries that do not deserialize.
+/// Reads a list, dropping the entries that do not deserialize. Anything that
+/// is not a list at all (a `null`, say) reads as an empty one.
 fn lenient_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: serde::de::DeserializeOwned,
 {
-    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let serde_json::Value::Array(values) = serde_json::Value::deserialize(deserializer)? else {
+        return Ok(Vec::new());
+    };
     Ok(values
         .into_iter()
         .filter_map(|value| serde_json::from_value(value).ok())
+        .collect())
+}
+
+/// Reads a map, dropping the entries that do not deserialize. Anything that is
+/// not a map at all reads as an empty one.
+fn lenient_map<'de, D, T>(deserializer: D) -> Result<HashMap<String, T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let serde_json::Value::Object(entries) = serde_json::Value::deserialize(deserializer)? else {
+        return Ok(HashMap::default());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(name, value)| Some((name, serde_json::from_value(value).ok()?)))
         .collect())
 }
 
@@ -315,6 +337,35 @@ mod tests {
         assert_eq!(wave.material_color_binds.len(), 1);
         assert_eq!(wave.material_color_binds[0].r#type, "outlineColor");
 
+        success!()
+    }
+
+    /// `custom` and the two bind lists are parsed by this crate since v0.11.0; a
+    /// file that got one of them wrong used to load, because they were ignored,
+    /// and still has to.
+    #[test]
+    fn malformed_custom_expressions_and_null_bind_lists_are_tolerated() -> TestResult {
+        let expressions: Expressions = serde_json::from_str(
+            r#"{
+                "preset": {
+                    "happy": {
+                        "materialColorBinds": null,
+                        "textureTransformBinds": {},
+                        "morphTargetBinds": [{"index": 0, "node": 2, "weight": 1}]
+                    }
+                },
+                "custom": {
+                    "Broken": {"isBinary": null},
+                    "Wave": {"morphTargetBinds": [{"index": 1, "node": 2, "weight": 1}]}
+                }
+            }"#,
+        )?;
+
+        let happy = &expressions.preset["happy"];
+        assert!(happy.material_color_binds.is_empty());
+        assert!(happy.texture_transform_binds.is_empty());
+        assert!(!expressions.custom.contains_key("Broken"));
+        assert!(expressions.custom.contains_key("Wave"));
         success!()
     }
 

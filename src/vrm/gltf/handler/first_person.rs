@@ -103,6 +103,14 @@ pub(crate) fn process_primitive(
     if class != AutoClass::Split {
         return;
     }
+    // The halves would be rebuilt from the raw accessors, which a mesh-rotating
+    // load leaves 180° off their converted bind poses
+    // (`VrmLoadState::rotate_meshes`): the primitive stays whole, visible in both
+    // views, the conservative direction as below.
+    if state.rotate_meshes {
+        state.first_person.classes.insert(key, AutoClass::Both);
+        return;
+    }
 
     let Some(parts) = split(state, gltf_document, gltf_mesh, gltf_primitive, buffer_data) else {
         // The classification was `Split` but the geometry could not be divided.
@@ -185,12 +193,17 @@ fn auto_meshes(
                 .map(move |child| (child.index(), node.index()))
         })
         .collect();
+    // A cyclic node hierarchy makes `bevy_gltf` fail the load (`check_for_cycles`),
+    // but this runs *before* that check, so the ancestor walk is bounded by the
+    // node count instead of trusting the document, as in `root.rs`.
+    let max_depth = document.nodes().len();
     document
         .nodes()
         .filter_map(|node| {
             let mesh = node.mesh()?;
             let flag =
                 std::iter::successors(Some(node.index()), |index| parents.get(index).copied())
+                    .take(max_depth + 1)
                     .find_map(|index| flags.get(&index).copied())
                     .unwrap_or(FirstPersonFlag::Auto);
             (flag == FirstPersonFlag::Auto).then_some(mesh.index())
@@ -332,13 +345,16 @@ struct PrimitiveData<'a> {
     morph_targets: Vec<(Option<Vec<Vec3>>, Option<Vec<Vec3>>, Option<Vec<Vec3>>)>,
     indices: Vec<u32>,
     head_vertex: Vec<bool>,
+    /// `GltfLoaderSettings::load_meshes`, which the halves are created with.
+    asset_usage: RenderAssetUsages,
 }
 
 /// Reads the primitive and divides it into `(body, head)`.
 ///
-/// Both halves keep the source topology, every attribute the source carried, and
-/// the morph targets; only the index list and the vertex set shrink, which is
-/// what makes the split lossless.
+/// Only a triangle list is divided (see [`build_submesh`]). Both halves keep
+/// that topology, every attribute the source carried, and the morph targets;
+/// only the index list and the vertex set shrink, which is what makes the split
+/// lossless.
 fn split(
     state: &VrmLoadState,
     gltf_document: &gltf::Gltf,
@@ -352,7 +368,11 @@ fn split(
 
     let reader = gltf_primitive.reader(|buffer| buffer_data.get(buffer.index()).map(Vec::as_slice));
     let positions: Vec<[f32; 3]> = reader.read_positions()?.collect();
-    let normals: Option<Vec<[f32; 3]>> = reader.read_normals().map(|values| values.collect());
+    // `bevy_gltf` computes flat normals for a primitive without `NORMAL` by
+    // duplicating its vertices, which it would do to the body half only (it is
+    // handed back as `user_mesh`) and never to the head half, so the two halves
+    // would shade differently. Such a primitive is left unsplit.
+    let normals: Vec<[f32; 3]> = reader.read_normals()?.collect();
     let tex_coords_0: Option<Vec<[f32; 2]>> =
         reader.read_tex_coords(0).map(|uv| uv.into_f32().collect());
     let tex_coords_1: Option<Vec<[f32; 2]>> =
@@ -382,7 +402,7 @@ fn split(
     let data = PrimitiveData {
         topology,
         positions: &positions,
-        normals: normals.as_deref(),
+        normals: Some(&normals),
         tex_coords_0: tex_coords_0.as_deref(),
         tex_coords_1: tex_coords_1.as_deref(),
         colors: colors.as_deref(),
@@ -392,6 +412,7 @@ fn split(
         morph_targets,
         indices,
         head_vertex,
+        asset_usage: state.load_meshes,
     };
 
     let mut body = build_submesh(&data, false)?;
@@ -407,9 +428,19 @@ fn split(
         body.set_morph_target_names(names.target_names.clone());
         head.set_morph_target_names(names.target_names);
     }
-    // `bevy_gltf` generates these for the body half, which it receives as
-    // `user_mesh`, but never sees the head half. Without them the copy's `Aabb`
-    // stays at the bind pose.
+    // `bevy_gltf` generates the tangents and the skinned bounds for the body
+    // half, which it receives as `user_mesh`, but never sees the head half.
+    // Without tangents a normal-mapped material loses its normal map on the
+    // head part only; without the bounds the copy's `Aabb` stays at the bind
+    // pose.
+    if !head.contains_attribute(Mesh::ATTRIBUTE_TANGENT)
+        && gltf_primitive.material().normal_texture().is_some()
+        && let Err(error) = head.generate_tangents()
+    {
+        vrm_warn!(format!(
+            "VRM firstPerson: failed to generate the head half's tangents: {error}"
+        ));
+    }
     if let Err(error) = head.generate_skinned_mesh_bounds() {
         vrm_warn!(format!(
             "VRM firstPerson: failed to generate the head half's skinned mesh bounds: {error}"
@@ -487,9 +518,12 @@ fn build_submesh(
     data: &PrimitiveData<'_>,
     keep_head: bool,
 ) -> Option<Mesh> {
-    // Triangles are consumed three at a time. Anything else (a line list, a
-    // point cloud) has no such notion, so it is not divided.
-    if !data.indices.len().is_multiple_of(3) {
+    // Triangles are consumed three at a time, which is only the meaning of the
+    // index list for a triangle *list*. A strip shares vertices between
+    // consecutive triangles, and lines and points have no triangles at all, so
+    // chopping them into triples would invent and drop geometry: they are not
+    // divided.
+    if data.topology != PrimitiveTopology::TriangleList || !data.indices.len().is_multiple_of(3) {
         return None;
     }
 
@@ -548,14 +582,7 @@ fn build_submesh(
         }
     }
 
-    let mut mesh = Mesh::new(
-        data.topology,
-        // `on_gltf_primitive` does not receive the loader settings, and
-        // `RenderAssetUsages::default()` is exactly
-        // `GltfLoaderSettings::load_meshes`'s default
-        // (`bevy_gltf/src/loader/mod.rs`).
-        RenderAssetUsages::default(),
-    );
+    let mut mesh = Mesh::new(data.topology, data.asset_usage);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     if !normals.is_empty() {
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
@@ -639,6 +666,8 @@ mod tests {
         morph_targets: Vec<(Option<Vec<Vec3>>, Option<Vec<Vec3>>, Option<Vec<Vec3>>)>,
         /// Truncated normals, used by the malformed-input test.
         short_normals: bool,
+        /// The primitive mode; only a triangle list can be divided.
+        topology: PrimitiveTopology,
     }
 
     impl Fixture {
@@ -668,6 +697,7 @@ mod tests {
                 weights,
                 morph_targets: vec![(Some(vec![Vec3::X; 6]), Some(vec![Vec3::Y; 6]), None)],
                 short_normals: false,
+                topology: PrimitiveTopology::TriangleList,
             }
         }
 
@@ -678,9 +708,7 @@ mod tests {
                 &self.normals
             };
             PrimitiveData {
-                // A strip, not a triangle list: the experiment hardcoded
-                // `TriangleList`.
-                topology: PrimitiveTopology::TriangleStrip,
+                topology: self.topology,
                 positions: &self.positions,
                 normals: Some(normals),
                 tex_coords_0: Some(&self.tex_coords_0),
@@ -692,6 +720,7 @@ mod tests {
                 morph_targets: self.morph_targets.clone(),
                 indices: vec![0, 1, 2, 3, 4, 5],
                 head_vertex: vec![false, false, false, true, true, true],
+                asset_usage: RenderAssetUsages::default(),
             }
         }
     }
@@ -709,7 +738,7 @@ mod tests {
         }
     }
 
-    /// The split is lossless: both halves keep the source topology, every
+    /// The split is lossless: both halves keep the triangle-list topology, every
     /// attribute the source had, and the morph targets - only the vertex set and
     /// the index list shrink.
     #[test]
@@ -721,7 +750,7 @@ mod tests {
         let head = build_submesh(&data, true).expect("the head half splits");
 
         for mesh in [&body, &head] {
-            assert_eq!(mesh.primitive_topology(), PrimitiveTopology::TriangleStrip);
+            assert_eq!(mesh.primitive_topology(), PrimitiveTopology::TriangleList);
             assert_eq!(
                 mesh.count_vertices(),
                 3,
@@ -769,6 +798,28 @@ mod tests {
 
         assert!(build_submesh(&data, false).is_none());
         assert!(build_submesh(&data, true).is_none());
+        success!()
+    }
+
+    /// Only a triangle list is cut into independent triples. A strip's six
+    /// indices are four triangles that share edges, and six line indices are
+    /// three segments, so chopping either into triples would drop and invent
+    /// geometry; such a primitive is left unsplit.
+    #[test]
+    fn a_non_list_topology_refuses_the_split() -> TestResult {
+        for topology in [
+            PrimitiveTopology::TriangleStrip,
+            PrimitiveTopology::LineList,
+            PrimitiveTopology::LineStrip,
+            PrimitiveTopology::PointList,
+        ] {
+            let mut fixture = Fixture::new();
+            fixture.topology = topology;
+            let data = fixture.primitive();
+
+            assert!(build_submesh(&data, false).is_none(), "{topology:?}");
+            assert!(build_submesh(&data, true).is_none(), "{topology:?}");
+        }
         success!()
     }
 
@@ -883,6 +934,37 @@ mod tests {
                 ]"#
             ),
             vec![1]
+        );
+        success!()
+    }
+
+    /// `auto_meshes` runs before `bevy_gltf`'s cycle check, so a cyclic node
+    /// hierarchy must end the ancestor walk instead of spinning the load forever.
+    #[test]
+    fn a_cyclic_hierarchy_does_not_hang_the_auto_walk() -> TestResult {
+        let gltf = gltf::Gltf::from_slice_without_validation(
+            br#"{
+                "asset": {"version": "2.0"},
+                "scenes": [{"nodes": [0]}],
+                "nodes": [
+                    {"name": "Body", "mesh": 0, "children": [1]},
+                    {"name": "Loop", "children": [0]},
+                    {"name": "Self", "mesh": 1, "children": [2]}
+                ],
+                "meshes": [
+                    {"primitives": [{"attributes": {}}]},
+                    {"primitives": [{"attributes": {}}]}
+                ]
+            }"#,
+        )
+        .expect("the document should parse");
+
+        let auto = auto_meshes(None, &gltf.document);
+
+        assert_eq!(
+            auto,
+            HashSet::from([0, 1]),
+            "no annotation covers either mesh"
         );
         success!()
     }

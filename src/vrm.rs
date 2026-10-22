@@ -22,7 +22,9 @@ use crate::vrm::look_at::LookAtPlugin;
 use crate::vrm::spring_bone::VrmSpringBonePlugin;
 use bevy::app::{AnimationSystems, App, Plugin};
 use bevy::prelude::*;
-use bevy::transform::systems::{propagate_parent_transforms, sync_simple_transforms};
+use bevy::transform::systems::{
+    mark_dirty_trees, propagate_parent_transforms, sync_simple_transforms,
+};
 use expressions::VrmExpressionPlugin;
 use first_person::VrmFirstPersonPlugin;
 use gltf::VrmGltfPlugin;
@@ -173,6 +175,23 @@ impl Plugin for VrmPlugin {
                 .after(VrmSystemSets::Expressions)
                 .before(VrmSystemSets::SpringBone),
         );
+        // `update_spring_bones` publishes the `GlobalTransform` of the joints it
+        // simulates, but not of the chain's last joint or of anything parented
+        // under a joint, and bevy's own propagation has already run by then
+        // (`VrmGltfRuntimePlugin` orders the manual passes after it). Without one
+        // more pass those render with the pose from before the spring step, one
+        // frame behind the strand. `mark_dirty_trees` comes first because the
+        // spring step writes after bevy marked this frame's dirty trees.
+        app.add_systems(
+            PostUpdate,
+            (
+                mark_dirty_trees,
+                propagate_parent_transforms,
+                sync_simple_transforms,
+            )
+                .chain()
+                .after(VrmSystemSets::SpringBone),
+        );
 
         app.register_type::<Vrm>()
             .register_type::<VrmPath>()
@@ -205,6 +224,69 @@ mod tests {
                 .into(),
                 ..default()
             })
+    }
+
+    /// The spring step moves a chain's joints after bevy has propagated, and
+    /// publishes only the joints it simulates. The chain's last joint has to be
+    /// published from its parent's *new* rotation in the same frame, or the tip
+    /// of every strand renders one frame behind.
+    #[test]
+    fn a_spring_chain_tail_follows_its_joint_in_the_same_frame() {
+        use crate::vrm::spring_bone::{
+            SpringCenterNode, SpringColliders, SpringJointProps, SpringJointState, SpringJoints,
+            SpringRoot,
+        };
+        use bevy::time::TimeUpdateStrategy;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins((headless_default_plugins(), VrmPlugin));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            16,
+        )));
+        app.finish();
+        app.cleanup();
+        let props = SpringJointProps {
+            drag_force: 0.0,
+            gravity_dir: Vec3::NEG_X,
+            gravity_power: 50.0,
+            hit_radius: 0.0,
+            stiffness: 0.0,
+        };
+        let rest = Transform::from_xyz(0.0, 1.0, 0.0);
+        let root = app.world_mut().spawn(Transform::default()).id();
+        let joint = app.world_mut().spawn((rest, ChildOf(root))).id();
+        let tail = app
+            .world_mut()
+            .spawn((Transform::from_xyz(0.0, 1.0, 0.0), ChildOf(joint), props))
+            .id();
+        app.world_mut()
+            .entity_mut(joint)
+            .insert((props, SpringJointState::from_rest(Vec3::Y, 1.0, rest)));
+        app.world_mut().entity_mut(root).insert(SpringRoot {
+            joints: SpringJoints(vec![joint, tail]),
+            colliders: SpringColliders::default(),
+            center_node: SpringCenterNode(None),
+        });
+
+        let mut moved = false;
+        for _ in 0..4 {
+            app.update();
+            let world = app.world();
+            let joint_gtf = *world.get::<GlobalTransform>(joint).unwrap();
+            let tail_tf = *world.get::<Transform>(tail).unwrap();
+            let published = world.get::<GlobalTransform>(tail).unwrap().translation();
+            let expected = joint_gtf.mul_transform(tail_tf).translation();
+            moved |= joint_gtf.rotation().angle_between(Quat::IDENTITY) > 0.1;
+            assert!(
+                published.abs_diff_eq(expected, 1e-4),
+                "the tail is published at {published:?}, its joint puts it at {expected:?}"
+            );
+        }
+        assert!(
+            moved,
+            "gravity must actually swing the joint for the test to mean anything"
+        );
     }
 
     /// `VrmPlugin` alone brings the `.vrm` loader; no other plugin is needed.

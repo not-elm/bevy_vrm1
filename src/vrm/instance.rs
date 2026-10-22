@@ -178,8 +178,11 @@ pub(crate) struct VrmInstanceState {
 
 /// The owner's [`Name`] was copied from the model at attach, not supplied by
 /// the application, so a swap replaces it and a detach removes it.
-#[derive(Component, Default, Debug, Clone, Copy)]
-pub(crate) struct NameFromModel;
+///
+/// It holds the copied value: a `Name` the application writes afterwards
+/// differs from it, and is then the application's and kept.
+#[derive(Component, Debug, Clone)]
+pub(crate) struct NameFromModel(Name);
 
 /// The `on_insert` hook of [`VrmHandle`]: arm the resolver.
 fn mark_vrm_scene_pending(
@@ -532,14 +535,39 @@ fn attach_managed(
     // Now that a fresh rig is attached, any data left by a previous one is stale:
     // holders may name despawned bones and an `Initialized` root may point at a
     // rig that no longer exists. Clear before moving the new values in.
-    clear_attached_state(world, parent);
+    //
+    // Only a rig that is still recorded left such data: an invalidation and a
+    // detach clear theirs. On the first attach the root-data types present on
+    // the entity were put there by the application (a `LookAtProperties` for a
+    // model that declares no `lookAt`, say) and must survive, as they did when
+    // the model's values were only inserted.
+    if world.get::<VrmInstanceState>(parent).is_some() {
+        clear_attached_state(world, parent);
+    }
     move_root_data(world, scene_root, parent);
+    // Every insert and removal above flushed the world's command queue, so an
+    // application observer (on `Remove<Initialized>` or `Add<VrmPath>`, say) may
+    // already have detached or despawned the owner or the scene. Re-check
+    // before each step that touches them again.
+    if !attach_still_wanted(world, parent, scene_root) {
+        return;
+    }
     // The loader names the scene root after `meta.name`. A `Name` the
-    // application gave the entity wins.
+    // application gave the entity wins. A scene root that is also the root bone
+    // (a `hips` listed directly in the glTF scene) carries `Vrm::ROOT_BONE`
+    // instead, which is a lookup key rather than the model's name.
     if world.get::<Name>(parent).is_none()
-        && let Some(name) = world.get::<Name>(scene_root).cloned()
+        && let Some(name) = world
+            .get::<Name>(scene_root)
+            .filter(|name| name.as_str() != Vrm::ROOT_BONE)
+            .cloned()
     {
-        world.entity_mut(parent).insert((name, NameFromModel));
+        world
+            .entity_mut(parent)
+            .insert((name.clone(), NameFromModel(name)));
+    }
+    if !attach_still_wanted(world, parent, scene_root) {
+        return;
     }
 
     world.entity_mut(parent).insert((
@@ -547,9 +575,32 @@ fn attach_managed(
         VrmGeneration(generation),
         VrmInstanceState { scene_root },
     ));
+    // An `On<Add, Vrm>` observer may have detached the owner; `Initialized` must
+    // then not be resurrected on it.
+    if !attach_still_wanted(world, parent, scene_root)
+        || world
+            .get::<VrmInstanceState>(parent)
+            .is_none_or(|state| state.scene_root != scene_root)
+    {
+        return;
+    }
     // Last, so observers on `On<Insert, Initialized>` see `Vrm`, the generation
     // and every root component already in place.
     world.entity_mut(parent).insert(Initialized);
+}
+
+/// Whether the attach in progress may still write to `parent`: the owner and
+/// its scene root are alive and the owner is still a managed avatar that wants
+/// an instance.
+fn attach_still_wanted(
+    world: &World,
+    parent: Entity,
+    scene_root: Entity,
+) -> bool {
+    world.get_entity(parent).is_ok()
+        && world.get_entity(scene_root).is_ok()
+        && world.get::<VrmHandle>(parent).is_some()
+        && world.get::<WorldAssetRoot>(parent).is_some()
 }
 
 /// Attaches the public markers to a raw spawn's child scene root.
@@ -680,19 +731,23 @@ fn clear_attached_state(
 ) {
     remove_root_data(world, entity);
     remove_model_name(world, entity);
-    world
-        .entity_mut(entity)
-        .remove::<(Vrm, Initialized, VrmInstanceState)>();
+    if let Ok(mut entity) = world.get_entity_mut(entity) {
+        entity.remove::<(Vrm, Initialized, VrmInstanceState)>();
+    }
 }
 
 /// Removes a [`Name`] the attach copied from the model, keeping one the
-/// application supplied.
+/// application supplied, including one it wrote over the copied name later.
 pub(crate) fn remove_model_name(
     world: &mut World,
     entity: Entity,
 ) {
-    if world.entity_mut(entity).take::<NameFromModel>().is_some() {
-        world.entity_mut(entity).remove::<Name>();
+    if let Ok(mut owner) = world.get_entity_mut(entity)
+        && let Some(NameFromModel(copied)) = owner.take::<NameFromModel>()
+        && let Ok(mut owner) = world.get_entity_mut(entity)
+        && owner.get::<Name>() == Some(&copied)
+    {
+        owner.remove::<Name>();
     }
 }
 
@@ -757,19 +812,31 @@ fn invalidate_dead_rigs(
 macro_rules! define_root_data_ops {
     ($($ty:ty),* $(,)?) => {
         /// Moves every present root-level component from `from` onto `to`.
+        ///
+        /// Each take and insert flushes the world's command queue, so either
+        /// entity can be despawned by an observer between two moves; a move then
+        /// stops instead of panicking.
         pub(crate) fn move_root_data(world: &mut World, from: Entity, to: Entity) {
             $(
-                if let Some(value) = world.entity_mut(from).take::<$ty>() {
-                    world.entity_mut(to).insert(value);
+                if let Ok(mut source) = world.get_entity_mut(from)
+                    && let Some(value) = source.take::<$ty>()
+                    && let Ok(mut target) = world.get_entity_mut(to)
+                {
+                    target.insert(value);
                 }
             )*
             move_root_holders(world, from, to);
         }
 
         /// Removes every root-level component from `entity`.
+        ///
+        /// Each removal flushes the world's command queue, so the entity can be
+        /// despawned by an observer between two of them; the rest is then moot.
         pub(crate) fn remove_root_data(world: &mut World, entity: Entity) {
             $(
-                world.entity_mut(entity).remove::<$ty>();
+                if let Ok(mut entity) = world.get_entity_mut(entity) {
+                    entity.remove::<$ty>();
+                }
             )*
             remove_root_holders(world, entity);
         }
@@ -784,11 +851,12 @@ macro_rules! define_root_holder_ops {
         pub(crate) fn move_root_holders(world: &mut World, from: Entity, to: Entity) {
             paste::paste! {
                 $(
-                    if let Some(holder) = world
-                        .entity_mut(from)
-                        .take::<crate::vrm::humanoid_bone::prelude::[<$bone BoneEntity>]>()
+                    if let Ok(mut source) = world.get_entity_mut(from)
+                        && let Some(holder) = source
+                            .take::<crate::vrm::humanoid_bone::prelude::[<$bone BoneEntity>]>()
+                        && let Ok(mut target) = world.get_entity_mut(to)
                     {
-                        world.entity_mut(to).insert(holder);
+                        target.insert(holder);
                     }
                 )+
             }
@@ -798,9 +866,9 @@ macro_rules! define_root_holder_ops {
         pub(crate) fn remove_root_holders(world: &mut World, entity: Entity) {
             paste::paste! {
                 $(
-                    world
-                        .entity_mut(entity)
-                        .remove::<crate::vrm::humanoid_bone::prelude::[<$bone BoneEntity>]>();
+                    if let Ok(mut entity) = world.get_entity_mut(entity) {
+                        entity.remove::<crate::vrm::humanoid_bone::prelude::[<$bone BoneEntity>]>();
+                    }
                 )+
             }
         }
@@ -1821,6 +1889,102 @@ mod tests {
         success!()
     }
 
+    /// Every structural change of the attach flushes the world's commands, so an
+    /// application observer runs in the middle of it. One that detaches the
+    /// avatar as soon as it becomes a `Vrm` must not get `Initialized` back, and
+    /// one that despawns it must not make the attach panic.
+    #[test]
+    fn an_observer_that_tears_the_avatar_down_mid_attach_wins() -> TestResult {
+        let mut app = instance_app();
+        let handle = add_vrm(&mut app, vrm_scene(false).0);
+        let detached = app.world_mut().spawn(VrmHandle(handle.clone())).id();
+        let despawned = app.world_mut().spawn(VrmHandle(handle)).id();
+        app.add_observer(move |add: On<Add, Vrm>, mut commands: Commands| {
+            let entity = add.event_target();
+            if entity == detached {
+                commands.entity(entity).trigger(RequestDetachVrm);
+            } else if entity == despawned {
+                commands.entity(entity).despawn();
+            }
+        });
+        for _ in 0..6 {
+            app.update();
+        }
+
+        assert!(app.world().get::<Initialized>(detached).is_none());
+        assert!(app.world().get::<Vrm>(detached).is_none());
+        assert!(app.world().get_entity(despawned).is_err());
+        success!()
+    }
+
+    /// `lookAt` is optional in `VRMC_vrm`. An application that spawns the avatar
+    /// with its own `LookAtProperties` for a model that declares none keeps it:
+    /// the first attach has no previous rig whose data would be stale.
+    #[test]
+    fn the_first_attach_keeps_root_data_the_model_does_not_provide() -> TestResult {
+        let mut app = instance_app();
+        let handle = add_vrm(&mut app, vrm_scene_with_neck());
+        let properties = LookAtProperties {
+            offset_from_head_bone: [0.0, 0.1, 0.0],
+            ..Default::default()
+        };
+        let vrm = app.world_mut().spawn((VrmHandle(handle), properties)).id();
+        for _ in 0..6 {
+            app.update();
+        }
+
+        assert!(app.world().get::<Initialized>(vrm).is_some());
+        assert_eq!(
+            app.world()
+                .get::<LookAtProperties>(vrm)
+                .map(|properties| properties.offset_from_head_bone),
+            Some([0.0, 0.1, 0.0])
+        );
+        success!()
+    }
+
+    /// A `Name` the application writes over the copied model name is the
+    /// application's from then on: a swap and a detach keep it.
+    #[test]
+    fn a_name_written_over_the_model_name_is_kept() -> TestResult {
+        let mut app = instance_app();
+        let first = add_vrm(&mut app, named_vrm_scene("First"));
+        let second = add_vrm(&mut app, named_vrm_scene("Second"));
+        let vrm = app.world_mut().spawn(VrmHandle(first)).id();
+        for _ in 0..6 {
+            app.update();
+        }
+        let name = |app: &App| {
+            app.world()
+                .get::<Name>(vrm)
+                .map(|name| name.as_str().to_owned())
+        };
+        assert_eq!(name(&app).as_deref(), Some("First"));
+
+        app.world_mut()
+            .entity_mut(vrm)
+            .insert(Name::new("Player 1"));
+        app.world_mut()
+            .entity_mut(vrm)
+            .get_mut::<VrmHandle>()
+            .unwrap()
+            .0 = second;
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(name(&app).as_deref(), Some("Player 1"));
+
+        app.world_mut()
+            .commands()
+            .entity(vrm)
+            .trigger(RequestDetachVrm);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(name(&app).as_deref(), Some("Player 1"));
+        success!()
+    }
+
     /// A broken file fixed on disk and hot-reloaded replaces the asset under the
     /// same handle; the owner the resolver gave up on has to pick it up.
     #[test]
@@ -2057,6 +2221,16 @@ mod tests {
         assert_eq!(
             remaining, 0,
             "no orphaned VRM survives the raw owner detach"
+        );
+        assert!(
+            app.world().get_entity(root).is_err(),
+            "the request named the owner, so the instance's scene root goes too"
+        );
+        assert!(
+            app.world()
+                .get::<Children>(owner)
+                .is_none_or(|children| children.is_empty()),
+            "no stripped instance root is left under the owner"
         );
         success!()
     }

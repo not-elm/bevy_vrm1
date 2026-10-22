@@ -737,4 +737,23 @@ mod tests {
         assert!(state.bone_nodes.is_empty());
         success!()
     }
+
+    /// `VRMC_springBone` without `VRMC_vrm` is a prop (or a `.vrma` carrying
+    /// spring bones), not an avatar, so the avatar pipeline must stay out of it.
+    #[test]
+    fn spring_bones_alone_are_not_a_model() -> TestResult {
+        let gltf = document(
+            r#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+                "nodes":[{"name":"Tail"}],
+                "extensionsUsed":["VRMC_springBone"],
+                "extensions":{"VRMC_springBone":{"specVersion":"1.0"}}}"#,
+        );
+        let mut state = VrmLoadState::default();
+
+        parse_root_extensions(&mut state, &gltf);
+
+        assert!(state.spring_bone.is_some());
+        assert!(!state.is_vrm(), "no `VRMC_vrm`, no avatar");
+        success!()
+    }
 }

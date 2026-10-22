@@ -228,8 +228,9 @@ fn aim_rotation(
     // root, and for a root that is the identity.
     let destination_parent = match parents.get(destination) {
         Ok(child_of) => compute_global(child_of.0, parents, transforms)?,
-        Err(_) => Transform::IDENTITY,
+        Err(_) => GlobalTransform::IDENTITY,
     };
+    let destination_parent_rotation = destination_parent.rotation();
     let source_global = compute_global(source, parents, transforms)?;
     let destination_local = *transforms.get(destination).ok()?;
     let destination_global = destination_parent.mul_transform(destination_local);
@@ -239,7 +240,8 @@ fn aim_rotation(
     // configuration a sleeve bone and a hand bone reach whenever the arm is at
     // the origin — and the `NaN` would be written into the scene. There is no
     // direction to aim at, so the constraint is skipped instead.
-    let to_vec = (source_global.translation - destination_global.translation).normalize_or_zero();
+    let to_vec =
+        (source_global.translation() - destination_global.translation()).normalize_or_zero();
     if to_vec == Vec3::ZERO {
         return None;
     }
@@ -248,16 +250,16 @@ fn aim_rotation(
     // rest pose's aim axis in world space. The destination's *current* rotation
     // is deliberately not used, or the constraint would chase its own output.
     let from_vec =
-        (destination_parent.rotation * destination_rest * aim_axis.as_vec3()).normalize_or_zero();
+        (destination_parent_rotation * destination_rest * aim_axis.as_vec3()).normalize_or_zero();
     if from_vec == Vec3::ZERO {
         return None;
     }
     let from_to = Quat::from_rotation_arc(from_vec, to_vec);
 
     Some(destination_rest.slerp(
-        destination_parent.rotation.inverse()
+        destination_parent_rotation.inverse()
             * from_to
-            * destination_parent.rotation
+            * destination_parent_rotation
             * destination_rest,
         weight,
     ))
@@ -265,10 +267,11 @@ fn aim_rotation(
 
 /// Accumulates an entity's world transform by walking up its parent chain.
 ///
-/// [`GlobalTransform`] is deliberately not consulted. At this point in
-/// `PostUpdate` bevy has not propagated yet — `TransformSystems::Propagate` runs
-/// after `AnimationSystems` and `VrmSystemSets::Constraints` is unordered
-/// against it — so the stored `GlobalTransform` is whatever
+/// The stored [`GlobalTransform`] component is deliberately not consulted. At
+/// this point in `PostUpdate` bevy has not propagated yet —
+/// `TransformSystems::Propagate` runs after `AnimationSystems` and
+/// `VrmSystemSets::Constraints` is unordered against it — so the stored
+/// `GlobalTransform` is whatever
 /// `VrmSystemSets::PropagateAfterConstraints` published at the end of the
 /// *previous* frame. Reading it here would break two things:
 ///
@@ -280,29 +283,26 @@ fn aim_rotation(
 /// * Whether the value happened to be one frame stale or current would depend
 ///   on how the scheduler interleaved the two sets, so the same rig could
 ///   behave differently run to run.
+///
+/// The chain is composed as affine matrices, exactly as [`GlobalTransform`]
+/// itself is: `Transform::mul_transform` keeps rotation and per-axis scale
+/// apart, which drops the shear a non-uniformly scaled ancestor above a rotated
+/// bone produces, so the positions it gives would not be where the bones render.
 fn compute_global(
     entity: Entity,
     parents: &Query<&ChildOf>,
     transforms: &Query<&mut Transform>,
-) -> Option<Transform> {
-    let mut chain = Vec::new();
+) -> Option<GlobalTransform> {
+    let mut global = GlobalTransform::from(*transforms.get(entity).ok()?);
     let mut current = entity;
-    loop {
-        chain.push(current);
-        if chain.len() > MAX_ANCESTOR_WALK {
-            return None;
-        }
-        match parents.get(current) {
-            Ok(child_of) => current = child_of.0,
-            Err(_) => break,
-        }
+    for _ in 0..MAX_ANCESTOR_WALK {
+        let Ok(child_of) = parents.get(current) else {
+            return Some(global);
+        };
+        current = child_of.parent();
+        global = GlobalTransform::from(*transforms.get(current).ok()?) * global;
     }
-
-    let mut global = Transform::IDENTITY;
-    for entity in chain.iter().rev() {
-        global = global.mul_transform(*transforms.get(*entity).ok()?);
-    }
-    Some(global)
+    None
 }
 
 #[cfg(test)]
@@ -617,6 +617,54 @@ mod tests {
         assert!(
             aimed.abs_diff_eq(expected, 1e-5),
             "aim axis points at {aimed:?}, the source is at {expected:?}"
+        );
+        success!()
+    }
+
+    /// A non-uniformly scaled ancestor above a rotated bone shears its subtree.
+    /// The aim has to use the world position the bones render at, i.e. the
+    /// affine composition `GlobalTransform` uses: composing `Transform`s
+    /// rotation-and-scale-apart puts this source at `(0, 2, 0)` instead of
+    /// `(0, 1, 0)`, above the destination instead of below it.
+    #[test]
+    fn aim_constraint_uses_the_affine_world_position_under_non_uniform_scale() -> TestResult {
+        let mut app = test_app();
+        let scaled_tf = Transform::from_scale(Vec3::new(2.0, 1.0, 1.0));
+        let bone_tf = Transform::from_rotation(Quat::from_rotation_z(FRAC_PI_2));
+        let source_tf = Transform::from_xyz(1.0, 0.0, 0.0);
+        let scaled = app.world_mut().spawn(scaled_tf).id();
+        let bone = app.world_mut().spawn((bone_tf, ChildOf(scaled))).id();
+        let source = app
+            .world_mut()
+            .spawn((source_tf, rest(Quat::IDENTITY), ChildOf(bone)))
+            .id();
+        let destination = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 1.5, 0.0),
+                rest(Quat::IDENTITY),
+                VrmNodeConstraint {
+                    source,
+                    weight: 1.0,
+                    kind: VrmConstraintKind::Aim { aim_axis: Dir3::Y },
+                },
+            ))
+            .id();
+        app.world_mut()
+            .spawn(ConstraintExecutionOrder(vec![destination]));
+
+        run_constraints(&mut app);
+
+        let rendered_source = (GlobalTransform::from(scaled_tf)
+            * GlobalTransform::from(bone_tf)
+            * GlobalTransform::from(source_tf))
+        .translation();
+        assert!(rendered_source.abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-5));
+        let expected = (rendered_source - Vec3::new(0.0, 1.5, 0.0)).normalize();
+        let aimed = rotation(&app, destination) * Vec3::Y;
+        assert!(
+            aimed.abs_diff_eq(expected, 1e-4),
+            "aim axis points at {aimed:?}, the rendered source is along {expected:?}"
         );
         success!()
     }

@@ -169,7 +169,9 @@ fn obtain_vrma_duration(
         .filter_map(|handle| assets.get(handle))
         .map(|clip| clip.duration() as f64)
         .fold(0., |v1, v2| v2.max(v1));
-    Duration::from_secs_f64(duration)
+    // A sampler timestamp is any finite float, so a clip can outlast what a
+    // `Duration` holds (about 1.8e19 s); `from_secs_f64` would panic on it.
+    Duration::try_from_secs_f64(duration).unwrap_or(Duration::MAX)
 }
 
 fn trigger_loaded(
@@ -206,6 +208,18 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct GraphRequests(Vec<Entity>);
+
+    /// A `.vrma` whose sampler holds a huge timestamp must not abort the app
+    /// while its duration is read, before the bake caps its sample count.
+    #[test]
+    fn a_huge_clip_duration_saturates_instead_of_panicking() {
+        let mut clips = Assets::<AnimationClip>::default();
+        let mut clip = AnimationClip::default();
+        clip.set_duration(f32::MAX);
+        let handle = clips.add(clip);
+
+        assert_eq!(obtain_vrma_duration(&clips, &[handle]), Duration::MAX);
+    }
 
     #[test]
     fn waits_for_unloaded_handles_and_requests_one_graph_per_model() {

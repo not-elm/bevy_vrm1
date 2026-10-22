@@ -47,6 +47,7 @@ use bevy::gltf::GltfMaterial;
 use bevy::image::Image;
 use bevy::material::OpaqueRendererMethod;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
+use bevy::platform::collections::HashMap;
 
 use super::VrmLoadState;
 use crate::error::vrm_warn;
@@ -106,8 +107,9 @@ pub(crate) fn process_material(
             .map_or(1.0, |multiplier| multiplier.emissive_multiplier);
 
     let texture_count = state.texture_count;
+    let textures = &state.textures;
     let material = mtoon_material(
-        &mut |index| texture(load_context, texture_count, index),
+        &mut |index| texture(load_context, textures, texture_count, index),
         material_asset,
         &mtoon,
         hdr_emissive_multiplier,
@@ -187,14 +189,22 @@ fn mtoon_material(
     }
 }
 
-/// Handle to the labeled image asset `bevy_gltf` created for texture `index`.
+/// Handle to the image `bevy_gltf` created for texture `index`.
+///
+/// The handle recorded by `on_texture` is preferred: it is the one bevy loads,
+/// whether the image is embedded (a `Texture{index}` labeled asset) or a
+/// separate file (loaded by path, with no such label). The label handle is only
+/// the fallback for a texture the hook did not report.
 fn texture(
     load_context: &mut LoadContext<'_>,
+    textures: &HashMap<usize, Handle<Image>>,
     texture_count: usize,
     index: Option<usize>,
 ) -> Option<Handle<Image>> {
     existing_texture(index, texture_count).map(|index| {
-        load_context.get_label_handle::<Image>(GltfAssetLabel::Texture(index).to_string())
+        textures.get(&index).cloned().unwrap_or_else(|| {
+            load_context.get_label_handle::<Image>(GltfAssetLabel::Texture(index).to_string())
+        })
     })
 }
 

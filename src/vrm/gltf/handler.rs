@@ -33,9 +33,10 @@ pub mod root;
 pub mod scene;
 
 use bevy::animation::AnimationTargetId;
-use bevy::asset::{Handle, LoadContext};
+use bevy::asset::{Handle, LoadContext, RenderAssetUsages};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::world::{EntityWorldMut, World};
+use bevy::gltf::convert_coordinates::GltfConvertCoordinates;
 use bevy::gltf::extensions::{ErasedGltfExtensionHandler, GltfExtensionHandler};
 use bevy::gltf::{GltfLoaderSettings, GltfMaterial};
 use bevy::mesh::{Mesh, MeshVertexAttribute};
@@ -45,6 +46,7 @@ use bevy::tasks::ConditionalSendFuture;
 use gltf::Node;
 use std::sync::Arc;
 
+use crate::error::vrm_warn;
 use crate::prelude::MToonMaterial;
 use crate::prelude::*;
 use crate::vrm::gltf::extensions::{vrmc_spring_bone, vrmc_vrm};
@@ -55,6 +57,9 @@ use self::root::NodeRest;
 #[derive(Clone, Default)]
 pub struct VrmExtensionHandler {
     pub(crate) state: VrmLoadState,
+    /// `GltfPlugin::convert_coordinates`: the conversion a load uses when its
+    /// settings name none, i.e. what the stock `GltfLoader` applies to a `.glb`.
+    pub(crate) default_convert_coordinates: GltfConvertCoordinates,
 }
 
 /// The state of one file load.
@@ -86,6 +91,17 @@ pub(crate) struct VrmLoadState {
     pub mesh_skins: HashMap<usize, Option<usize>>,
     /// Node indices of the head subtree, for the `firstPerson: auto` split.
     pub head_subtree: HashSet<usize>,
+    /// Whether this load converts mesh coordinates (`rotate_meshes`).
+    ///
+    /// `VrmLoader` never does, but the stock `GltfLoader` runs this handler too
+    /// and may. `bevy_gltf` then converts its own meshes and every skin's
+    /// inverse bind matrices, while the `firstPerson: auto` split rebuilds its
+    /// halves from the raw accessors, which would leave them rotated 180° against
+    /// their skeleton; the split is skipped instead.
+    pub rotate_meshes: bool,
+    /// `GltfLoaderSettings::load_meshes`, which the `firstPerson: auto` split
+    /// creates both of its halves with, like every mesh `bevy_gltf` builds.
+    pub load_meshes: RenderAssetUsages,
     /// Rest pose of **every** glTF node, keyed by node index.
     #[allow(
         dead_code,
@@ -103,6 +119,13 @@ pub(crate) struct VrmLoadState {
     pub mtoon: HashMap<String, Handle<MToonMaterial>>,
     /// The number of glTF textures, which bounds the `MToon` texture indices.
     pub texture_count: usize,
+    /// glTF texture index -> the image handle `bevy_gltf` created for it, as
+    /// handed to `on_texture`.
+    ///
+    /// Only an *embedded* image becomes a `Texture{index}` labeled asset; one
+    /// stored as a separate file is loaded by path under its own asset path, so
+    /// a label handle for it would never load. These are the handles that do.
+    pub textures: HashMap<usize, Handle<Image>>,
     /// firstPerson classification/split per (mesh index, primitive index).
     pub first_person: first_person::FirstPersonPlan,
     /// (mesh index, primitive index) -> the entities carrying its `Mesh3d`, one
@@ -112,11 +135,17 @@ pub(crate) struct VrmLoadState {
 }
 
 impl VrmLoadState {
-    /// Whether `on_root` found any VRM extension in this file.
+    /// Whether `on_root` found a `VRMC_vrm` model in this file.
+    ///
+    /// `VRMC_springBone` alone does not make a file a VRM: the extension is also
+    /// used by props and can ride along in a `.vrma`, and treating such a file
+    /// as an avatar would rename its scene, add a player and, for a `.vrma`,
+    /// get its instance cleaned up as a stale VRM spawn. A file whose
+    /// `VRMC_vrm` fails to parse is a plain glTF, as `root.rs` documents.
     #[inline]
     #[must_use]
     pub fn is_vrm(&self) -> bool {
-        self.vrm.is_some() || self.spring_bone.is_some()
+        self.vrm.is_some()
     }
 
     /// Forgets the entities of the scene that just completed: `bevy_gltf`
@@ -149,6 +178,18 @@ impl VrmLoadState {
     }
 }
 
+/// Whether a load with `settings` converts mesh coordinates, falling back to
+/// the plugin's `default` the way `bevy_gltf` does.
+fn rotates_meshes(
+    settings: &GltfLoaderSettings,
+    default: GltfConvertCoordinates,
+) -> bool {
+    settings
+        .convert_coordinates
+        .unwrap_or(default)
+        .rotate_meshes
+}
+
 /// The normalized animation target of a humanoid bone.
 ///
 /// Identical to `AnimationTargetId::from_name(&Name::new(bone))`, spelled out
@@ -164,7 +205,8 @@ pub(crate) fn bone_target_id(bone: &str) -> AnimationTargetId {
 impl GltfExtensionHandler for VrmExtensionHandler {
     fn dyn_clone(&self) -> Box<dyn ErasedGltfExtensionHandler> {
         // See the module docs: `bevy_gltf` clones the registry per file load, so
-        // this hands out a fresh `Default` state every time.
+        // this hands out a fresh `Default` state every time (and the plugin-level
+        // configuration alongside it).
         Box::new(self.clone())
     }
 
@@ -172,9 +214,28 @@ impl GltfExtensionHandler for VrmExtensionHandler {
         &mut self,
         _load_context: &mut LoadContext<'_>,
         gltf: &gltf::Gltf,
-        _settings: &GltfLoaderSettings,
+        settings: &GltfLoaderSettings,
     ) {
         root::parse_root_extensions(&mut self.state, gltf);
+        self.state.rotate_meshes = rotates_meshes(settings, self.default_convert_coordinates);
+        self.state.load_meshes = settings.load_meshes;
+        if self.state.is_vrm() && self.state.rotate_meshes {
+            vrm_warn!(
+                "VRM: this file is loaded with `rotate_meshes` coordinate conversion, which the \
+                 `firstPerson: auto` split cannot honour; mixed head/body meshes are left unsplit"
+            );
+        }
+    }
+
+    fn on_texture(
+        &mut self,
+        gltf_texture: &gltf::Texture,
+        texture: Handle<Image>,
+    ) {
+        if !self.state.is_vrm() {
+            return;
+        }
+        self.state.textures.insert(gltf_texture.index(), texture);
     }
 
     fn on_material(

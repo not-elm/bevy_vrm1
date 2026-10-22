@@ -26,7 +26,7 @@ use bevy::transform::TransformSystems;
 ///
 /// `ChildOf` cycles are impossible through bevy's own hierarchy API, and
 /// bevy's parallel propagation uses the same bound as "larger than any
-/// reasonable tree depth" (`bevy_transform/src/systems.rs:650`). Exceeding it
+/// reasonable tree depth" (`bevy_transform/src/systems.rs`). Exceeding it
 /// only skips one constraint, which is the right failure mode for a
 /// malformed scene.
 const MAX_ANCESTOR_WALK: usize = 10_000;
@@ -41,7 +41,7 @@ impl Plugin for VrmGltfRuntimePlugin {
     ) {
         // `VrmSystemSets::Constraints` is the VRM spec's constraint step: it is
         // what `VrmSystemSets::PropagateAfterConstraints` is chained after
-        // (`src/vrm.rs:172`) and what `VrmSystemSets::GazeControl` looks
+        // (`src/vrm.rs`) and what `VrmSystemSets::GazeControl` looks
         // downstream of, so putting the pass here gets the constraints'
         // `GlobalTransform` published before gaze control reads the head and
         // eyes — the established manual-propagation order, unchanged.
@@ -52,7 +52,7 @@ impl Plugin for VrmGltfRuntimePlugin {
         // `Transform` and bevy's propagation reads it; the constraint step
         // must be done before the engine publishes globals, and bevy already
         // orders `AnimationSystems` the same way
-        // (`bevy_animation/src/lib.rs:1306`).
+        // (`bevy_animation/src/lib.rs`).
         app.add_systems(
             PostUpdate,
             apply_node_constraints
@@ -61,18 +61,18 @@ impl Plugin for VrmGltfRuntimePlugin {
                 .before(TransformSystems::Propagate),
         );
 
-        // `VrmPlugin`'s manual propagation pass (`src/vrm.rs:172`) is only
+        // `VrmPlugin`'s manual propagation pass (`src/vrm.rs`) is only
         // constrained to run after `VrmSystemSets::Constraints`, and bevy's own
         // `TransformSystems::Propagate` is unordered against it, so which of
         // the two publishes a constrained bone first was up to the executor.
         //
         // That matters because the manual pass is what makes the constraints
         // visible to `VrmSystemSets::GazeControl`, which reads `GlobalTransform`
-        // (`src/vrm/look_at.rs:81`), and because bevy's parallel propagation
+        // (`src/vrm/look_at.rs`), and because bevy's parallel propagation
         // skips any root whose `TransformTreeChanged` is not set
-        // (`bevy_transform/src/systems.rs:525`); only bevy's `mark_dirty_trees`
+        // (`bevy_transform/src/systems.rs`); only bevy's `mark_dirty_trees`
         // sets it, and it runs inside `TransformSystems::Propagate`
-        // (`bevy_transform/src/plugins.rs:40`). Ordering the manual pass after
+        // (`bevy_transform/src/plugins.rs`). Ordering the manual pass after
         // it therefore guarantees both that the tree is marked and that the
         // globals are published, every frame.
         //
@@ -110,7 +110,11 @@ pub fn apply_node_constraints(
             else {
                 continue;
             };
-            if let Ok(mut transform) = transforms.get_mut(destination) {
+            // Written only when it moved: `VrmSystemSets::DetermineRedraw` reads
+            // `Changed<Transform>`, so a constant pose must not request a redraw.
+            if let Ok(mut transform) = transforms.get_mut(destination)
+                && transform.rotation != rotation
+            {
                 transform.rotation = rotation;
             }
         }
@@ -127,16 +131,13 @@ fn constraint_rotation(
 ) -> Option<Quat> {
     let constraint = constraints.get(destination).ok()?;
     let weight = constraint.weight;
-    // `VrmNodeConstraint::weight` documents `0.0` as "skipped"
-    // (`src/vrm/components.rs:171`). Skipping is also what the spec's slerp
-    // means in practice: `slerp(rest, .., 0.0)` is the rest rotation, and
-    // writing that would wipe out whatever else moved the bone this frame
-    // (another constraint, spring bones, the user).
+    let destination_rest = rests.get(destination).ok()?.0;
+    // The spec's `slerp(rest, .., 0.0)`: a faded-out constraint returns the
+    // bone to rest rather than freezing it in the last driven pose.
     if weight == 0.0 {
-        return None;
+        return Some(destination_rest.rotation);
     }
 
-    let destination_rest = rests.get(destination).ok()?.0;
     match constraint.kind {
         VrmConstraintKind::Rotation => {
             let delta = source_pose(constraint.source, rests, transforms)?.1;
@@ -426,11 +427,59 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_weight_constraint_leaves_the_destination_alone() -> TestResult {
+    fn a_zero_weight_constraint_returns_the_destination_to_rest() -> TestResult {
         let mut app = test_app();
         let source = app
             .world_mut()
             .spawn((Transform::IDENTITY, rest(Quat::IDENTITY)))
+            .id();
+        let destination_rest = Quat::from_rotation_y(FRAC_PI_3);
+        let destination = app
+            .world_mut()
+            .spawn((
+                Transform::IDENTITY,
+                rest(destination_rest),
+                VrmNodeConstraint {
+                    source,
+                    weight: 1.0,
+                    kind: VrmConstraintKind::Rotation,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .spawn(ConstraintExecutionOrder(vec![destination]));
+
+        set_rotation(&mut app, source, Quat::from_rotation_x(FRAC_PI_2));
+        run_constraints(&mut app);
+        assert!(!rotation_is(rotation(&app, destination), destination_rest));
+
+        // Fading the constraint out is the spec's `slerp(rest, .., 0.0)`: the
+        // bone goes back to rest instead of freezing in the last driven pose.
+        app.world_mut()
+            .get_mut::<VrmNodeConstraint>(destination)
+            .unwrap()
+            .weight = 0.0;
+        run_constraints(&mut app);
+
+        assert!(
+            rotation_is(rotation(&app, destination), destination_rest),
+            "got {:?}",
+            rotation(&app, destination)
+        );
+        success!()
+    }
+
+    /// `Changed<Transform>` is what `VrmSystemSets::DetermineRedraw` reads, so a
+    /// constraint whose result did not move must not touch the destination.
+    #[test]
+    fn an_unchanged_constraint_does_not_mark_the_destination_changed() -> TestResult {
+        let mut app = test_app();
+        let source = app
+            .world_mut()
+            .spawn((
+                Transform::from_rotation(Quat::from_rotation_x(FRAC_PI_2)),
+                rest(Quat::IDENTITY),
+            ))
             .id();
         let destination = app
             .world_mut()
@@ -439,7 +488,7 @@ mod tests {
                 rest(Quat::IDENTITY),
                 VrmNodeConstraint {
                     source,
-                    weight: 0.0,
+                    weight: 1.0,
                     kind: VrmConstraintKind::Rotation,
                 },
             ))
@@ -447,15 +496,18 @@ mod tests {
         app.world_mut()
             .spawn(ConstraintExecutionOrder(vec![destination]));
 
-        // A pose the constraint must not disturb: with weight `0.0` the spec's
-        // slerp would produce the *rest* rotation, which is not the same thing.
-        let held = Quat::from_rotation_z(FRAC_PI_3);
-        set_rotation(&mut app, destination, held);
-        set_rotation(&mut app, source, Quat::from_rotation_x(FRAC_PI_2));
-
+        let last_changed = |app: &App| {
+            app.world()
+                .entity(destination)
+                .get_ref::<Transform>()
+                .unwrap()
+                .last_changed()
+        };
+        run_constraints(&mut app);
+        let driven = last_changed(&app);
         run_constraints(&mut app);
 
-        assert_eq!(rotation(&app, destination), held);
+        assert_eq!(last_changed(&app), driven);
         success!()
     }
 
@@ -811,7 +863,7 @@ mod tests {
                 PostUpdate,
                 observe_after_propagate.after(TransformSystems::Propagate),
             );
-            // Installed by `VrmPlugin` exactly like this (`src/vrm.rs:172`).
+            // Installed by `VrmPlugin` exactly like this (`src/vrm.rs`).
             app.add_systems(
                 PostUpdate,
                 (sync_simple_transforms, propagate_parent_transforms)

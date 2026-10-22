@@ -11,7 +11,16 @@ use bevy::animation::{AnimationEntityMut, animated_field};
 use bevy::prelude::*;
 
 /// Samples per second when baking curves.
-pub(crate) const SAMPLE_RATE: f32 = 120.0;
+const SAMPLE_RATE: f32 = 120.0;
+
+/// The most samples one baked curve takes, so a keyframe at a huge timestamp
+/// cannot request an unbounded allocation; a longer curve is sampled sparser.
+const MAX_SAMPLES: usize = 1 << 16;
+
+/// The number of evenly spaced samples baking `duration` seconds takes.
+pub(crate) fn sample_count(duration: f32) -> usize {
+    ((duration * SAMPLE_RATE).ceil() as usize).clamp(2, MAX_SAMPLES)
+}
 
 /// Bake a rotation [`VariableCurve`]: sample the original curve via the
 /// evaluator pipeline, apply the retarget transformation to each sample,
@@ -32,7 +41,7 @@ pub(crate) fn bake_rotation_curve(
         return None;
     }
 
-    let sample_count = ((duration * SAMPLE_RATE).ceil() as usize).max(2);
+    let sample_count = sample_count(duration);
     let dt = duration / (sample_count - 1) as f32;
 
     // Spawn a dummy entity with Transform for the evaluator to write into.
@@ -110,7 +119,7 @@ pub(crate) fn bake_translation_curve(
         return None;
     }
 
-    let sample_count = ((duration * SAMPLE_RATE).ceil() as usize).max(2);
+    let sample_count = sample_count(duration);
     let dt = duration / (sample_count - 1) as f32;
 
     // Spawn a dummy entity with Transform for the evaluator to write into.
@@ -168,4 +177,21 @@ pub(crate) fn bake_translation_curve(
         animated_field!(Transform::translation),
         baked_curve,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sample_count_is_bounded() {
+        assert_eq!(sample_count(1.0), 120);
+        assert_eq!(
+            sample_count(0.001),
+            2,
+            "a curve takes at least its two ends"
+        );
+        assert_eq!(sample_count(1.0e30), MAX_SAMPLES);
+        assert_eq!(sample_count(f32::MAX), MAX_SAMPLES);
+    }
 }

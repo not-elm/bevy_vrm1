@@ -24,7 +24,6 @@ fn spawn_directional_light(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
-        all_vrm_render_layers(),
         Transform::from_xyz(3.0, 3.0, 0.3).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
@@ -34,7 +33,6 @@ fn spawn_directional_light(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
-        all_vrm_render_layers(),
         Transform::from_xyz(1.0, 1., 2.).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
@@ -44,11 +42,7 @@ fn spawn_camera(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.spawn((
-        Camera3d::default(),
-        third_person_camera_layers(),
-        Transform::from_xyz(0.0, 2.5, 3.5),
-    ));
+    commands.spawn((Camera3d::default(), Transform::from_xyz(0.0, 2.5, 3.5)));
     // Ground
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::new(1000.0, 1000.0)))),

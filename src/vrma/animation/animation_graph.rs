@@ -13,7 +13,7 @@ use crate::vrma::animation::bone_translation::{
     RetargetTranslationTable, compute_hips_transformation,
 };
 use crate::vrma::animation::expressions::{VrmaExpressionRegistry, retarget_expression_curves};
-use crate::vrma::animation::mask::mask_group_for_bone;
+use crate::vrma::animation::properties::VrmExpressionWeights;
 use crate::vrma::{
     LoadedVrma, VrmAnimationClipHandle, VrmAnimationGraphState, VrmAnimationNodeIndex,
     VrmAnimationSourceClip, VrmaLoaded, VrmaNeedsRestore, VrmaPlaybackState, VrmaRetargetPending,
@@ -125,6 +125,7 @@ fn apply_animation_graph(
             Option<&VrmaRetargetedFor>,
             Option<&VrmAnimationNodeIndex>,
             Option<&mut VrmaPlaybackState>,
+            Has<VrmaNeedsRestore>,
         ),
         (With<Vrma>, With<Initialized>),
     >,
@@ -132,7 +133,6 @@ fn apply_animation_graph(
     mut transitions: Query<&mut AnimationTransitions>,
     states: Query<&VrmAnimationGraphState>,
     child_searcher: ChildSearcher,
-    bones: Query<(&VrmBone, &AnimationTargetId)>,
 ) {
     let vrm_entity = trigger.vrm;
     let Ok(children) = childrens.get(vrm_entity) else {
@@ -171,7 +171,8 @@ fn apply_animation_graph(
     {
         if let Ok(old_player) = players.get(old_root) {
             for child in children.iter() {
-                let Ok((_, _, _, Some(old_index), Some(mut state))) = vrmas.get_mut(child) else {
+                let Ok((_, _, _, Some(old_index), Some(mut state), false)) = vrmas.get_mut(child)
+                else {
                     continue;
                 };
                 match old_player.animation(old_index.0) {
@@ -209,7 +210,6 @@ fn apply_animation_graph(
     let Some(mut graph) = graphs.get_mut(&graph_handle) else {
         return;
     };
-    register_mask_groups(&mut graph, &bones);
     let root = graph.root;
 
     let mut nodes = existing
@@ -245,13 +245,21 @@ fn apply_animation_graph(
     }
 
     for child in children.iter() {
-        let Ok((source, working, retargeted, _, _)) = vrmas.get_mut(child) else {
+        let Ok((source, working, retargeted, _, state, _)) = vrmas.get_mut(child) else {
             continue;
         };
         let retarget =
             retargeted.is_none_or(|stamp| stamp.0 != generation || stamp.1 != vrm_entity);
         // A clip retargeted for another rig is re-cloned from the pristine source.
         let stale = retargeted.is_some_and(|stamp| stamp.0 != generation || stamp.1 != vrm_entity);
+        // A clip moved from another avatar does not carry that avatar's
+        // playback; a `PlayVrma` sent after the move still starts it here.
+        if retargeted.is_some_and(|stamp| stamp.1 != vrm_entity)
+            && let Some(mut state) = state
+            && state.transition.is_none()
+        {
+            *state = VrmaPlaybackState::default();
+        }
         let handle = if stale || working.is_none() {
             match source {
                 Some(source) => {
@@ -320,16 +328,6 @@ fn apply_animation_graph(
     });
 }
 
-/// Puts every humanoid bone's [`AnimationTargetId`] into its `VrmMaskGroup`.
-fn register_mask_groups(
-    graph: &mut AnimationGraph,
-    bones: &Query<(&VrmBone, &AnimationTargetId)>,
-) {
-    for (bone, target) in bones.iter() {
-        graph.add_target_to_mask_group(*target, mask_group_for_bone(&bone.0) as u32);
-    }
-}
-
 fn insert_animation_graph_into_root_bone(
     vrm: Entity,
     animation_graph_handle: AnimationGraphHandle,
@@ -354,6 +352,7 @@ fn apply_retarget_animation_clips(
     bones: Query<(&RestTransform, &RestGlobalTransform, &AnimationTargetId)>,
     model_rests: Query<&RestWorldTransform>,
     source_targets: Query<&AnimationTargetId>,
+    expression_roots: Query<(), With<VrmExpressionWeights>>,
     generations: Query<&VrmGeneration>,
     searcher: ChildSearcher,
 ) {
@@ -405,7 +404,10 @@ fn apply_retarget_animation_clips(
             &model_rests,
         );
     }
-    if let Ok(expressions) = expression_registries.get(vrma_entity) {
+    // An avatar without expressions has no weights for an expression curve to write.
+    if let Ok(expressions) = expression_registries.get(vrma_entity)
+        && expression_roots.contains(*vrm_entity)
+    {
         retarget_expression_curves(
             &mut clip,
             vrma_entity,
@@ -672,7 +674,6 @@ mod tests {
     use crate::vrm::gltf::extensions::VrmNode;
     use crate::vrm::gltf::handler::bone_target_id;
     use crate::vrm::instance::VrmGeneration;
-    use crate::vrma::animation::mask::{VrmMaskGroup, VrmaMask};
     use crate::vrma::animation::play::VrmaAnimationPlayPlugin;
     use crate::vrma::{
         RetargetSource, VrmAnimationGraphState, VrmaPlaybackState, VrmaRetargetPending,
@@ -810,63 +811,6 @@ mod tests {
         );
         assert_eq!(app.world().resource::<LoadNotifications>().0, vec![vrma]);
         success!()
-    }
-
-    #[test]
-    fn a_masked_node_does_not_move_a_bone_in_its_group() -> TestResult {
-        let mut app = crate::tests::test_app();
-        app.add_plugins((AnimationPlugin, VrmaAnimationGraphPlugin));
-        let (vrm, root_bone, spine) = spawn_pipeline_rig(app.world_mut(), Quat::IDENTITY);
-        let (vrma, _) = spawn_clip(app.world_mut(), vrm, 0.5);
-        request_graph(&mut app, vrm);
-
-        let node = app.world().get::<VrmAnimationNodeIndex>(vrma).unwrap().0;
-        let graph = app
-            .world()
-            .get::<AnimationGraphHandle>(root_bone)
-            .expect("the graph handle is on the root bone")
-            .clone();
-        assert_eq!(
-            mask_group_for_bone("spine"),
-            VrmMaskGroup::UpperBody,
-            "the fixture's bone is in the upper body"
-        );
-
-        // Masked: the layer must not touch the spine.
-        set_node_mask(&mut app, &graph, node, VrmaMask::LOWER_BODY);
-        play(&mut app, root_bone, node);
-        run_frames(&mut app);
-        assert_eq!(
-            app.world().get::<Transform>(spine).unwrap().rotation,
-            Quat::IDENTITY,
-            "a masked node must not move a bone in its mask group"
-        );
-
-        // Unmasked: the very same node now drives it.
-        set_node_mask(&mut app, &graph, node, VrmaMask::ALL);
-        run_frames(&mut app);
-        let rotation = app.world().get::<Transform>(spine).unwrap().rotation;
-        assert!(
-            rotation.angle_between(Quat::from_rotation_x(0.5)) < 0.001,
-            "an unmasked node must drive the bone, got {rotation:?}"
-        );
-        success!()
-    }
-
-    /// Sets one clip node's mask-out bitfield.
-    fn set_node_mask(
-        app: &mut App,
-        graph: &AnimationGraphHandle,
-        node: AnimationNodeIndex,
-        mask: AnimationMask,
-    ) {
-        let mut graphs = app.world_mut().resource_mut::<Assets<AnimationGraph>>();
-        let mut graph = graphs.get_mut(graph).expect("the graph asset exists");
-        graph
-            .graph
-            .node_weight_mut(node)
-            .expect("the clip node exists")
-            .mask = mask;
     }
 
     /// Starts a clip without a transition.
@@ -1491,6 +1435,7 @@ mod tests {
         app.world_mut().entity_mut(vrma).insert(VrmaPlaybackState {
             active: true,
             animation: Some(ActiveAnimation::default()),
+            ..default()
         });
         // The first, valid rig is baked and playing.
         request_graph(&mut app, vrm);
@@ -1722,7 +1667,7 @@ mod tests {
     }
 
     #[test]
-    fn a_readded_vrma_preserves_its_mask_and_reconnects_its_node() -> TestResult {
+    fn a_readded_vrma_reconnects_its_node() -> TestResult {
         let mut app = crate::tests::test_app();
         app.add_plugins((
             AnimationPlugin,
@@ -1745,13 +1690,6 @@ mod tests {
             .0
             .clone();
 
-        set_node_mask(
-            &mut app,
-            &AnimationGraphHandle(graph.clone()),
-            node,
-            VrmaMask::LOWER_BODY,
-        );
-
         // The `.vrma` leaves: its node retires (disconnected and inert).
         app.world_mut().entity_mut(vrma).remove::<Vrma>();
         request_graph(&mut app, vrm);
@@ -1772,7 +1710,7 @@ mod tests {
             );
         }
 
-        // It comes back with the same body mask, so the spine stays untouched.
+        // It comes back: the node is reused and reconnected.
         app.world_mut().entity_mut(vrma).insert(Vrma);
         request_graph(&mut app, vrm);
         assert_eq!(
@@ -1780,29 +1718,7 @@ mod tests {
             node,
             "the readded clip reuses its node id"
         );
-        assert_eq!(
-            app.world()
-                .resource::<Assets<AnimationGraph>>()
-                .get(&graph)
-                .unwrap()
-                .get(node)
-                .unwrap()
-                .mask,
-            VrmaMask::LOWER_BODY,
-            "the readded clip keeps its body mask"
-        );
         play_vrma(app.world_mut(), vrma, Duration::ZERO);
-        for _ in 0..4 {
-            app.update();
-        }
-        assert_eq!(
-            app.world().get::<Transform>(spine).unwrap().rotation,
-            Quat::IDENTITY,
-            "the preserved mask still excludes the spine"
-        );
-
-        // Removing the mask lets the reconnected edge drive the spine again.
-        set_node_mask(&mut app, &AnimationGraphHandle(graph), node, VrmaMask::ALL);
         run_frames(&mut app);
         let rotation = app.world().get::<Transform>(spine).unwrap().rotation;
         assert!(
@@ -1900,6 +1816,106 @@ mod tests {
                 .angle_between(Quat::from_rotation_x(0.5) * rest_b)
                 < 0.001,
             "the re-clone is baked for the new rig"
+        );
+        success!()
+    }
+
+    #[test]
+    fn a_clip_moved_while_playing_waits_for_a_play_on_its_new_owner() -> TestResult {
+        let mut app = crate::tests::test_app();
+        app.add_plugins((
+            AnimationPlugin,
+            VrmaAnimationGraphPlugin,
+            VrmaAnimationPlayPlugin,
+        ));
+        let (a, _root_a, _, _) = spawn_live_rig(app.world_mut(), Quat::from_rotation_z(0.4), 1);
+        let (b, root_b, _, _) = spawn_live_rig(app.world_mut(), Quat::from_rotation_z(-0.6), 1);
+        let (vrma, _source, _working) = spawn_sourced_clip(app.world_mut(), a, 0.5);
+        app.world_mut()
+            .entity_mut(vrma)
+            .insert(VrmaPlaybackState::default());
+        request_graph(&mut app, a);
+        play_vrma(app.world_mut(), vrma, Duration::ZERO);
+        app.update();
+        assert!(app.world().get::<VrmaPlaybackState>(vrma).unwrap().active);
+
+        app.world_mut().entity_mut(vrma).insert(ChildOf(b));
+        request_graph(&mut app, b);
+        request_graph(&mut app, a);
+        run_frames(&mut app);
+
+        let node = app.world().get::<VrmAnimationNodeIndex>(vrma).unwrap().0;
+        assert!(
+            app.world()
+                .get::<AnimationPlayer>(root_b)
+                .unwrap()
+                .animation(node)
+                .is_none(),
+            "the old owner's playback does not start next to the new owner's clip"
+        );
+
+        play_vrma(app.world_mut(), vrma, Duration::ZERO);
+        app.update();
+        assert!(
+            app.world()
+                .get::<AnimationPlayer>(root_b)
+                .unwrap()
+                .animation(node)
+                .is_some()
+        );
+        assert_eq!(
+            app.world()
+                .get::<AnimationTransitions>(root_b)
+                .unwrap()
+                .get_main_animation(),
+            Some(node)
+        );
+        success!()
+    }
+
+    #[test]
+    fn a_rig_swap_keeps_a_play_still_waiting_for_its_clip() -> TestResult {
+        let mut app = crate::tests::test_app();
+        app.add_plugins((
+            AnimationPlugin,
+            VrmaAnimationGraphPlugin,
+            VrmaAnimationPlayPlugin,
+        ));
+        let (vrm, old_root, _spine, _prefix) =
+            spawn_live_rig(app.world_mut(), Quat::from_rotation_z(0.4), 1);
+        let (vrma_a, _source_a, _working_a) = spawn_sourced_clip(app.world_mut(), vrm, 0.5);
+        let (vrma_b, _source_b, _working_b) = spawn_sourced_clip(app.world_mut(), vrm, 0.9);
+        for vrma in [vrma_a, vrma_b] {
+            app.world_mut()
+                .entity_mut(vrma)
+                .insert(VrmaPlaybackState::default());
+        }
+        request_graph(&mut app, vrm);
+        let node_b = app.world().get::<VrmAnimationNodeIndex>(vrma_b).unwrap().0;
+        play_vrma(app.world_mut(), vrma_a, Duration::ZERO);
+        app.update();
+
+        // `b` is asked to play while its clip is still being baked...
+        app.world_mut().entity_mut(vrma_b).insert(NeedsBake);
+        play_vrma(app.world_mut(), vrma_b, Duration::ZERO);
+        app.world_mut().flush();
+        // ...and a new rig replaces one whose player is still alive.
+        app.world_mut()
+            .entity_mut(old_root)
+            .insert(Name::new("retired"));
+        let (new_root, _new_spine) =
+            reattach_rig(app.world_mut(), vrm, Quat::from_rotation_z(-0.6));
+        app.world_mut().entity_mut(vrm).insert(VrmGeneration(2));
+        request_graph(&mut app, vrm);
+        run_frames(&mut app);
+
+        assert_eq!(
+            app.world()
+                .get::<AnimationTransitions>(new_root)
+                .unwrap()
+                .get_main_animation(),
+            Some(node_b),
+            "the old player never had `b`, which must not erase the pending play"
         );
         success!()
     }

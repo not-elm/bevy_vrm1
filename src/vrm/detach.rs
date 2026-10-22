@@ -2,7 +2,7 @@ use crate::vrm::body_tracking::{BodyTracking, SmoothedGaze};
 use crate::vrm::components::{PendingNodeConstraint, VrmHeadOnly, VrmNodeConstraint, VrmNodeIndex};
 use crate::vrm::instance::{
     PendingVrmScene, VrmGeneration, VrmHandle, VrmInstanceState, VrmSceneRoot, instance_entities,
-    remove_root_data,
+    remove_model_name, remove_root_data,
 };
 use crate::vrm::look_at::LookAt;
 use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
@@ -83,6 +83,7 @@ fn detach_managed(
         .unwrap_or_default();
 
     remove_root_data(world, entity);
+    remove_model_name(world, entity);
     // `WorldAssetRoot`'s `on_remove` reads `WorldInstance`, so it goes first.
     world.entity_mut(entity).remove::<WorldAssetRoot>();
     world
@@ -142,6 +143,17 @@ fn detach_raw(
         .and_then(|owner| world.get::<WorldInstance>(owner).map(|instance| **instance))
         .map(|instance_id| instance_entities(world, instance_id))
         .unwrap_or_default();
+    let spawned = !tracked.is_empty();
+    // An owner whose scene spawned without a VRM in it is a plain glTF (a level,
+    // a prop), which this event does not tear down.
+    if root.is_none()
+        && spawned
+        && tracked
+            .iter()
+            .all(|&entity| world.get::<VrmSceneRoot>(entity).is_none())
+    {
+        return;
+    }
 
     if let Some(owner) = owner
         && world.get_entity(owner).is_ok()
@@ -161,7 +173,11 @@ fn detach_raw(
             world.entity_mut(tracked_entity).despawn();
         }
     }
-    if let Some(owner) = owner
+    // A pending owner keeps its `WorldInstance`: bevy still spawns the queued
+    // instance once the asset loads, and the instance observer recognises it by
+    // that id as a cancelled spawn to clean up.
+    if spawned
+        && let Some(owner) = owner
         && world.get_entity(owner).is_ok()
     {
         world.entity_mut(owner).remove::<WorldInstance>();

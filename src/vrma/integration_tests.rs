@@ -420,6 +420,7 @@ fn active_playback() -> VrmaPlaybackState {
     VrmaPlaybackState {
         active: true,
         animation: Some(ActiveAnimation::default()),
+        ..default()
     }
 }
 

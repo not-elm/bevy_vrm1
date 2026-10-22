@@ -1,8 +1,8 @@
 pub mod body_tracking;
 pub mod components;
-pub mod coords;
 pub mod detach;
 pub(crate) mod expressions;
+pub(crate) mod first_person;
 pub(crate) mod gltf;
 pub(crate) mod humanoid_bone;
 pub(crate) mod instance;
@@ -24,6 +24,7 @@ use bevy::app::{AnimationSystems, App, Plugin};
 use bevy::prelude::*;
 use bevy::transform::systems::{propagate_parent_transforms, sync_simple_transforms};
 use expressions::VrmExpressionPlugin;
+use first_person::VrmFirstPersonPlugin;
 use mtoon::MtoonMaterialPlugin;
 use std::path::PathBuf;
 
@@ -33,16 +34,16 @@ pub mod prelude {
         VrmExpression, VrmPath, VrmPlugin,
         body_tracking::{BodyTracking, SmoothedGaze},
         components::{
-            ConstraintExecutionOrder, LAYER_BOTH, LAYER_FIRST_PERSON_ONLY, LAYER_THIRD_PERSON_ONLY,
-            PendingNodeConstraint, VrmConstraintKind, VrmHeadOnly, VrmLightLayersPlugin,
-            VrmNodeConstraint, VrmNodeIndex, all_vrm_render_layers, both_view_mesh_layers,
-            first_person_camera_layers, first_person_only_mesh_layers, third_person_camera_layers,
-            third_person_only_mesh_layers, vrm_light_layers_for, widen_vrm_light_layers,
+            ConstraintExecutionOrder, PendingNodeConstraint, VrmConstraintKind, VrmHeadOnly,
+            VrmNodeConstraint, VrmNodeIndex,
         },
-        coords::{VrmForwardPolicy, resolve_forward_policy},
         detach::RequestDetachVrm,
         expressions::{
             ClearExpressions, ExpressionOverrideType, ModifyExpressions, SetExpressions,
+        },
+        first_person::{
+            FirstPersonCamera, FirstPersonLayers, RequestDisableFirstPerson,
+            RequestEnableFirstPerson, ThirdPersonCamera,
         },
         gltf::prelude::*,
         humanoid_bone::prelude::*,
@@ -115,8 +116,9 @@ pub struct RestGlobalTransform(pub GlobalTransform);
 /// gains in between would conjugate the baked pose (a constant per-instance
 /// limb offset). Stripping this prefix at retarget-table time puts both
 /// rigs into the model entity's own frame and removes that dependency.
-/// [`RestGlobalTransform`] itself stays world-space because gaze and body
-/// tracking consume it as a world-frame rotation.
+/// [`RestGlobalTransform`] is not world-space either: it is relative to the
+/// entity that owns the scene, and gaze and body tracking re-apply that
+/// entity's current world rotation.
 #[derive(Debug, Copy, Clone, Component, Deref, Reflect, Default)]
 #[reflect(Component)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -145,10 +147,14 @@ impl Plugin for VrmPlugin {
             VrmHumanoidBonePlugin,
             VrmExpressionPlugin,
             VrmInstancePlugin,
-            MtoonMaterialPlugin,
             LookAtPlugin,
             BodyTrackingPlugin,
+            VrmFirstPersonPlugin,
         ));
+        // Unique, and `VrmGltfPlugin` adds it too.
+        if !app.is_plugin_added::<MtoonMaterialPlugin>() {
+            app.add_plugins(MtoonMaterialPlugin);
+        }
 
         // Add manual transform propagation systems to follow VRM spec update order
         // See: https://vrm.dev/api/api_update/
@@ -177,5 +183,37 @@ impl Plugin for VrmPlugin {
             .register_type::<VrmBone>()
             .register_type::<VrmExpression>()
             .register_type::<Initialized>();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::VrmGltfPlugin;
+    use bevy::app::PluginGroupBuilder;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::WgpuSettings;
+
+    fn headless_default_plugins() -> PluginGroupBuilder {
+        DefaultPlugins
+            .build()
+            .disable::<bevy::winit::WinitPlugin>()
+            .disable::<bevy::log::LogPlugin>()
+            .set(RenderPlugin {
+                render_creation: WgpuSettings {
+                    backends: None,
+                    ..default()
+                }
+                .into(),
+                ..default()
+            })
+    }
+
+    /// Both plugins add the unique `MtoonMaterialPlugin`, so neither order may
+    /// panic with "plugin was already added".
+    #[test]
+    fn vrm_plugin_and_vrm_gltf_plugin_build_in_either_order() {
+        App::new().add_plugins((headless_default_plugins(), VrmPlugin, VrmGltfPlugin));
+        App::new().add_plugins((headless_default_plugins(), VrmGltfPlugin, VrmPlugin));
     }
 }

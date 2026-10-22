@@ -1,7 +1,7 @@
 //!  This module handles the retargeting of expressions from a VRM model to a mascot model.
 
 use crate::prelude::ChildSearcher;
-use crate::vrma::animation::bake::SAMPLE_RATE;
+use crate::vrma::animation::bake::sample_count;
 use crate::vrma::animation::properties::{
     ExpressionWeightProperty, VrmExpressionWeights, vrm_root_animation_target,
 };
@@ -10,15 +10,13 @@ use bevy::animation::animation_curves::{AnimationCurve, EvaluatorId};
 use bevy::animation::{AnimationClip, AnimationTargetId, VariableCurve, animated_field};
 use bevy::asset::{Assets, Handle};
 use bevy::gltf::GltfNode;
+use bevy::math::curve::{ConstantCurve, Interval};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::platform::hash::Hashed;
 use bevy::prelude::*;
 use core::any::TypeId;
 
 type FieldId = Hashed<(TypeId, usize)>;
-
-type ExpressionWeightCurve =
-    AnimatableCurve<ExpressionWeightProperty, AnimatableKeyframeCurve<f32>>;
 
 /// The expressions a `.vrma` animates, as `(expression name, glTF node name)`.
 #[derive(Component, Deref, Reflect, Default)]
@@ -59,7 +57,7 @@ pub(crate) fn retarget_expression_curves(
     let translation = translation_field_id();
     let root = vrm_root_animation_target();
 
-    let mut weights: Vec<ExpressionWeightCurve> = Vec::new();
+    let mut weights: Vec<VariableCurve> = Vec::new();
     let mut consumed: HashSet<AnimationTargetId> = HashSet::default();
     for (expression, node_name) in registry.iter() {
         let Some(node) = searcher.find_from_name(vrma, node_name.as_str()) else {
@@ -104,28 +102,18 @@ pub(crate) fn retarget_expression_curves(
         }
     }
     for weight in weights {
-        clip.add_curve_to_target(root, weight);
+        clip.add_variable_curve_to_target(root, weight);
     }
 }
 
-/// Resets the weights of the expressions `vrma` animates to zero.
-pub(crate) fn reset_expression_weights(
-    vrma: Entity,
-    registries: &Query<&VrmaExpressionRegistry>,
-    roots: &mut Query<&mut VrmExpressionWeights>,
-    parents: &Query<&ChildOf>,
-) {
-    let Ok(ChildOf(vrm)) = parents.get(vrma) else {
-        return;
-    };
-    let Ok(registry) = registries.get(vrma) else {
-        return;
-    };
-    let Ok(mut weights) = roots.get_mut(*vrm) else {
-        return;
-    };
-    for expression in registry.keys() {
-        weights.0.insert(expression.clone(), 0.0);
+/// Returns every animated expression weight to neutral before the animation is
+/// evaluated, so an expression no playing clip drives — one only a stopped,
+/// faded-out or retired clip drove — does not keep that clip's last value.
+pub(crate) fn reset_animated_expression_weights(mut roots: Query<&mut VrmExpressionWeights>) {
+    for mut weights in roots.iter_mut() {
+        if weights.0.values().any(|weight| *weight != 0.0) {
+            weights.0.values_mut().for_each(|weight| *weight = 0.0);
+        }
     }
 }
 
@@ -149,27 +137,35 @@ fn animates_field(
 fn expression_weight_curve(
     expression: &str,
     curve: &VariableCurve,
-) -> Option<ExpressionWeightCurve> {
+) -> Option<VariableCurve> {
+    let property = ExpressionWeightProperty::new(expression);
+    let weight_at = |t: f32| Some(curve.0.sample_clamped(t).downcast::<Vec3>().ok()?.x);
     let domain = curve.0.domain();
+    // `bevy_gltf` builds a one-keyframe channel as a constant over all time.
+    if !domain.is_bounded() {
+        return Some(VariableCurve::new(AnimatableCurve::new(
+            property,
+            ConstantCurve::new(Interval::EVERYWHERE, weight_at(0.0)?),
+        )));
+    }
     let (start, end) = (domain.start(), domain.end());
     let duration = end - start;
     if duration <= 0.0 || !duration.is_finite() {
         return None;
     }
 
-    let sample_count = ((duration * SAMPLE_RATE).ceil() as usize).max(2);
+    let sample_count = sample_count(duration);
     let dt = duration / (sample_count - 1) as f32;
     let mut keyframes = Vec::with_capacity(sample_count);
     for i in 0..sample_count {
         let t = (start + dt * i as f32).min(end);
-        let sample = curve.0.sample_clamped(t).downcast::<Vec3>().ok()?;
-        keyframes.push((t, sample.x));
+        keyframes.push((t, weight_at(t)?));
     }
 
-    Some(AnimatableCurve::new(
-        ExpressionWeightProperty::new(expression),
+    Some(VariableCurve::new(AnimatableCurve::new(
+        property,
         AnimatableKeyframeCurve::new(keyframes).ok()?,
-    ))
+    )))
 }
 
 #[cfg(test)]
@@ -179,7 +175,9 @@ mod tests {
     use bevy::mesh::morph::MorphWeights;
 
     use super::*;
-    use crate::prelude::{Initialized, PlayVrma, SetExpressions, StopVrma, VrmSystemSets};
+    use crate::prelude::{
+        ClearExpressions, Initialized, PlayVrma, SetExpressions, StopVrma, VrmSystemSets,
+    };
     use crate::success;
     use crate::tests::{TestResult, test_app};
     use crate::vrm::Vrm;
@@ -191,7 +189,6 @@ mod tests {
     use crate::vrma::animation::animation_graph::{
         RequestUpdateAnimationGraph, VrmaAnimationGraphPlugin,
     };
-    use crate::vrma::animation::mask::VrmaMask;
     use crate::vrma::animation::play::VrmaAnimationPlayPlugin;
     use crate::vrma::animation::properties::{
         ExpressionMorphBinds, ExpressionSetting, ExpressionSettings, MorphBind, MorphBindTable,
@@ -199,6 +196,7 @@ mod tests {
     };
     use crate::vrma::{VrmAnimationClipHandle, VrmAnimationSourceClip, Vrma};
     use bevy::animation::{AnimatedBy, AnimationPlugin};
+    use std::time::Duration;
 
     /// Non-zero `y`/`z`, so a retarget reading the wrong component fails.
     const SCRATCH_Y: f32 = 0.125;
@@ -317,18 +315,30 @@ mod tests {
         expression: &str,
         values: &[(f32, f32)],
     ) -> TestResult<(Entity, Handle<AnimationClip>)> {
-        let source_target = source_target_id();
         let keyframes = values
             .iter()
             .map(|(time, weight)| (*time, Vec3::new(*weight, SCRATCH_Y, SCRATCH_Z)))
             .collect::<Vec<_>>();
+        Ok(spawn_expression_vrma_with(
+            world,
+            vrm,
+            expression,
+            AnimatableKeyframeCurve::new(keyframes)?,
+        ))
+    }
+
+    /// [`spawn_expression_vrma`] with an arbitrary `translation` curve.
+    fn spawn_expression_vrma_with(
+        world: &mut World,
+        vrm: Entity,
+        expression: &str,
+        translation: impl AnimationCompatibleCurve<Vec3>,
+    ) -> (Entity, Handle<AnimationClip>) {
+        let source_target = source_target_id();
         let mut clip = AnimationClip::default();
         clip.add_curve_to_target(
             source_target,
-            AnimatableCurve::new(
-                animated_field!(Transform::translation),
-                AnimatableKeyframeCurve::new(keyframes)?,
-            ),
+            AnimatableCurve::new(animated_field!(Transform::translation), translation),
         );
         let handle = world.resource_mut::<Assets<AnimationClip>>().add(clip);
         let vrma = world
@@ -341,7 +351,7 @@ mod tests {
             ))
             .id();
         world.spawn((Name::new("source_node"), source_target, ChildOf(vrma)));
-        Ok((vrma, handle))
+        (vrma, handle)
     }
 
     fn registry_of(entries: &[(&str, &str)]) -> VrmaExpressionRegistry {
@@ -365,20 +375,6 @@ mod tests {
             .get(expression)
             .copied()
             .unwrap_or(0.0)
-    }
-
-    fn set_weights(
-        world: &mut World,
-        vrm: Entity,
-        weights: &[(&str, f32)],
-    ) {
-        let mut root = world.entity_mut(vrm);
-        let mut component = root
-            .get_mut::<VrmExpressionWeights>()
-            .expect("the avatar root carries the expression weights");
-        for (name, weight) in weights {
-            component.0.insert((*name).to_owned(), *weight);
-        }
     }
 
     fn request_graph(
@@ -681,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn a_playing_clip_overrides_a_user_trigger_on_the_same_expression() -> TestResult {
+    fn a_user_trigger_overrides_a_playing_clip() -> TestResult {
         let mut app = setup_app(true);
         app.add_plugins(VrmExpressionPlugin);
         let (vrm, root_bone) = spawn_avatar(app.world_mut());
@@ -714,26 +710,33 @@ mod tests {
         app.update();
 
         assert_eq!(
+            app.world().get::<MorphWeights>(mesh).unwrap().weights(),
+            &[0.1, 0.3],
+            "a user-set weight wins over the clip's"
+        );
+        assert_eq!(
             weight_of(&app, vrm, "happy"),
             1.0,
-            "the animation is evaluated after the trigger, so it wins"
+            "the clip keeps animating its own layer underneath"
         );
-        assert_eq!(
-            weight_of(&app, vrm, "aa"),
-            0.3,
-            "an expression the clip does not drive stays the user's"
-        );
+
+        app.world_mut()
+            .commands()
+            .trigger(ClearExpressions { entity: vrm });
+        app.update();
+
         assert_eq!(
             app.world().get::<MorphWeights>(mesh).unwrap().weights(),
-            &[1.0, 0.3],
-            "the bind pass sees the animated weight and the user's, in one pass"
+            &[1.0, 0.0],
+            "a cleared expression returns to the clip"
         );
         success!()
     }
 
     #[test]
-    fn playing_resets_only_the_clips_own_expressions() -> TestResult {
+    fn playing_and_stopping_keep_a_user_set_weight() -> TestResult {
         let mut app = setup_app(true);
+        app.add_plugins(VrmExpressionPlugin);
         let (vrm, _) = spawn_avatar(app.world_mut());
         let mesh = app
             .world_mut()
@@ -751,109 +754,137 @@ mod tests {
         let (vrma, _) =
             spawn_expression_vrma(app.world_mut(), vrm, "happy", &[(0.0, 1.0), (1.0, 1.0)])?;
         request_graph(&mut app, vrm);
+        app.world_mut()
+            .commands()
+            .trigger(SetExpressions::from_iter(
+                vrm,
+                [("happy", 0.4), ("aa", 0.3)],
+            ));
+        app.update();
 
-        set_weights(app.world_mut(), vrm, &[("happy", 0.9), ("aa", 0.3)]);
+        play_vrma(&mut app, vrma);
+        run_frames(&mut app);
+        assert_eq!(
+            app.world().get::<MorphWeights>(mesh).unwrap().weights(),
+            &[0.4, 0.3],
+            "`PlayVrma` does not reset a user-set weight"
+        );
 
         app.world_mut()
             .commands()
-            .entity(vrma)
-            .trigger(PlayVrma::new);
-        app.world_mut().flush();
-
+            .trigger(StopVrma { entity: vrma });
+        run_frames(&mut app);
         assert_eq!(
-            weight_of(&app, vrm, "happy"),
-            0.0,
-            "the clip's own expression starts from neutral"
-        );
-        assert_eq!(
-            weight_of(&app, vrm, "aa"),
-            0.3,
-            "an expression the clip does not drive is the user's to keep"
+            app.world().get::<MorphWeights>(mesh).unwrap().weights(),
+            &[0.4, 0.3],
+            "nor does `StopVrma`"
         );
         success!()
     }
 
     #[test]
-    fn a_body_mask_does_not_silence_an_expression() -> TestResult {
+    fn an_expression_only_the_outgoing_clip_drove_returns_to_neutral() -> TestResult {
         let mut app = setup_app(true);
-        let (vrm, root_bone) = spawn_avatar(app.world_mut());
-        let (vrma, _) =
+        let (vrm, _) = spawn_avatar(app.world_mut());
+        let (outgoing, _) =
+            spawn_expression_vrma(app.world_mut(), vrm, "aa", &[(0.0, 1.0), (1.0, 1.0)])?;
+        let (incoming, _) =
             spawn_expression_vrma(app.world_mut(), vrm, "happy", &[(0.0, 1.0), (1.0, 1.0)])?;
         request_graph(&mut app, vrm);
 
-        let graph = app
-            .world()
-            .get::<AnimationGraphHandle>(root_bone)
-            .expect("the graph handle is on the root bone")
-            .clone();
-        assert!(
-            !app.world()
-                .resource::<Assets<AnimationGraph>>()
-                .get(&graph)
-                .unwrap()
-                .mask_groups
-                .contains_key(&vrm_root_animation_target()),
-            "an expression is not a body part"
+        play_vrma(&mut app, outgoing);
+        run_frames(&mut app);
+        assert_eq!(weight_of(&app, vrm, "aa"), 1.0);
+
+        play_vrma(&mut app, incoming);
+        run_frames(&mut app);
+        assert_eq!(weight_of(&app, vrm, "happy"), 1.0);
+        assert_eq!(
+            weight_of(&app, vrm, "aa"),
+            0.0,
+            "once the outgoing clip stops, its expression is neutral, not frozen"
         );
 
-        let node = app
-            .world()
-            .get::<VrmAnimationNodeIndex>(vrma)
-            .expect("the clip is a graph node")
-            .0;
-        {
-            let mut graphs = app.world_mut().resource_mut::<Assets<AnimationGraph>>();
-            graphs
-                .get_mut(&graph)
-                .unwrap()
-                .graph
-                .node_weight_mut(node)
-                .unwrap()
-                .mask = VrmaMask::UPPER_BODY;
-        }
-        play(&mut app, root_bone, vrma);
+        app.world_mut().entity_mut(incoming).despawn();
         run_frames(&mut app);
-
         assert_eq!(
             weight_of(&app, vrm, "happy"),
-            1.0,
-            "a layer masked to part of the body must not silence the face"
+            0.0,
+            "a retired clip leaves a neutral face too"
         );
         success!()
     }
 
     #[test]
-    fn resetting_touches_only_the_clips_own_expressions() -> TestResult {
-        let mut app = test_app();
-        let vrm = app
-            .world_mut()
-            .spawn(VrmExpressionWeights(HashMap::from([
-                ("happy".to_owned(), 0.9),
-                ("aa".to_owned(), 0.4),
-            ])))
-            .id();
-        let vrma = app
-            .world_mut()
-            .spawn((registry_of(&[("happy", "source_node")]), ChildOf(vrm)))
-            .id();
-
+    fn an_avatar_without_expressions_gets_no_expression_curves() -> TestResult {
+        let mut app = setup_app(false);
+        let (vrm, _) = spawn_avatar(app.world_mut());
         app.world_mut()
-            .run_system_once(
-                move |registries: Query<&VrmaExpressionRegistry>,
-                      mut roots: Query<&mut VrmExpressionWeights>,
-                      parents: Query<&ChildOf>| {
-                    reset_expression_weights(vrma, &registries, &mut roots, &parents);
-                },
-            )
-            .expect("the reset runs");
+            .entity_mut(vrm)
+            .remove::<VrmExpressionWeights>();
+        let (_, clip) =
+            spawn_expression_vrma(app.world_mut(), vrm, "happy", &[(0.0, 1.0), (1.0, 1.0)])?;
+        request_graph(&mut app, vrm);
 
-        let weights = &app.world().get::<VrmExpressionWeights>(vrm).unwrap().0;
-        assert_eq!(weights["happy"], 0.0, "the clip's own expression is reset");
-        assert_eq!(
-            weights["aa"], 0.4,
-            "an expression the clip does not drive is untouched"
+        assert!(
+            !app.world()
+                .resource::<Assets<AnimationClip>>()
+                .get(&clip)
+                .expect("the clip asset exists")
+                .curves()
+                .contains_key(&vrm_root_animation_target()),
+            "a curve with no weights to write would fail every evaluation"
         );
         success!()
+    }
+
+    #[test]
+    fn a_single_keyframe_expression_track_is_retargeted() -> TestResult {
+        let mut app = setup_app(false);
+        let (vrm, _) = spawn_avatar(app.world_mut());
+        // `bevy_gltf` builds a one-keyframe channel as a constant over all time.
+        let (_, clip) = spawn_expression_vrma_with(
+            app.world_mut(),
+            vrm,
+            "happy",
+            ConstantCurve::new(Interval::EVERYWHERE, Vec3::new(0.75, SCRATCH_Y, SCRATCH_Z)),
+        );
+        request_graph(&mut app, vrm);
+
+        let curves = retargeted_curves(&app, &clip);
+        assert_eq!(curves.len(), 1, "the one-keyframe track is not dropped");
+        for time in [0.0, 3.0] {
+            assert_eq!(sample_weight(&curves[0], time), 0.75);
+        }
+        success!()
+    }
+
+    #[test]
+    fn a_huge_timestamp_is_resampled_within_a_bound() -> TestResult {
+        let source = VariableCurve::new(AnimatableCurve::new(
+            animated_field!(Transform::translation),
+            AnimatableKeyframeCurve::new([(0.0, Vec3::ZERO), (1.0e30, Vec3::X)])?,
+        ));
+
+        let weight = expression_weight_curve("happy", &source).expect("the track is resampled");
+
+        assert_eq!(sample_weight(&weight, 0.0), 0.0);
+        assert_eq!(sample_weight(&weight, 1.0e30), 1.0);
+        success!()
+    }
+
+    /// Plays `vrma` through the production event, without a fade.
+    fn play_vrma(
+        app: &mut App,
+        vrma: Entity,
+    ) {
+        app.world_mut()
+            .commands()
+            .entity(vrma)
+            .trigger(|vrma| PlayVrma {
+                transition_duration: Duration::ZERO,
+                ..PlayVrma::new(vrma)
+            });
     }
 
     /// Starts a clip without a transition.

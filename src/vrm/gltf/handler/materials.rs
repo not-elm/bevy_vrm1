@@ -22,14 +22,14 @@
 //! [`GltfMaterial`], not re-derived from JSON. In particular:
 //!
 //! * `emissive` is `emissiveFactor * KHR_materials_emissive_strength`, applied by
-//!   `bevy_gltf` at `crates/bevy_gltf/src/loader/mod.rs:1414-1415`. It is
+//!   `bevy_gltf` at `crates/bevy_gltf/src/loader/mod.rs`. It is
 //!   multiplied here by the one factor that is still missing,
 //!   `VRMC_materials_hdr_emissiveMultiplier`, so each extension applies exactly
 //!   once.
 //! * `uv_transform` is the `KHR_texture_transform` of the base color texture,
 //!   the only one `bevy_gltf` reads
-//!   (`crates/bevy_gltf/src/loader/mod.rs:1274-1277`; see the extension table in
-//!   `bevy_gltf/src/lib.rs:126`). `VRMC_materials_mtoon` declares a *shared*
+//!   (`crates/bevy_gltf/src/loader/mod.rs`; see the extension table in
+//!   `bevy_gltf/src/lib.rs`). `VRMC_materials_mtoon` declares a *shared*
 //!   transform for every texture of the material, so the per-texture transforms
 //!   of the `MToon` texture references are deliberately not read.
 //! * `cull_mode`, `alpha_mode` and `double_sided` likewise.
@@ -37,7 +37,7 @@
 //! Because `GltfMaterial` declares neither a depth bias nor an opaque render
 //! method, both are written as the `StandardMaterial` defaults — which is also
 //! what `bevy_pbr`'s own `GltfMaterial` -> `StandardMaterial` conversion
-//! produces (`crates/bevy_pbr/src/gltf.rs:97`). They are named explicitly rather
+//! produces (`crates/bevy_pbr/src/gltf.rs`). They are named explicitly rather
 //! than left to a `Default`, so a future bevy default change is visible here.
 
 use bevy::asset::{Handle, LoadContext};
@@ -89,7 +89,7 @@ pub(crate) fn process_material(
     if mtoon.outline_width_mode == "screenCoordinates" {
         // The crate's shader has no screen-space outline
         // (`OutlineWidthMode::None` is the only other variant,
-        // `src/vrm/mtoon/material/outline.rs:46`), so this is the same silent
+        // `src/vrm/mtoon/material/outline.rs`), so this is the same silent
         // downgrade the spec would otherwise ask for, and it is the
         // conservative direction — now said out loud.
         vrm_warn!(format!(
@@ -105,8 +105,9 @@ pub(crate) fn process_material(
         VrmcMaterialsHdrEmissiveMultiplier::from_material_extensions(extensions)
             .map_or(1.0, |multiplier| multiplier.emissive_multiplier);
 
+    let texture_count = state.texture_count;
     let material = mtoon_material(
-        &mut |index| texture(load_context, index),
+        &mut |index| texture(load_context, texture_count, index),
         material_asset,
         &mtoon,
         hdr_emissive_multiplier,
@@ -119,8 +120,8 @@ pub(crate) fn process_material(
 ///
 /// `material_label` is the same string `bevy_gltf` passed to `on_material`: both
 /// come from `GltfAssetLabel::Material { index, is_scale_inverted }`
-/// (`crates/bevy_gltf/src/loader/gltf_ext/material.rs:164`), including on the
-/// inverted-scale path at `loader/mod.rs:1628` / `:1646-1653`.
+/// (`crates/bevy_gltf/src/loader/gltf_ext/material.rs`), including on the
+/// inverted-scale path in `loader/mod.rs`.
 pub(crate) fn swap_material(
     state: &VrmLoadState,
     entity: &mut EntityWorldMut,
@@ -133,7 +134,7 @@ pub(crate) fn swap_material(
     entity.insert(MeshMaterial3d(handle.clone()));
 
     // The outline is *not* a second entity: `MToonOutlinePlugin::queue_outlines`
-    // (`src/vrm/mtoon/outline_pass.rs:119-145`) walks
+    // (`src/vrm/mtoon/outline_pass.rs`) walks
     // `RenderVisibleEntities::get::<Mesh3d>()` of the view and draws a second
     // phase for the very same mesh entity, keyed by its
     // `MeshMaterial3d<MToonMaterial>`. The outline therefore inherits the
@@ -189,11 +190,28 @@ fn mtoon_material(
 /// Handle to the labeled image asset `bevy_gltf` created for texture `index`.
 fn texture(
     load_context: &mut LoadContext<'_>,
+    texture_count: usize,
     index: Option<usize>,
 ) -> Option<Handle<Image>> {
-    index.map(|index| {
+    existing_texture(index, texture_count).map(|index| {
         load_context.get_label_handle::<Image>(GltfAssetLabel::Texture(index).to_string())
     })
+}
+
+/// `index`, unless the file has no such texture: a handle to it would never
+/// load, and the material waiting on it would never render.
+fn existing_texture(
+    index: Option<usize>,
+    texture_count: usize,
+) -> Option<usize> {
+    let index = index?;
+    if index >= texture_count {
+        vrm_warn!(format!(
+            "VRM MToon: texture {index} does not exist ({texture_count} textures); ignoring it"
+        ));
+        return None;
+    }
+    Some(index)
 }
 
 #[cfg(test)]
@@ -209,7 +227,7 @@ mod tests {
         Ok(serde_json::from_str(json)?)
     }
 
-    /// `bevy_gltf` (`crates/bevy_gltf/src/loader/mod.rs:1414-1415`) computes
+    /// `bevy_gltf` (`crates/bevy_gltf/src/loader/mod.rs`) computes
     ///     `GltfMaterial::emissive` = `emissiveFactor * KHR_materials_emissive_strength`
     /// and this loader multiplies the remaining factor once:
     ///     `MToonMaterial::emissive` = `GltfMaterial::emissive * VRM_multiplier`
@@ -250,6 +268,16 @@ mod tests {
         let material = mtoon_material(&mut |_| None, &base, &extension, 1.0);
 
         assert_eq!(material.emissive, base.emissive);
+        success!()
+    }
+
+    /// A handle to a texture the file does not have never loads, and a material
+    /// waiting on it never renders; such a reference reads as no texture.
+    #[test]
+    fn an_out_of_range_texture_reads_as_no_texture() -> TestResult {
+        assert_eq!(existing_texture(Some(1), 2), Some(1));
+        assert_eq!(existing_texture(Some(2), 2), None);
+        assert_eq!(existing_texture(None, 2), None);
         success!()
     }
 

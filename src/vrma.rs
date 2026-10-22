@@ -169,6 +169,18 @@ pub(crate) struct VrmAnimationGraphState {
     pub(crate) nodes: HashMap<Entity, AnimationNodeIndex>,
 }
 
+impl VrmAnimationGraphState {
+    /// Whether this graph binds `vrma` at `node`: a `.vrma` reparented from
+    /// another avatar keeps the index it owned there until this graph is rebuilt.
+    pub(crate) fn owns(
+        &self,
+        vrma: Entity,
+        node: AnimationNodeIndex,
+    ) -> bool {
+        self.nodes.get(&vrma) == Some(&node)
+    }
+}
+
 impl Default for VrmAnimationGraphState {
     fn default() -> Self {
         Self {
@@ -188,6 +200,9 @@ pub(crate) struct VrmaPlaybackState {
     pub active: bool,
     /// The live [`ActiveAnimation`] last observed.
     pub animation: Option<ActiveAnimation>,
+    /// The fade of a [`PlayVrma`](crate::prelude::PlayVrma) that arrived before
+    /// the clip was ready; the restore starts it through `AnimationTransitions`.
+    pub transition: Option<Duration>,
 }
 
 /// This is a component that indicates that it is the source of retargeting.

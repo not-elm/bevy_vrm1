@@ -3,7 +3,7 @@
 use crate::error::vrm_error;
 use crate::system_param::prelude::*;
 use crate::vrm::Initialized;
-use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
+use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, insert_bone_holders};
 use crate::vrm::{RestGlobalTransform, RestTransform, RestWorldTransform, Vrm};
 use crate::vrma::animation::animation_graph::RequestUpdateAnimationGraph;
 use crate::vrma::animation::expressions::VrmaExpressionRegistry;
@@ -124,7 +124,8 @@ fn spawn_vrma(
     }
 }
 
-/// Captures the source rig's rest pose and marks the VRMA [`Initialized`] once its bones spawn.
+/// Captures the source rig's rest pose, puts the bone markers and holders on
+/// it, and marks the VRMA [`Initialized`] once its bones spawn.
 fn request_initialize_vrma(
     mut commands: Commands,
     models: Query<(Entity, &HumanoidBoneRegistry), (With<Vrma>, Without<Initialized>)>,
@@ -138,6 +139,7 @@ fn request_initialize_vrma(
         if let Ok((_, global)) = transforms.get(root) {
             commands.entity(root).insert(RestWorldTransform(*global));
         }
+        let mut bones = Vec::new();
         for (bone, name) in registry.iter() {
             let Some(entity) = searcher.find_from_name(root, name) else {
                 continue;
@@ -151,7 +153,9 @@ fn request_initialize_vrma(
                 RestGlobalTransform(*gtf),
                 RetargetSource,
             ));
+            bones.push((bone.clone(), entity));
         }
+        insert_bone_holders(root, &mut commands, &bones);
         commands.entity(root).insert(Initialized);
     }
 }
@@ -256,6 +260,7 @@ mod tests {
 
     #[test]
     fn a_vrma_is_initialized_and_its_rests_are_captured_once_its_bones_are_spawned() {
+        use crate::prelude::{Hips, HipsBoneEntity};
         use crate::vrm::VrmBone;
 
         let mut app = App::new();
@@ -294,5 +299,13 @@ mod tests {
                 && app.world().get::<RestGlobalTransform>(hips).is_some(),
             "the source bone's rest pose is captured, or the retarget moves no curve"
         );
+        assert_eq!(
+            app.world()
+                .get::<HipsBoneEntity>(vrma)
+                .map(|holder| holder.0),
+            Some(hips),
+            "the `.vrma` holds its bones, as a `.vrm` does"
+        );
+        assert!(app.world().get::<Hips>(hips).is_some());
     }
 }

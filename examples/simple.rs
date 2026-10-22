@@ -20,7 +20,6 @@ fn spawn_directional_light(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
-        all_vrm_render_layers(),
         Transform::from_xyz(3.0, 3.0, 0.3).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
@@ -33,7 +32,6 @@ fn spawn_camera(
     commands.spawn((
         PanOrbitCamera::default(),
         Camera3d::default(),
-        third_person_camera_layers(),
         Transform::from_xyz(0.0, 2.5, 3.5).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     // Ground

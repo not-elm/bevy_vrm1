@@ -24,21 +24,33 @@ pub(crate) struct SpringJointState {
 }
 
 impl SpringJointState {
-    /// Seeds the simulation state of one joint from its rest pose.
+    /// The simulation state of one joint at its rest pose.
+    ///
+    /// The tail is left unseeded: it is a world (or center-space) position,
+    /// which depends on where the avatar is placed, so the first simulated
+    /// frame seeds it from the live pose (see [`Self::seed_tail`]).
     pub(crate) fn from_rest(
         bone_axis: Vec3,
         bone_length: f32,
-        tail: Vec3,
         rest: Transform,
     ) -> Self {
         Self {
-            prev_tail: tail,
-            current_tail: tail,
+            prev_tail: Vec3::ZERO,
+            current_tail: Vec3::ZERO,
             bone_axis,
             bone_length,
             initial_local_matrix: rest.to_matrix(),
             initial_local_rotation: rest.rotation,
         }
+    }
+
+    /// Places the tail at `tail` with no velocity.
+    pub(crate) fn seed_tail(
+        &mut self,
+        tail: Vec3,
+    ) {
+        self.prev_tail = tail;
+        self.current_tail = tail;
     }
 
     /// Resets the velocity by setting `prev_tail` to `current_tail`.

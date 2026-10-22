@@ -28,17 +28,12 @@ fn spawn_light(mut commands: Commands) {
             shadow_maps_enabled: true,
             ..default()
         },
-        all_vrm_render_layers(),
         Transform::from_xyz(3.0, 3.0, 0.3).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
 
 fn spawn_camera(mut commands: Commands) {
-    commands.spawn((
-        Camera3d::default(),
-        third_person_camera_layers(),
-        Transform::from_xyz(0., 0.8, 2.5),
-    ));
+    commands.spawn((Camera3d::default(), Transform::from_xyz(0., 0.8, 2.5)));
 }
 
 fn spawn_vrm(

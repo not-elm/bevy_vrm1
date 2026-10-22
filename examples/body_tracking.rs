@@ -12,11 +12,7 @@ fn spawn_camera_and_vrm(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    commands.spawn((
-        Camera3d::default(),
-        third_person_camera_layers(),
-        Transform::from_xyz(0.0, 1.3, 1.0),
-    ));
+    commands.spawn((Camera3d::default(), Transform::from_xyz(0.0, 1.3, 1.0)));
     commands.spawn((
         VrmHandle(asset_server.load("vrm/AliciaSolid.vrm")),
         LookAt::Cursor,

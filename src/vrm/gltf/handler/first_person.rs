@@ -14,7 +14,7 @@
 //! A split has to change the `Mesh` asset itself, and `user_mesh` is the only
 //! hook that can. The hook is called once per `(mesh, primitive)`, *before*
 //! `bevy_gltf` reads the vertices
-//! (`crates/bevy_gltf/src/loader/mod.rs:733-817`), which is why the joints and
+//! (`crates/bevy_gltf/src/loader/mod.rs`), which is why the joints and
 //! weights are read here from the buffer data rather than from a built `Mesh`.
 //! The head half is registered as a labeled asset here and spawned as a
 //! sibling in [`apply_first_person`](super::scene), because the mesh entities
@@ -22,13 +22,13 @@
 //!
 //! The label is added with the *root* `LoadContext` and read back with the scene
 //! one; that works because `LoadContext::begin_labeled_asset`
-//! (`bevy_asset/src/loader.rs:441`) keeps `asset_path` unchanged, so both
+//! (`bevy_asset/src/loader.rs`) keeps `asset_path` unchanged, so both
 //! contexts resolve the same asset path.
 //!
 //! # Morph targets
 //!
 //! `user_mesh` replaces the whole mesh, and `bevy_gltf` only reads
-//! `morph_targets` in the `else` branch (`loader/mod.rs:794-815`) — a handler
+//! `morph_targets` in the `else` branch (`loader/mod.rs`) — a handler
 //! that supplies a mesh silently loses them. Rather than lose a morph-target
 //! mesh's expressions, the morph deltas are read from the same buffers and
 //! rebuilt for the compacted vertex list. If that cannot be done exactly, the
@@ -36,7 +36,9 @@
 //! the conservative direction: hiding geometry that turns out to be the body
 //! would make an avatar lose its torso.
 
-use bevy::asset::{Handle, LoadContext, RenderAssetUsages};
+use bevy::asset::{LoadContext, RenderAssetUsages};
+use bevy::gltf::MorphTargetNames;
+use bevy::gltf::gltf_ext::mesh::primitive_topology;
 use bevy::math::Vec3;
 use bevy::mesh::morph::MorphAttributes;
 use bevy::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues};
@@ -44,7 +46,7 @@ use bevy::platform::collections::{HashMap, HashSet};
 
 use super::VrmLoadState;
 use crate::error::vrm_warn;
-use crate::vrm::gltf::extensions::vrmc_vrm::FirstPersonFlag;
+use crate::vrm::gltf::extensions::vrmc_vrm::{FirstPerson, FirstPersonFlag};
 
 /// Classification/split results keyed by (glTF mesh index, primitive index).
 #[derive(Clone, Default)]
@@ -54,33 +56,19 @@ pub struct FirstPersonPlan {
     /// Label of the head sub-mesh asset, for the primitives that were split.
     /// The head copy is spawned in [`apply_first_person`](super::scene).
     pub head_mesh_labels: HashMap<(usize, usize), String>,
+    /// The glTF mesh indices `auto` applies to, computed on the first primitive.
+    auto_meshes: Option<HashSet<usize>>,
 }
 
 /// What `firstPerson` decided about one primitive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AutoClass {
-    /// Visible in both views: layer 0.
+    /// Visible in both views.
     Both,
     /// Entirely on head bones: hidden from a first-person camera.
     ThirdPersonOnly,
     /// Mixed: split into a body part (both) and a head part (third-person only).
     Split,
-}
-
-/// The glTF `Mode` -> bevy topology mapping, mirroring `bevy_gltf`'s
-/// `loader/gltf_ext/mesh.rs::primitive_topology`.
-///
-/// Returns `None` for the modes bevy rejects outright, in which case the
-/// primitive is left alone.
-fn primitive_topology(mode: gltf::mesh::Mode) -> Option<PrimitiveTopology> {
-    match mode {
-        gltf::mesh::Mode::Points => Some(PrimitiveTopology::PointList),
-        gltf::mesh::Mode::Lines => Some(PrimitiveTopology::LineList),
-        gltf::mesh::Mode::LineStrip => Some(PrimitiveTopology::LineStrip),
-        gltf::mesh::Mode::Triangles => Some(PrimitiveTopology::TriangleList),
-        gltf::mesh::Mode::TriangleStrip => Some(PrimitiveTopology::TriangleStrip),
-        _ => None,
-    }
 }
 
 pub(crate) fn process_primitive(
@@ -155,37 +143,59 @@ pub(crate) fn process_primitive(
     state.first_person.head_mesh_labels.insert(key, label);
 }
 
-/// Whether this mesh is `auto`: either the specification default for a mesh
-/// without an annotation, or an explicit `auto` annotation on a node that
-/// instances it.
-///
-/// The experiment only accepted the explicit form, which silently skipped every
-/// `auto` mesh of the many avatars that do not annotate their meshes at all.
+/// Whether a node instancing this mesh is `auto`.
 fn is_auto(
-    state: &VrmLoadState,
+    state: &mut VrmLoadState,
     gltf_document: &gltf::Gltf,
     mesh_index: usize,
 ) -> bool {
     let Some(vrm) = &state.vrm else {
         return false;
     };
-    let Some(first_person) = &vrm.first_person else {
-        // "when the `firstPerson` property itself does not exist […] you must
-        // assume all meshes are annotated as `auto`"
-        return true;
-    };
-    if first_person.mesh_annotations.is_empty() {
-        return true;
-    }
-    let nodes: Vec<_> = gltf_document.document.nodes().collect();
-    first_person.mesh_annotations.iter().any(|annotation| {
-        annotation.first_person_flag == FirstPersonFlag::Auto
-            && nodes
-                .get(annotation.node)
-                .and_then(|node| node.mesh())
-                .map(|mesh| mesh.index())
-                == Some(mesh_index)
-    })
+    state
+        .first_person
+        .auto_meshes
+        .get_or_insert_with(|| auto_meshes(vrm.first_person.as_ref(), &gltf_document.document))
+        .contains(&mesh_index)
+}
+
+/// The meshes instanced by an `auto` node.
+///
+/// A node takes the flag of the nearest annotated node among itself and its
+/// ancestors, so an annotation on a mesh-less parent covers the meshes below it.
+/// A node no annotation covers is `auto`, which is also what a file without
+/// `firstPerson` gets.
+fn auto_meshes(
+    first_person: Option<&FirstPerson>,
+    document: &gltf::Document,
+) -> HashSet<usize> {
+    let flags: HashMap<usize, FirstPersonFlag> = first_person
+        .map(|first_person| {
+            first_person
+                .mesh_annotations
+                .iter()
+                .map(|annotation| (annotation.node, annotation.first_person_flag))
+                .collect()
+        })
+        .unwrap_or_default();
+    let parents: HashMap<usize, usize> = document
+        .nodes()
+        .flat_map(|node| {
+            node.children()
+                .map(move |child| (child.index(), node.index()))
+        })
+        .collect();
+    document
+        .nodes()
+        .filter_map(|node| {
+            let mesh = node.mesh()?;
+            let flag =
+                std::iter::successors(Some(node.index()), |index| parents.get(index).copied())
+                    .find_map(|index| flags.get(&index).copied())
+                    .unwrap_or(FirstPersonFlag::Auto);
+            (flag == FirstPersonFlag::Auto).then_some(mesh.index())
+        })
+        .collect()
 }
 
 /// Splits the primitive's vertices by which triangles are weighted to the head
@@ -336,7 +346,7 @@ fn split(
     gltf_primitive: &gltf::Primitive,
     buffer_data: &[Vec<u8>],
 ) -> Option<(Mesh, Mesh)> {
-    let topology = primitive_topology(gltf_primitive.mode())?;
+    let topology = primitive_topology(gltf_primitive.mode()).ok()?;
     let head_slots = head_joint_slots(state, gltf_document, gltf_mesh.index())?;
     let (joints, weights) = read_skin(gltf_primitive, buffer_data)?;
 
@@ -384,52 +394,29 @@ fn split(
         head_vertex,
     };
 
-    let body = build_submesh(&data, false)?;
-    let head = build_submesh(&data, true)?;
+    let mut body = build_submesh(&data, false)?;
+    let mut head = build_submesh(&data, true)?;
 
-    // `bevy_gltf` copies the target names out of the mesh's `extras`
-    // (`loader/mod.rs:808-814`); without them `MeshMorphWeights` loses the
-    // names the expression system looks morph targets up by.
-    let names = gltf_mesh
-        .extras()
-        .as_ref()
-        .and_then(|extras| serde_json::from_str::<MorphTargetNames>(extras.get()).ok());
-    let names = names.map(|names| names.target_names);
-
-    Some((
-        with_morph_target_names(body, names.clone()),
-        with_morph_target_names(head, names),
-    ))
-}
-
-/// `targetNames` of a glTF mesh's `extras`, mirroring bevy's private
-/// `MorphTargetNames`.
-#[derive(serde::Deserialize)]
-struct MorphTargetNames {
-    #[serde(rename = "targetNames")]
-    target_names: Vec<String>,
-}
-
-fn with_morph_target_names(
-    mut mesh: Mesh,
-    names: Option<Vec<String>>,
-) -> Mesh {
-    if let Some(names) = names {
-        // `set_morph_target_names` panics on a length mismatch, and a name list
-        // that does not match the target count is malformed exporter output.
-        if mesh
-            .morph_targets()
-            .is_some_and(|targets| targets.len() == names.len())
-        {
-            mesh.set_morph_target_names(names);
-        } else {
-            vrm_warn!(
-                "VRM firstPerson: `extras.targetNames` does not match the number of morph \
-                 targets; the split mesh keeps its targets unnamed"
-            );
-        }
+    // What `bevy_gltf` does for the meshes it builds itself.
+    if !data.morph_targets.is_empty()
+        && let Some(names) = gltf_mesh
+            .extras()
+            .as_ref()
+            .and_then(|extras| serde_json::from_str::<MorphTargetNames>(extras.get()).ok())
+    {
+        body.set_morph_target_names(names.target_names.clone());
+        head.set_morph_target_names(names.target_names);
     }
-    mesh
+    // `bevy_gltf` generates these for the body half, which it receives as
+    // `user_mesh`, but never sees the head half. Without them the copy's `Aabb`
+    // stays at the bind pose.
+    if let Err(error) = head.generate_skinned_mesh_bounds() {
+        vrm_warn!(format!(
+            "VRM firstPerson: failed to generate the head half's skinned mesh bounds: {error}"
+        ));
+    }
+
+    Some((body, head))
 }
 
 /// One source vertex, gathered for the compacted vertex list.
@@ -566,7 +553,7 @@ fn build_submesh(
         // `on_gltf_primitive` does not receive the loader settings, and
         // `RenderAssetUsages::default()` is exactly
         // `GltfLoaderSettings::load_meshes`'s default
-        // (`bevy_gltf/src/loader/mod.rs:223`).
+        // (`bevy_gltf/src/loader/mod.rs`).
         RenderAssetUsages::default(),
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
@@ -599,7 +586,7 @@ fn build_submesh(
         // `morph_targets[target * vertex_count + vertex]`
         // (`crates/bevy_pbr/src/render/morph.wgsl`, `get_morph_target`), which
         // is the order `bevy_gltf` produces by walking the vertices of one
-        // target at a time (`crates/bevy_gltf/src/loader/mod.rs:797-807`).
+        // target at a time (`crates/bevy_gltf/src/loader/mod.rs`).
         let vertex_count = sources.len();
         let mut rebuilt = Vec::with_capacity(data.morph_targets.len() * vertex_count);
         for (position, normal, tangent) in &data.morph_targets {
@@ -819,6 +806,123 @@ mod tests {
         assert_eq!(body.count_vertices(), 0, "the body half is empty");
         let head = build_submesh(&data, true).expect("the topology is a strip");
         assert_eq!(head.count_vertices(), 6, "the head half keeps every vertex");
+        success!()
+    }
+
+    fn avatar(name: &str) -> gltf::Gltf {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/vrm")
+            .join(name);
+        let bytes = std::fs::read(path).expect("the avatar should be readable");
+        gltf::Gltf::from_slice_without_validation(&bytes).expect("the avatar should parse")
+    }
+
+    /// `root -> {Face (mesh 0), HairRoot -> Hair (mesh 1), Body (mesh 2)}`,
+    /// and the meshes `is_auto` accepts under `annotations`.
+    fn auto_meshes_under(annotations: &str) -> Vec<usize> {
+        let vrm = serde_json::from_str(&format!(
+            r#"{{
+                "specVersion": "1.0",
+                "humanoid": {{"humanBones": {{}}}},
+                "firstPerson": {{"meshAnnotations": {annotations}}}
+            }}"#
+        ))
+        .expect("the extension should parse");
+        let mut state = VrmLoadState {
+            vrm: Some(std::sync::Arc::new(vrm)),
+            ..Default::default()
+        };
+        let gltf = gltf::Gltf::from_slice_without_validation(
+            br#"{
+                "asset": {"version": "2.0"},
+                "scenes": [{"nodes": [0]}],
+                "nodes": [
+                    {"name": "root", "children": [1, 2, 3]},
+                    {"name": "Face", "mesh": 0},
+                    {"name": "HairRoot", "children": [4]},
+                    {"name": "Body", "mesh": 2},
+                    {"name": "Hair", "mesh": 1}
+                ],
+                "meshes": [
+                    {"primitives": [{"attributes": {}}]},
+                    {"primitives": [{"attributes": {}}]},
+                    {"primitives": [{"attributes": {}}]}
+                ]
+            }"#,
+        )
+        .expect("the document should parse");
+        (0..3)
+            .filter(|mesh| is_auto(&mut state, &gltf, *mesh))
+            .collect()
+    }
+
+    /// The specification makes every mesh no annotation covers `auto`, not only
+    /// the meshes of a file that annotates nothing.
+    #[test]
+    fn an_unannotated_mesh_is_auto_next_to_annotated_ones() -> TestResult {
+        assert_eq!(
+            auto_meshes_under(r#"[{"node": 3, "firstPersonFlag": "both"}]"#),
+            vec![0, 1]
+        );
+        success!()
+    }
+
+    /// An annotation on a mesh-less node covers the meshes below it, and the
+    /// nearest annotation wins.
+    #[test]
+    fn an_annotation_reaches_the_meshes_below_its_node() -> TestResult {
+        assert_eq!(
+            auto_meshes_under(r#"[{"node": 2, "firstPersonFlag": "thirdPersonOnly"}]"#),
+            vec![0, 2]
+        );
+        assert_eq!(
+            auto_meshes_under(
+                r#"[
+                    {"node": 0, "firstPersonFlag": "both"},
+                    {"node": 2, "firstPersonFlag": "auto"}
+                ]"#
+            ),
+            vec![1]
+        );
+        success!()
+    }
+
+    /// The head half is registered by the handler rather than by `bevy_gltf`, so
+    /// it has to carry what `bevy_gltf` would have given it: the skinned bounds
+    /// that make its `Aabb` follow the pose, and the morph target names.
+    #[test]
+    fn a_split_keeps_skinned_bounds_and_target_names() -> TestResult {
+        let gltf = avatar("AliciaSolid.vrm");
+        let buffer_data = vec![gltf.blob.clone().expect("a .vrm is a GLB")];
+        let mut state = VrmLoadState::default();
+        crate::vrm::gltf::handler::root::parse_root_extensions(&mut state, &gltf);
+
+        let (mesh, primitive) = gltf
+            .document
+            .meshes()
+            .flat_map(|mesh| {
+                mesh.primitives()
+                    .map(move |primitive| (mesh.clone(), primitive))
+            })
+            .find(|(mesh, primitive)| {
+                primitive.morph_targets().len() > 0
+                    && classify(&state, &gltf, mesh.index(), primitive, &buffer_data)
+                        == Some(AutoClass::Split)
+            })
+            .expect("AliciaSolid's face is split");
+        let names = mesh
+            .extras()
+            .as_ref()
+            .and_then(|extras| serde_json::from_str::<MorphTargetNames>(extras.get()).ok())
+            .expect("the face names its morph targets")
+            .target_names;
+
+        let (body, head) =
+            split(&state, &gltf, &mesh, &primitive, &buffer_data).expect("the face splits");
+
+        assert_eq!(body.morph_target_names(), Some(names.as_slice()));
+        assert_eq!(head.morph_target_names(), Some(names.as_slice()));
+        assert!(head.skinned_mesh_bounds().is_some());
         success!()
     }
 

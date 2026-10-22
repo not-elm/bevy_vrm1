@@ -154,6 +154,7 @@ pub(crate) fn parse_root_extensions(
     }
 
     state.mesh_skins = collect_mesh_skins(gltf);
+    state.texture_count = gltf.textures().len();
 
     let rest = collect_rest_poses(gltf);
     state.root_scale = rest.root_scale;
@@ -610,7 +611,7 @@ mod tests {
         let gltf = document(&two_level_scene());
         let rests = collect_rest_poses(&gltf);
 
-        // `collect_path` (`bevy_gltf/src/loader/gltf_ext/scene.rs:78`) pushes
+        // `collect_path` (`bevy_gltf/src/loader/gltf_ext/scene.rs`) pushes
         // the topmost node's name first.
         assert_eq!(
             rests.nodes[&1].path,

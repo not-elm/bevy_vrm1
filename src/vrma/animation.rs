@@ -3,7 +3,6 @@ pub(crate) mod bake;
 mod bone_rotation;
 mod bone_translation;
 pub(crate) mod expressions;
-mod mask;
 mod play;
 mod properties;
 
@@ -18,12 +17,11 @@ use bevy::window::RequestRedraw;
 pub mod prelude {
     pub use crate::vrma::animation::{
         VrmaAnimationPlayers,
-        mask::{VrmMaskGroup, VrmaMask, mask_group_for_bone},
         play::{PlayVrma, StopVrma},
         properties::{
-            EffectiveExpressionWeights, ExpressionMorphBinds, ExpressionSetting,
-            ExpressionSettings, ExpressionWeightProperty, MorphBind, MorphBindTable,
-            VRM_ROOT_TARGET_NAME, VrmExpressionIndex, VrmExpressionWeights,
+            EffectiveExpressionWeights, ExpressionMorphBinds, ExpressionOverrides,
+            ExpressionSetting, ExpressionSettings, ExpressionWeightProperty, MorphBind,
+            MorphBindTable, VRM_ROOT_TARGET_NAME, VrmExpressionIndex, VrmExpressionWeights,
             apply_expression_morph_binds, vrm_root_animation_target,
         },
     };

@@ -23,14 +23,15 @@
 //! user entity : VrmHandle, WorldAssetRoot, Transform, Visibility, Vrm,
 //!               Initialized, VrmGeneration, VrmPath, RestWorldTransform,
 //!               LookAtProperties, expressions, <Bone>BoneEntity holders, ...
-//! ├─ scene root (internal) : VrmSceneRoot, coordinate-conversion Transform,
-//! │                          skeleton, AnimationPlayer (on the root bone)
+//! ├─ scene root (internal) : VrmSceneRoot, Name, Transform, skeleton,
+//! │                          AnimationPlayer (on the root bone)
 //! └─ .vrma children spawned by the user
 //! ```
 //!
 //! The internal scene root keeps its [`Transform`]/[`GlobalTransform`], its
 //! hierarchy, its [`Name`] and the player, because those are what `bevy_gltf` built
-//! and moving the conversion transform would overwrite the user's placement.
+//! and moving its transform would overwrite the user's placement. The [`Name`]
+//! (`meta.name`) is copied onto a user entity that has none.
 //! Everything else the handler wrote on the root is moved with a controlled
 //! `take`/`insert` (never `move_components`, which would remap the self-scoped
 //! `AnimatedBy` of a no-`hips` rig into the user root), preserving every entity
@@ -58,7 +59,8 @@
 //! detach-before-load actually cancel. A late instance that still arrives for a
 //! cancelled spawn is cleaned up by the global [`WorldInstanceReady`] observer. A
 //! handle that failed to load, or whose asset exposes no scene, stops being
-//! retried instead of pending forever ([`classify_pending`]). Re-resolving an
+//! retried instead of pending forever ([`classify_pending`]) until its asset is
+//! reloaded ([`rearm_pending_vrm`]). Re-resolving an
 //! unchanged non-VRM handle does not re-insert `WorldAssetRoot`, so the spawner
 //! (which reacts to `Changed<WorldAssetRoot>`) does not respawn it on every
 //! re-arm. Every deferred mutation re-checks the live world before acting, so a
@@ -84,13 +86,14 @@ use crate::macros::marker_component;
 use crate::prelude::*;
 use bevy::animation::{AnimatedBy, AnimationTargetId};
 use bevy::app::{App, Plugin, SceneSpawnerSystems, SpawnScene, Update};
-use bevy::asset::{AssetServer, Assets, Handle};
+use bevy::asset::{AssetEvent, AssetId, AssetServer, Assets, Handle};
 use bevy::ecs::lifecycle::HookContext;
 use bevy::ecs::world::{DeferredWorld, World};
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use bevy::world_serialization::{
-    InstanceId, WorldAsset, WorldAssetRoot, WorldInstance, WorldInstanceReady, WorldInstanceSpawner,
+    DynamicWorldRoot, InstanceId, WorldAsset, WorldAssetRoot, WorldInstance, WorldInstanceReady,
+    WorldInstanceSpawner,
 };
 
 /// A handle to a `.vrm` asset, and the marker that says "this entity is a VRM
@@ -173,6 +176,11 @@ pub(crate) struct VrmInstanceState {
     pub(crate) scene_root: Entity,
 }
 
+/// The owner's [`Name`] was copied from the model at attach, not supplied by
+/// the application, so a swap replaces it and a detach removes it.
+#[derive(Component, Default, Debug, Clone, Copy)]
+pub(crate) struct NameFromModel;
+
 /// The `on_insert` hook of [`VrmHandle`]: arm the resolver.
 fn mark_vrm_scene_pending(
     mut world: DeferredWorld,
@@ -184,18 +192,35 @@ fn mark_vrm_scene_pending(
         .insert(PendingVrmScene);
 }
 
-/// Re-arms [`PendingVrmScene`] whenever a [`VrmHandle`] changes.
+/// Re-arms [`PendingVrmScene`] whenever a [`VrmHandle`] changes or its asset is
+/// (re)loaded.
 ///
 /// The `on_insert` hook only runs on a structural insertion, so a handle mutated
 /// in place (`*handle = VrmHandle(..)` / `handle.0 = ..`) would otherwise never
 /// be re-resolved. Running on `Changed` — which also covers the insertion case —
-/// makes both paths the same.
+/// makes both paths the same. The asset events retry a handle the resolver gave
+/// up on: a failed or scene-less file that is fixed and reloaded arrives under
+/// the same, unchanged handle.
 fn rearm_pending_vrm(
     mut commands: Commands,
+    mut gltf_events: MessageReader<AssetEvent<Gltf>>,
     changed: Query<Entity, (Changed<VrmHandle>, Without<PendingVrmScene>)>,
+    idle: Query<(Entity, &VrmHandle), Without<PendingVrmScene>>,
 ) {
     for entity in &changed {
         commands.entity(entity).insert(PendingVrmScene);
+    }
+    let loaded: Vec<AssetId<Gltf>> = gltf_events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    for (entity, handle) in &idle {
+        if loaded.contains(&handle.0.id()) {
+            commands.entity(entity).insert(PendingVrmScene);
+        }
     }
 }
 
@@ -377,6 +402,7 @@ fn attach_vrm_instance(
         ),
     >,
     instances: Query<&WorldInstance>,
+    dynamic_owner: Query<(), With<DynamicWorldRoot>>,
     scene_roots: Query<(), With<VrmSceneRoot>>,
     mut commands: Commands,
 ) {
@@ -437,9 +463,12 @@ fn attach_vrm_instance(
                 attach_raw_instance(world, parent, root, instance_id);
             });
         }
-    } else if scene_root.is_some() {
-        // A crate-managed VRM scene whose owner no longer wants it: a queued
-        // spawn that survived a detach. Its entities are removed.
+    } else if scene_root.is_some() && instances.contains(parent) && !dynamic_owner.contains(parent)
+    {
+        // The owner's own `WorldAssetRoot` queued this instance and no longer
+        // wants it: a spawn that survived a detach. Its entities are removed. An
+        // instance bevy spawned for anything else (`spawn_as_child`, a
+        // `DynamicWorldRoot`) belongs to the application and is left alone.
         let instance_id = ready.instance_id;
         commands.queue(move |world: &mut World| cleanup_stale_instance(world, instance_id, parent));
     }
@@ -505,6 +534,13 @@ fn attach_managed(
     // rig that no longer exists. Clear before moving the new values in.
     clear_attached_state(world, parent);
     move_root_data(world, scene_root, parent);
+    // The loader names the scene root after `meta.name`. A `Name` the
+    // application gave the entity wins.
+    if world.get::<Name>(parent).is_none()
+        && let Some(name) = world.get::<Name>(scene_root).cloned()
+    {
+        world.entity_mut(parent).insert((name, NameFromModel));
+    }
 
     world.entity_mut(parent).insert((
         Vrm,
@@ -643,9 +679,21 @@ fn clear_attached_state(
     entity: Entity,
 ) {
     remove_root_data(world, entity);
+    remove_model_name(world, entity);
     world
         .entity_mut(entity)
         .remove::<(Vrm, Initialized, VrmInstanceState)>();
+}
+
+/// Removes a [`Name`] the attach copied from the model, keeping one the
+/// application supplied.
+pub(crate) fn remove_model_name(
+    world: &mut World,
+    entity: Entity,
+) {
+    if world.entity_mut(entity).take::<NameFromModel>().is_some() {
+        world.entity_mut(entity).remove::<Name>();
+    }
 }
 
 /// Despawns a late instance of a spawn that was already cancelled.
@@ -1043,6 +1091,7 @@ mod tests {
             .register_type::<AnimationPlayer>()
             .register_type::<HeadBoneEntity>()
             .register_type::<NeckBoneEntity>()
+            .register_type::<Name>()
             .register_type::<ChildOf>()
             .register_type::<Children>()
             .add_plugins(VrmDetachPlugin)
@@ -1712,6 +1761,185 @@ mod tests {
         assert!(app.world().get::<WorldAssetRoot>(vrm).is_none());
         assert!(app.world().get::<Initialized>(vrm).is_none());
         assert!(app.world().get_entity(vrm).is_ok());
+        success!()
+    }
+
+    /// The fixture scene with the `Name` the loader gives a VRM scene root.
+    fn named_vrm_scene(name: &'static str) -> WorldAsset {
+        let (mut scene, root, _) = vrm_scene(false);
+        scene.world.entity_mut(root).insert(Name::new(name));
+        scene
+    }
+
+    /// An owner without a `Name` takes the model's, and follows it across a
+    /// swap; a `Name` the application supplied is never replaced.
+    #[test]
+    fn an_unnamed_owner_takes_the_model_name() -> TestResult {
+        let mut app = instance_app();
+        let first = add_vrm(&mut app, named_vrm_scene("First"));
+        let second = add_vrm(&mut app, named_vrm_scene("Second"));
+        let unnamed = app.world_mut().spawn(VrmHandle(first.clone())).id();
+        let named = app
+            .world_mut()
+            .spawn((VrmHandle(first), Name::new("avatar")))
+            .id();
+        for _ in 0..6 {
+            app.update();
+        }
+        let name = |app: &App, entity: Entity| {
+            app.world()
+                .get::<Name>(entity)
+                .map(|name| name.as_str().to_owned())
+        };
+        assert_eq!(name(&app, unnamed).as_deref(), Some("First"));
+        assert_eq!(name(&app, named).as_deref(), Some("avatar"));
+
+        for entity in [unnamed, named] {
+            app.world_mut()
+                .entity_mut(entity)
+                .get_mut::<VrmHandle>()
+                .unwrap()
+                .0 = second.clone();
+        }
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(name(&app, unnamed).as_deref(), Some("Second"));
+        assert_eq!(name(&app, named).as_deref(), Some("avatar"));
+
+        for entity in [unnamed, named] {
+            app.world_mut()
+                .commands()
+                .entity(entity)
+                .trigger(RequestDetachVrm);
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(name(&app, unnamed), None, "the model's name goes with it");
+        assert_eq!(name(&app, named).as_deref(), Some("avatar"));
+        success!()
+    }
+
+    /// A broken file fixed on disk and hot-reloaded replaces the asset under the
+    /// same handle; the owner the resolver gave up on has to pick it up.
+    #[test]
+    fn an_unresolvable_handle_is_retried_after_a_reload() -> TestResult {
+        let mut app = instance_app();
+        let gltf = app
+            .world_mut()
+            .resource_mut::<Assets<Gltf>>()
+            .add(gltf_without_scene());
+        let vrm = app.world_mut().spawn(VrmHandle(gltf.clone())).id();
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(app.world().get::<PendingVrmScene>(vrm).is_none());
+
+        let scene = app
+            .world_mut()
+            .resource_mut::<Assets<WorldAsset>>()
+            .add(vrm_scene(false).0);
+        app.world_mut()
+            .resource_mut::<Assets<Gltf>>()
+            .insert(&gltf, gltf_with_scene(scene))
+            .unwrap();
+        for _ in 0..6 {
+            app.update();
+        }
+
+        assert!(app.world().get::<Initialized>(vrm).is_some());
+        success!()
+    }
+
+    /// A VRM scene bevy spawned without a `WorldAssetRoot` on the parent was
+    /// never queued by this crate, so it is not a cancelled spawn.
+    #[test]
+    fn a_vrm_scene_spawned_as_a_child_is_kept() -> TestResult {
+        let mut app = instance_app();
+        let scene = app
+            .world_mut()
+            .resource_mut::<Assets<WorldAsset>>()
+            .add(vrm_scene(false).0);
+        let parent = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<WorldInstanceSpawner>()
+            .spawn_as_child(scene, parent);
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let root = app
+            .world()
+            .get::<Children>(parent)
+            .expect("the instance survives")
+            .iter()
+            .next()
+            .unwrap();
+        assert!(app.world().get::<VrmSceneRoot>(root).is_some());
+        success!()
+    }
+
+    #[test]
+    fn a_vrm_scene_spawned_through_a_dynamic_world_root_is_kept() -> TestResult {
+        let mut app = instance_app();
+        let dynamic = {
+            let registry = app.world().resource::<AppTypeRegistry>().read();
+            DynamicWorld::from_world_asset(&vrm_scene(false).0, &registry)
+        };
+        let dynamic = app
+            .world_mut()
+            .resource_mut::<Assets<DynamicWorld>>()
+            .add(dynamic);
+        let owner = app.world_mut().spawn(DynamicWorldRoot(dynamic)).id();
+        for _ in 0..4 {
+            app.update();
+        }
+
+        assert!(app.world().get::<WorldInstance>(owner).is_some());
+        let root = app
+            .world()
+            .get::<Children>(owner)
+            .expect("the instance survives")
+            .iter()
+            .next()
+            .unwrap();
+        assert!(app.world().get::<VrmSceneRoot>(root).is_some());
+        success!()
+    }
+
+    /// `RequestDetachVrm` on the owner of a spawned scene that is not a VRM (a
+    /// level, a prop) is not a VRM detach.
+    #[test]
+    fn detaching_a_non_vrm_raw_owner_is_a_no_op() -> TestResult {
+        let mut app = instance_app();
+        let scene = app
+            .world_mut()
+            .resource_mut::<Assets<WorldAsset>>()
+            .add(plain_scene());
+        let owner = app.world_mut().spawn(WorldAssetRoot(scene)).id();
+        for _ in 0..3 {
+            app.update();
+        }
+        let root = app
+            .world()
+            .get::<Children>(owner)
+            .expect("the plain scene is instantiated")
+            .iter()
+            .next()
+            .unwrap();
+
+        app.world_mut()
+            .commands()
+            .entity(owner)
+            .trigger(RequestDetachVrm);
+        for _ in 0..2 {
+            app.update();
+        }
+
+        assert!(app.world().get::<WorldAssetRoot>(owner).is_some());
+        assert!(app.world().get::<WorldInstance>(owner).is_some());
+        assert!(app.world().get_entity(root).is_ok());
         success!()
     }
 

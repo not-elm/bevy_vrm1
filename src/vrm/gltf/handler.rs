@@ -12,9 +12,9 @@
 //! # Why `state` is per-load and starts empty
 //!
 //! `bevy_gltf` clones the handler list once per file load
-//! (`crates/bevy_gltf/src/loader/mod.rs:252-253`,
+//! (`crates/bevy_gltf/src/loader/mod.rs`,
 //! `loader.extensions.read().await.clone()`) and then calls `on_root` on the
-//! clone (`:258-260`). `dyn_clone` therefore hands out
+//! clone. `dyn_clone` therefore hands out
 //! `Box::new(self.clone())` of the *pristine* registered instance, whose
 //! `state` is `Default::default()` — so every load starts with an empty state
 //! and two concurrent loads cannot see each other's mappings.
@@ -47,7 +47,6 @@ use std::sync::Arc;
 
 use crate::prelude::MToonMaterial;
 use crate::prelude::*;
-use crate::vrm::coords::{VrmForwardPolicy, resolve_forward_policy};
 use crate::vrm::gltf::extensions::{vrmc_spring_bone, vrmc_vrm};
 
 use self::root::NodeRest;
@@ -55,11 +54,6 @@ use self::root::NodeRest;
 /// Registered once in [`VrmGltfPlugin::build`](crate::vrm::gltf::VrmGltfPlugin).
 #[derive(Clone, Default)]
 pub struct VrmExtensionHandler {
-    /// Fallback for `GltfLoaderSettings::convert_coordinates == None`; must
-    /// mirror [`GltfPlugin::convert_coordinates`](bevy::gltf::GltfPlugin).
-    pub default_rotate_scene_entity: bool,
-    /// See [`Self::default_rotate_scene_entity`].
-    pub default_rotate_meshes: bool,
     pub(crate) state: VrmLoadState,
 }
 
@@ -79,17 +73,8 @@ pub(crate) struct VrmLoadState {
     pub vrm: Option<Arc<vrmc_vrm::VrmcVrm>>,
     /// Parsed `VRMC_springBone`. See [`Self::vrm`] for the `Arc`.
     pub spring_bone: Option<Arc<vrmc_spring_bone::VRMCSpringBone>>,
-    /// How the loaded scene ends up oriented, decided in `on_root`.
-    ///
-    /// Recorded, never acted upon: `bevy_gltf` has already rotated the scene
-    /// root before `on_scene_completed` runs, so applying the rotation again
-    /// would double it. See [`crate::vrm::coords`].
-    #[allow(
-        dead_code,
-        reason = "classified in on_root, but nothing at load time may act on it; see the field docs"
-    )]
-    pub forward_policy: VrmForwardPolicy,
-    /// glTF node index -> entity in the scene world (filled in `on_gltf_node`).
+    /// glTF node index -> entity in the world of the scene being built (filled
+    /// in `on_gltf_node`, cleared by [`Self::end_scene`]).
     pub node_entities: HashMap<usize, Entity>,
     /// VRM humanoid bone name (`hips`, `head`, …) -> glTF node index.
     pub bone_nodes: HashMap<String, usize>,
@@ -116,11 +101,14 @@ pub(crate) struct VrmLoadState {
     pub root_scale: f32,
     /// glTF material label -> the `MToonMaterial` built for it.
     pub mtoon: HashMap<String, Handle<MToonMaterial>>,
+    /// The number of glTF textures, which bounds the `MToon` texture indices.
+    pub texture_count: usize,
     /// firstPerson classification/split per (mesh index, primitive index).
     pub first_person: first_person::FirstPersonPlan,
-    /// (mesh index, primitive index) -> the entity carrying the `Mesh3d`, so
-    /// the per-primitive decisions can be applied to exactly that entity.
-    pub primitive_entities: HashMap<(usize, usize), Entity>,
+    /// (mesh index, primitive index) -> the entities carrying its `Mesh3d`, one
+    /// per node that instances the mesh, so the per-primitive decisions can be
+    /// applied to exactly those entities. Cleared by [`Self::end_scene`].
+    pub primitive_entities: HashMap<(usize, usize), Vec<Entity>>,
 }
 
 impl VrmLoadState {
@@ -129,6 +117,13 @@ impl VrmLoadState {
     #[must_use]
     pub fn is_vrm(&self) -> bool {
         self.vrm.is_some() || self.spring_bone.is_some()
+    }
+
+    /// Forgets the entities of the scene that just completed: `bevy_gltf`
+    /// builds every scene of a file in a fresh `World`, where they mean nothing.
+    pub(crate) fn end_scene(&mut self) {
+        self.node_entities.clear();
+        self.primitive_entities.clear();
     }
 
     /// `(humanoid bone name, AnimationTargetId)` pairs for graph mask groups.
@@ -177,17 +172,9 @@ impl GltfExtensionHandler for VrmExtensionHandler {
         &mut self,
         _load_context: &mut LoadContext<'_>,
         gltf: &gltf::Gltf,
-        settings: &GltfLoaderSettings,
+        _settings: &GltfLoaderSettings,
     ) {
         root::parse_root_extensions(&mut self.state, gltf);
-        if !self.state.is_vrm() {
-            return;
-        }
-        let (rotate_scene_entity, rotate_meshes) = settings
-            .convert_coordinates
-            .map(|convert| (convert.rotate_scene_entity, convert.rotate_meshes))
-            .unwrap_or((self.default_rotate_scene_entity, self.default_rotate_meshes));
-        self.state.forward_policy = resolve_forward_policy(rotate_scene_entity, rotate_meshes);
     }
 
     fn on_material(
@@ -251,11 +238,13 @@ impl GltfExtensionHandler for VrmExtensionHandler {
             return;
         }
         // `on_spawn_mesh_and_material` runs once per node that instances this
-        // (mesh, primitive), which is the entity the per-primitive
-        // classification and the head split must be applied to.
+        // (mesh, primitive), and each of those entities gets the per-primitive
+        // classification and the head split.
         self.state
             .primitive_entities
-            .insert((mesh.index(), primitive.index()), entity.id());
+            .entry((mesh.index(), primitive.index()))
+            .or_default()
+            .push(entity.id());
         materials::swap_material(&self.state, entity, material_label);
     }
 
@@ -288,5 +277,6 @@ impl GltfExtensionHandler for VrmExtensionHandler {
             world_root_id,
             scene_world,
         );
+        self.state.end_scene();
     }
 }

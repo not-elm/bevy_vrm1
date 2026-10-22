@@ -2,8 +2,7 @@ use crate::prelude::ChildSearcher;
 use crate::vrm::Vrm;
 use crate::vrm::spring_bone::{SpringJointState, SpringRoot};
 use crate::vrma::animation::animation_graph::{NeedsBake, VrmaBake};
-use crate::vrma::animation::expressions::{VrmaExpressionRegistry, reset_expression_weights};
-use crate::vrma::animation::properties::VrmExpressionWeights;
+use crate::vrma::animation::expressions::reset_animated_expression_weights;
 use crate::vrma::{
     VrmAnimationGraphState, VrmAnimationNodeIndex, VrmaNeedsRestore, VrmaPlaybackState,
     VrmaRetargetPending,
@@ -72,8 +71,10 @@ impl Plugin for VrmaAnimationPlayPlugin {
             )
             .add_systems(
                 PostUpdate,
-                restore_vrma_playback
-                    .after(VrmaBake)
+                (
+                    restore_vrma_playback.after(VrmaBake),
+                    reset_animated_expression_weights,
+                )
                     .before(AnimationSystems),
             );
     }
@@ -95,8 +96,7 @@ fn apply_play_vrma(
         Has<VrmaRetargetPending>,
         Has<NeedsBake>,
     )>,
-    expression_registries: Query<&VrmaExpressionRegistry>,
-    mut roots: Query<&mut VrmExpressionWeights>,
+    graphs: Query<&VrmAnimationGraphState>,
     spring_roots: Query<&SpringRoot>,
     mut joint_states: Query<&mut SpringJointState>,
     mut playback: Query<&mut VrmaPlaybackState>,
@@ -108,8 +108,13 @@ fn apply_play_vrma(
     let Ok((node_index, retarget_pending, needs_bake)) = vrmas.get(vrma_entity) else {
         return;
     };
-    // An unbaked clip is started by the restore once it is ready.
-    let ready = !retarget_pending && !needs_bake;
+    // An unbaked clip, or one this avatar's graph has not bound yet, is
+    // started by the restore once it is ready.
+    let ready = !retarget_pending
+        && !needs_bake
+        && graphs
+            .get(*vrm_entity)
+            .is_ok_and(|graph| graph.owns(vrma_entity, node_index.0));
     let live = if ready {
         play_humanoid_bone_animation(
             *vrm_entity,
@@ -122,13 +127,22 @@ fn apply_play_vrma(
     } else {
         None
     };
-    reset_expression_weights(vrma_entity, &expression_registries, &mut roots, &parents);
     if trigger.reset_spring_bones {
         reset_spring_bone_velocities(*vrm_entity, &spring_roots, &mut joint_states, &childrens);
+    }
+    // The latest play wins over one still waiting for its clip.
+    for sibling in childrens.get(*vrm_entity).into_iter().flatten() {
+        if let Ok(mut state) = playback.get_mut(*sibling)
+            && *sibling != vrma_entity
+            && state.transition.is_some()
+        {
+            *state = VrmaPlaybackState::default();
+        }
     }
     let played = live.is_some();
     if let Ok(mut state) = playback.get_mut(vrma_entity) {
         state.active = true;
+        state.transition = (!played).then_some(trigger.transition_duration);
         state.animation = Some(live.unwrap_or_else(|| {
             let mut animation = ActiveAnimation::default();
             animation.set_repeat(trigger.repeat);
@@ -192,8 +206,7 @@ fn apply_stop_vrma(
     mut rig_entities: Query<&mut AnimationPlayer>,
     vrmas: Query<&VrmAnimationNodeIndex>,
     parents: Query<&ChildOf>,
-    expression_registries: Query<&VrmaExpressionRegistry>,
-    mut roots: Query<&mut VrmExpressionWeights>,
+    graphs: Query<&VrmAnimationGraphState>,
     searcher: ChildSearcher,
     mut playback: Query<&mut VrmaPlaybackState>,
 ) {
@@ -202,18 +215,19 @@ fn apply_stop_vrma(
         return;
     };
     if let Ok(mut state) = playback.get_mut(vrma_entity) {
-        state.active = false;
-        state.animation = None;
+        *state = VrmaPlaybackState::default();
     }
     let Ok(node_index) = vrmas.get(vrma_entity) else {
         return;
     };
-    if let Some(root_bone) = searcher.find_root_bone(*vrm)
+    if graphs
+        .get(*vrm)
+        .is_ok_and(|graph| graph.owns(vrma_entity, node_index.0))
+        && let Some(root_bone) = searcher.find_root_bone(*vrm)
         && let Ok(mut player) = rig_entities.get_mut(root_bone)
     {
         player.stop(node_index.0);
     }
-    reset_expression_weights(vrma_entity, &expression_registries, &mut roots, &parents);
 }
 
 /// Records each VRMA's live playback and the root bone's transitions, so a
@@ -228,7 +242,7 @@ fn snapshot_vrma_playback(
     )>,
     players: Query<&AnimationPlayer>,
     transitions: Query<&AnimationTransitions>,
-    mut states: Query<&mut VrmAnimationGraphState>,
+    mut graphs: Query<&mut VrmAnimationGraphState>,
 ) {
     for (vrm, children) in avatars.iter() {
         let Some(root_bone) = searcher.find_root_bone(vrm) else {
@@ -237,16 +251,17 @@ fn snapshot_vrma_playback(
         let Ok(player) = players.get(root_bone) else {
             continue;
         };
-        if let Ok(live) = transitions.get(root_bone)
-            && let Ok(mut state) = states.get_mut(vrm)
-        {
-            state.transitions = live.clone();
+        let Ok(mut graph) = graphs.get_mut(vrm) else {
+            continue;
+        };
+        if let Ok(live) = transitions.get(root_bone) {
+            graph.transitions = live.clone();
         }
         for child in children.iter() {
             let Ok((Some(index), Some(mut state), pending_restore)) = vrmas.get_mut(child) else {
                 continue;
             };
-            if pending_restore {
+            if pending_restore || !graph.owns(child, index.0) {
                 continue;
             }
             match player.animation(index.0) {
@@ -268,32 +283,54 @@ fn restore_vrma_playback(
     mut commands: Commands,
     searcher: ChildSearcher,
     parents: Query<&ChildOf>,
-    vrmas: Query<
-        (Entity, &VrmaPlaybackState, &VrmAnimationNodeIndex),
+    graphs: Query<&VrmAnimationGraphState>,
+    mut vrmas: Query<
+        (Entity, &mut VrmaPlaybackState, &VrmAnimationNodeIndex),
         (
             With<VrmaNeedsRestore>,
             Without<NeedsBake>,
             Without<VrmaRetargetPending>,
         ),
     >,
-    mut players: Query<&mut AnimationPlayer>,
+    mut players: Query<(&mut AnimationPlayer, Option<&mut AnimationTransitions>)>,
 ) {
-    for (vrma, state, index) in vrmas.iter() {
+    let mut deferred_plays = Vec::new();
+    for (vrma, mut state, index) in vrmas.iter_mut() {
         let Ok(parent) = parents.get(vrma) else {
             commands.entity(vrma).remove::<VrmaNeedsRestore>();
             continue;
         };
+        if !graphs
+            .get(parent.parent())
+            .is_ok_and(|graph| graph.owns(vrma, index.0))
+        {
+            continue;
+        }
         let Some(root_bone) = searcher.find_root_bone(parent.parent()) else {
             continue;
         };
-        let Ok(mut player) = players.get_mut(root_bone) else {
+        let Ok((mut player, _)) = players.get_mut(root_bone) else {
             continue;
         };
         if state.active {
-            let live = player.play(index.0);
-            *live = state.animation.unwrap_or_default();
+            let animation = state.animation.unwrap_or_default();
+            match state.transition.take() {
+                Some(fade) => deferred_plays.push((root_bone, index.0, fade, animation)),
+                None => *player.play(index.0) = animation,
+            }
         }
         commands.entity(vrma).remove::<VrmaNeedsRestore>();
+    }
+    // Last, so a deferred `PlayVrma` fades out the clips restored above.
+    for (root_bone, node, fade, animation) in deferred_plays {
+        let Ok((mut player, transitions)) = players.get_mut(root_bone) else {
+            continue;
+        };
+        let live = match transitions {
+            Some(mut transitions) => transitions.play(&mut player, node, fade),
+            None => player.play(node),
+        };
+        *live = animation;
     }
 }
 
@@ -305,7 +342,8 @@ mod tests {
     use crate::vrma::animation::animation_graph::NeedsBake;
     use crate::vrma::animation::play::VrmaAnimationPlayPlugin;
     use crate::vrma::{
-        VrmAnimationNodeIndex, VrmaNeedsRestore, VrmaPlaybackState, VrmaRetargetPending,
+        VrmAnimationGraphState, VrmAnimationNodeIndex, VrmaNeedsRestore, VrmaPlaybackState,
+        VrmaRetargetPending,
     };
     use bevy::animation::graph::AnimationGraph;
     use bevy::animation::{
@@ -325,6 +363,9 @@ mod tests {
         let vrm = app.world_mut().spawn_empty().id();
         let vrma = app.world_mut().spawn(VrmAnimationNodeIndex::default()).id();
         app.world_mut().commands().entity(vrm).add_child(vrma);
+        app.world_mut()
+            .entity_mut(vrm)
+            .insert(graph_binding(vrma, AnimationNodeIndex::default()));
 
         app.world_mut().commands().entity(vrm).with_child((
             Name::new(Vrm::ROOT_BONE),
@@ -355,6 +396,9 @@ mod tests {
         let vrm = app.world_mut().spawn_empty().id();
         let vrma = app.world_mut().spawn(VrmAnimationNodeIndex::default()).id();
         app.world_mut().commands().entity(vrm).add_child(vrma);
+        app.world_mut()
+            .entity_mut(vrm)
+            .insert(graph_binding(vrma, AnimationNodeIndex::default()));
 
         app.world_mut().commands().entity(vrm).with_child((
             Name::new(Vrm::ROOT_BONE),
@@ -405,7 +449,21 @@ mod tests {
                 VrmaPlaybackState::default(),
             ))
             .id();
+        app.world_mut()
+            .entity_mut(vrm)
+            .insert(graph_binding(vrma, node));
         (app, root_bone, vrma, node)
+    }
+
+    /// The graph state of an avatar whose graph binds `vrma` at `node`.
+    fn graph_binding(
+        vrma: Entity,
+        node: AnimationNodeIndex,
+    ) -> VrmAnimationGraphState {
+        VrmAnimationGraphState {
+            nodes: [(vrma, node)].into_iter().collect(),
+            ..default()
+        }
     }
 
     /// `Debug` is the only observable covering the private fields of `ActiveAnimation`.
@@ -455,6 +513,9 @@ mod tests {
                 VrmaPlaybackState::default(),
             ))
             .id();
+        app.world_mut()
+            .entity_mut(vrm)
+            .insert(graph_binding(vrma, node));
 
         {
             let mut root = app.world_mut().entity_mut(root_bone);
@@ -536,6 +597,7 @@ mod tests {
         app.world_mut().entity_mut(vrma).insert(VrmaPlaybackState {
             active: true,
             animation: Some(ActiveAnimation::default()),
+            ..default()
         });
 
         app.world_mut()
@@ -563,6 +625,7 @@ mod tests {
             VrmaPlaybackState {
                 active: true,
                 animation: Some(animation),
+                ..default()
             },
             VrmaNeedsRestore,
         ));
@@ -584,6 +647,7 @@ mod tests {
             VrmaPlaybackState {
                 active: true,
                 animation: Some(ActiveAnimation::default()),
+                ..default()
             },
             VrmaNeedsRestore,
             NeedsBake,
@@ -615,6 +679,7 @@ mod tests {
             VrmaPlaybackState {
                 active: true,
                 animation: Some(ActiveAnimation::default()),
+                ..default()
             },
             VrmaNeedsRestore,
             VrmaRetargetPending,
@@ -647,6 +712,7 @@ mod tests {
             VrmaPlaybackState {
                 active: true,
                 animation: Some(ActiveAnimation::default()),
+                ..default()
             },
             VrmaNeedsRestore,
         ));
@@ -671,6 +737,198 @@ mod tests {
             app.world().get::<VrmaNeedsRestore>(vrma).is_none(),
             "the marker is cleared once the rig is reachable"
         );
+        success!()
+    }
+
+    /// An avatar with a player on its root bone and an empty graph.
+    /// Returns `(vrm, root_bone)`.
+    fn spawn_owner(world: &mut World) -> (Entity, Entity) {
+        let vrm = world.spawn((Vrm, VrmAnimationGraphState::default())).id();
+        let root_bone = world
+            .spawn((
+                Name::new(Vrm::ROOT_BONE),
+                Transform::default(),
+                AnimationPlayer::default(),
+                AnimationTransitions::default(),
+                ChildOf(vrm),
+            ))
+            .id();
+        (vrm, root_bone)
+    }
+
+    /// A `.vrma` under `vrm`, bound at `node` in `vrm`'s graph.
+    fn spawn_bound_vrma(
+        world: &mut World,
+        vrm: Entity,
+        node: AnimationNodeIndex,
+    ) -> Entity {
+        let vrma = world
+            .spawn((
+                Vrma,
+                ChildOf(vrm),
+                VrmAnimationNodeIndex(node),
+                VrmaPlaybackState::default(),
+            ))
+            .id();
+        world
+            .get_mut::<VrmAnimationGraphState>(vrm)
+            .expect("the avatar has a graph")
+            .nodes
+            .insert(vrma, node);
+        vrma
+    }
+
+    #[test]
+    fn a_reparented_vrma_does_not_drive_the_clip_at_its_stale_index() -> TestResult {
+        let mut app = test_app();
+        app.add_plugins(VrmaAnimationPlayPlugin);
+        let node = AnimationNodeIndex::new(1);
+        let (x, _) = spawn_owner(app.world_mut());
+        let (y, root_y) = spawn_owner(app.world_mut());
+        let moved = spawn_bound_vrma(app.world_mut(), x, node);
+        let resident = spawn_bound_vrma(app.world_mut(), y, node);
+        app.world_mut()
+            .commands()
+            .entity(resident)
+            .trigger(PlayVrma::new);
+        app.update();
+        app.world_mut()
+            .get_mut::<AnimationPlayer>(root_y)
+            .unwrap()
+            .animation_mut(node)
+            .expect("the resident clip plays")
+            .seek_to(0.5);
+
+        // Until `y`'s graph is rebuilt, `node` on `y` is the resident's clip.
+        app.world_mut().entity_mut(moved).insert(ChildOf(y));
+        app.world_mut()
+            .run_system_once(super::snapshot_vrma_playback)
+            .unwrap();
+        assert!(
+            !app.world().get::<VrmaPlaybackState>(moved).unwrap().active,
+            "the snapshot must not record the resident's clip as the moved one's"
+        );
+
+        app.world_mut()
+            .commands()
+            .entity(moved)
+            .trigger(|entity| StopVrma { entity });
+        app.update();
+        app.world_mut()
+            .commands()
+            .entity(moved)
+            .trigger(PlayVrma::new);
+        app.update();
+
+        let resident_clip = *app
+            .world()
+            .get::<AnimationPlayer>(root_y)
+            .unwrap()
+            .animation(node)
+            .expect("stopping the moved clip must not stop the resident's");
+        assert!(
+            (resident_clip.seek_time() - 0.5).abs() < 1e-4,
+            "playing the moved clip must not restart the resident's"
+        );
+        assert!(
+            app.world().get::<VrmaNeedsRestore>(moved).is_some(),
+            "the moved clip starts once `y`'s graph binds it"
+        );
+        success!()
+    }
+
+    #[test]
+    fn a_deferred_play_fades_out_the_playing_clip() -> TestResult {
+        let mut app = test_app();
+        app.add_plugins(VrmaAnimationPlayPlugin);
+        let playing_node = AnimationNodeIndex::new(1);
+        let deferred_node = AnimationNodeIndex::new(2);
+        let (vrm, root_bone) = spawn_owner(app.world_mut());
+        let playing = spawn_bound_vrma(app.world_mut(), vrm, playing_node);
+        let deferred = spawn_bound_vrma(app.world_mut(), vrm, deferred_node);
+        app.world_mut()
+            .commands()
+            .entity(playing)
+            .trigger(PlayVrma::new);
+        app.update();
+
+        app.world_mut().entity_mut(deferred).insert(NeedsBake);
+        app.world_mut()
+            .commands()
+            .entity(deferred)
+            .trigger(|vrma| PlayVrma {
+                transition_duration: Duration::from_secs(1),
+                ..PlayVrma::new(vrma)
+            });
+        app.update();
+        assert!(
+            app.world()
+                .get::<AnimationPlayer>(root_bone)
+                .unwrap()
+                .animation(deferred_node)
+                .is_none(),
+            "an unbaked clip waits"
+        );
+
+        app.world_mut().entity_mut(deferred).remove::<NeedsBake>();
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<AnimationTransitions>(root_bone)
+                .unwrap()
+                .get_main_animation(),
+            Some(deferred_node),
+            "the deferred clip becomes the main animation"
+        );
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(500));
+        app.world_mut()
+            .run_system_once(advance_transitions)
+            .unwrap();
+        let player = app.world().get::<AnimationPlayer>(root_bone).unwrap();
+        let fading = player
+            .animation(playing_node)
+            .expect("the previous clip is fading out")
+            .weight();
+        assert!(
+            0.0 < fading && fading < 1.0,
+            "the previous clip fades over the requested duration, weight {fading}"
+        );
+        success!()
+    }
+
+    #[test]
+    fn a_later_play_supersedes_a_deferred_one() -> TestResult {
+        let mut app = test_app();
+        app.add_plugins(VrmaAnimationPlayPlugin);
+        let latest_node = AnimationNodeIndex::new(1);
+        let deferred_node = AnimationNodeIndex::new(2);
+        let (vrm, root_bone) = spawn_owner(app.world_mut());
+        let latest = spawn_bound_vrma(app.world_mut(), vrm, latest_node);
+        let deferred = spawn_bound_vrma(app.world_mut(), vrm, deferred_node);
+
+        app.world_mut().entity_mut(deferred).insert(NeedsBake);
+        app.world_mut()
+            .commands()
+            .entity(deferred)
+            .trigger(PlayVrma::new);
+        app.update();
+        app.world_mut()
+            .commands()
+            .entity(latest)
+            .trigger(PlayVrma::new);
+        app.update();
+        app.world_mut().entity_mut(deferred).remove::<NeedsBake>();
+        app.update();
+
+        let player = app.world().get::<AnimationPlayer>(root_bone).unwrap();
+        assert!(
+            player.animation(deferred_node).is_none(),
+            "a deferred play superseded by a later one never starts"
+        );
+        assert!(player.animation(latest_node).is_some());
         success!()
     }
 }

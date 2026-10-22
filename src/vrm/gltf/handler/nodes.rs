@@ -2,8 +2,8 @@
 //! spawned.
 //!
 //! At this point the node's mesh entities already exist as its children (they are
-//! spawned at `crates/bevy_gltf/src/loader/mod.rs:1620-1752`, before the hook
-//! runs at `:1894-1896`), but the scene is not finished, so nothing here may
+//! spawned in `crates/bevy_gltf/src/loader/mod.rs` before the hook
+//! runs), but the scene is not finished, so nothing here may
 //! depend on a node that has not been visited yet. Node constraints are
 //! therefore only *parsed* here and resolved in
 //! [`scene::resolve_constraints`](super::scene).
@@ -186,7 +186,6 @@ mod tests {
     use super::*;
     use crate::success;
     use crate::tests::TestResult;
-    use crate::vrm::coords::VrmForwardPolicy;
     use bevy::prelude::*;
 
     fn app() -> App {
@@ -230,8 +229,6 @@ mod tests {
         );
         assert_eq!(state.node_entities.get(&0), Some(&id));
         assert!(app.world().get::<PendingNodeConstraint>(id).is_none());
-        // The forward policy is classified, never applied.
-        assert_eq!(state.forward_policy, VrmForwardPolicy::default());
         success!()
     }
 

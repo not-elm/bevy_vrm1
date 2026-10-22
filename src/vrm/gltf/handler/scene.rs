@@ -2,38 +2,36 @@
 //! before the scratch world is frozen into a
 //! [`WorldAsset`](bevy::world_serialization::WorldAsset).
 //!
-//! `bevy_gltf` calls this hook at `crates/bevy_gltf/src/loader/mod.rs:1112-1120`
-//! and only then runs `WorldAsset::new(world)` at `:1122`, so everything written
+//! `bevy_gltf` calls this hook in `crates/bevy_gltf/src/loader/mod.rs`
+//! and only then runs `WorldAsset::new(world)`, so everything written
 //! here lands in the asset and is copied — through reflection, entity fields
 //! remapped — into every `SceneRoot` instance of it.
 //!
 //! # Order
 //!
-//! 1. the forward-orientation policy, which is *classified* here and never
-//!    applied (see [`crate::vrm::coords`]);
-//! 2. rest poses, because the spring-bone joint state is derived from them;
-//! 3. spring-bone chains and colliders;
-//! 4. node constraints: node indices resolved to entities and sorted;
-//! 5. expressions and look-at on the scene root;
-//! 6. animation targets and the player;
-//! 7. the bone markers and the `<Bone>BoneEntity` holders on the scene root,
+//! 1. rest poses, because the spring-bone joint state is derived from them;
+//! 2. spring-bone chains and colliders;
+//! 3. node constraints: node indices resolved to entities and sorted;
+//! 4. expressions and look-at on the scene root;
+//! 5. animation targets and the player;
+//! 6. the bone markers and the `<Bone>BoneEntity` holders on the scene root,
 //!    without which gaze control and body tracking match nothing;
-//! 8. the source asset path, then firstPerson render layers and the head copies;
-//! 9. the private `VrmSceneRoot` marker; `Vrm` + `Initialized` are inserted by
+//! 7. the source asset path, then the firstPerson views and the head copies;
+//! 8. the private `VrmSceneRoot` marker; `Vrm` + `Initialized` are inserted by
 //!    the attach observer once the root data has been moved onto the
 //!    application's entity (see [`crate::vrm::instance`]).
 
 use bevy::animation::{AnimatedBy, AnimationPlayer};
 use bevy::asset::{Handle, LoadContext};
 use bevy::camera::primitives::Aabb;
-use bevy::camera::visibility::{DynamicSkinnedMeshBounds, NoFrustumCulling, RenderLayers};
+use bevy::camera::visibility::{DynamicSkinnedMeshBounds, NoFrustumCulling};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::world::World;
 use bevy::mesh::morph::{MeshMorphWeights, MorphWeights};
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
-use bevy::platform::collections::HashMap;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 use super::first_person::AutoClass;
@@ -43,9 +41,9 @@ use crate::prelude::{
     ConstraintExecutionOrder, EffectiveExpressionWeights, ExpressionMorphBinds, ExpressionSetting,
     ExpressionSettings, MToonMaterial, MorphBind, PendingNodeConstraint, RestGlobalTransform,
     RestTransform, RestWorldTransform, Vrm, VrmBone, VrmExpressionWeights, VrmHeadOnly,
-    VrmNodeConstraint, VrmPath, both_view_mesh_layers, first_person_only_mesh_layers,
-    third_person_only_mesh_layers, vrm_root_animation_target,
+    VrmNodeConstraint, VrmPath, vrm_root_animation_target,
 };
+use crate::vrm::components::FirstPersonView;
 use crate::vrm::expressions::{ExpressionCategory, ExpressionOverrideType};
 use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
 use crate::vrm::gltf::extensions::vrmc_vrm::FirstPersonFlag;
@@ -63,10 +61,6 @@ pub(crate) fn finalize(
     world_root_id: Entity,
     scene_world: &mut World,
 ) {
-    // The forward policy is decided in `on_root` and deliberately not acted on:
-    // `bevy_gltf` already rotated the scene root entity before this hook runs
-    // (`loader/mod.rs:1027-1040`), so rest poses captured now include that
-    // rotation and a second one would double it.
     insert_rest_transforms(scene_world, world_root_id);
     build_spring_chains(state, scene_world);
     resolve_constraints(state, scene_world, world_root_id);
@@ -75,6 +69,7 @@ pub(crate) fn finalize(
     setup_animation(state, scene_world, world_root_id);
     insert_humanoid_bone_holders(scene_world, world_root_id);
     insert_source_path(load_context, scene_world, world_root_id);
+    insert_name(state, scene_world, world_root_id);
     apply_first_person(state, load_context, scene_world);
 
     mark_initialized(scene_world, world_root_id);
@@ -231,8 +226,6 @@ fn build_spring_chains(
         let center = spring
             .center
             .and_then(|node| state.node_entities.get(&node).copied());
-        let center_rest =
-            center.and_then(|entity| world.get::<RestGlobalTransform>(entity).copied());
 
         for pair in 0..joints.len() - 1 {
             let head = joints[pair];
@@ -251,18 +244,11 @@ fn build_spring_chains(
             // a spring chain is allowed to skip nodes, so the next joint is not
             // necessarily a direct child of this one.
             let tail_in_head = tail_rest_global.0.reparented_to(&head_rest_global.0);
-            // The tail is simulated in *center space* when the spring declares
-            // one, and in world space otherwise.
-            let tail_position = match center_rest {
-                Some(center_rest) => tail_rest_global.0.reparented_to(&center_rest.0).translation,
-                None => tail_rest_global.0.translation(),
-            };
             world.entity_mut(head).insert((
                 props[pair],
                 SpringJointState::from_rest(
                     tail_in_head.translation.normalize_or_zero(),
                     tail_in_head.translation.length(),
-                    tail_position,
                     head_rest_local.0,
                 ),
             ));
@@ -447,7 +433,7 @@ fn build_expressions(
             // The bind drives a morph index of a mesh, and only a node that
             // carries `MorphWeights` has any. `bevy_gltf` puts
             // `MorphWeights` on the node and `MeshMorphWeights` on each of its
-            // primitives (`loader/mod.rs:1688-1692`, `:1872-1886`), so this is
+            // primitives (`loader/mod.rs`), so this is
             // also the check that the node has a mesh at all.
             if !world.get::<MorphWeights>(target).is_some() {
                 vrm_warn!(format!(
@@ -528,7 +514,7 @@ fn build_look_at(
 /// [`AnimationTargetId::from_name`] of its **VRM bone name**, which is the id a
 /// baked `.vrma` clip addresses, so one clip plays on any avatar. That is a
 /// different id from the path-based one `bevy_gltf` computes for a file's own
-/// animations (`loader/mod.rs:1557-1560`); a `.vrm` declares no glTF animation in
+/// animations (`loader/mod.rs`); a `.vrm` declares no glTF animation in
 /// practice, so no path id exists to clobber, and the two systems are separated
 /// by `AnimatedBy` anyway — `bevy_gltf`'s targets point at the animation root it
 /// picked, ours point at [`Vrm::ROOT_BONE`].
@@ -538,11 +524,11 @@ fn build_look_at(
 /// bevy resolves a target's player through the entity named by its
 /// [`AnimatedBy`] component, and that entity must carry both an
 /// `AnimationPlayer` and an `AnimationGraphHandle`
-/// (`bevy_animation/src/lib.rs:1097-1115`). The VRMA side writes the graph
+/// (`bevy_animation/src/lib.rs`). The VRMA side writes the graph
 /// handle onto the **root bone** (`insert_animation_graph_into_root_bone` in
-/// `src/vrma/animation/animation_graph.rs:151`),
+/// `src/vrma/animation/animation_graph.rs`),
 /// [`PlayVrma`](crate::prelude::PlayVrma) plays on the **root bone**
-/// (`src/vrma/animation/play.rs:141-149`), and
+/// (`src/vrma/animation/play.rs`), and
 /// [`VrmAnimation::all_finished`](crate::prelude::VrmAnimation::all_finished)
 /// reads the **root bone**'s player. So the root bone is the animation root and
 /// every target has to name it. A player left on the scene root would never be
@@ -607,10 +593,10 @@ fn setup_animation(
 /// * [`track_looking_target`](crate::vrm::look_at::track_looking_target) needs
 ///   [`HeadBoneEntity`](crate::prelude::HeadBoneEntity) plus both eye holders,
 ///   so `LookAt` does nothing without them
-///   (`src/vrm/look_at.rs:66-72`);
+///   (`src/vrm/look_at.rs`);
 /// * [`track_body_tracking`](crate::vrm::body_tracking) needs
 ///   [`HeadBoneEntity`](crate::prelude::HeadBoneEntity) and optionally the
-///   neck / chest / spine holders (`src/vrm/body_tracking.rs:258-261`);
+///   neck / chest / spine holders (`src/vrm/body_tracking.rs`);
 ///
 /// The first-person auto split is a separate load-time step: it resolves the
 /// head subtree from the document's node indices rather than these holders.
@@ -633,10 +619,10 @@ fn setup_animation(
 /// The entity ids minted here belong to the loader's scratch world. The scene
 /// spawn pipeline remaps them through `Component::map_entities`, which
 /// `#[derive(Component)]` generates from `#[entities]` — and
-/// `entity_component!` (`src/macros.rs:109-127`) does write that attribute on the
+/// `entity_component!` (`src/macros.rs`) does write that attribute on the
 /// holder's field, as it does on
 /// [`VrmNodeConstraint::source`](crate::prelude::VrmNodeConstraint::source)
-/// (`src/vrm/components.rs:168-170`). An instantiated avatar therefore holds its
+/// (`src/vrm/components.rs`). An instantiated avatar therefore holds its
 /// own bones, and gaze control sees a live entity rather than a stale id. See
 /// [`crate::vrm::humanoid_bone::insert_bone_holders`].
 fn insert_humanoid_bone_holders(
@@ -673,9 +659,8 @@ fn insert_humanoid_bone_holders(
 ///
 /// [`LoadContext::path`] is observable here, and it is the *file*: `bevy_gltf`
 /// derives the scene's context from the file's with
-/// `begin_labeled_asset` (`loader/mod.rs:1025`), which clones the path as it is
-/// and adds the `Scene0` label only when the asset is registered
-/// (`:1123-1126`). So this is the path the user passed to
+/// `begin_labeled_asset` (`loader/mod.rs`), which clones the path as it is
+/// and adds the `Scene0` label only when the asset is registered. So this is the path the user passed to
 /// `AssetServer::load`, and
 /// [`RequestDetachVrm`](crate::vrm::detach::RequestDetachVrm) — which removes
 /// `VrmPath` again — has it to remove.
@@ -689,7 +674,22 @@ fn insert_source_path(
         .insert(VrmPath::new(load_context.path().path()));
 }
 
-/// Applies the `VRMC_vrm.firstPerson` decisions to the scene.
+/// Names the scene root after `VRMC_vrm.meta.name`, falling back to `VRM`, in
+/// place of the `Scene0` that `bevy_gltf` gave it.
+fn insert_name(
+    state: &VrmLoadState,
+    world: &mut World,
+    root: Entity,
+) {
+    let name = state
+        .vrm
+        .as_ref()
+        .and_then(|vrm| vrm.meta.as_ref()?.name.clone())
+        .unwrap_or_else(|| "VRM".to_owned());
+    world.entity_mut(root).insert(Name::new(name));
+}
+
+/// Records the `VRMC_vrm.firstPerson` decisions on the scene.
 ///
 /// Three passes, in this order:
 ///
@@ -697,49 +697,56 @@ fn insert_source_path(
 ///    built;
 /// 2. the explicit node annotations, which *override* the `auto` result — an
 ///    `auto` annotation is skipped here, because it has already been honoured per
-///    primitive and forcing "both" on the whole subtree would cancel it;
+///    primitive;
 /// 3. the head copies, spawned as siblings of the body half.
 ///
-/// Render layers come from [`crate::vrm::components`]; no layer number is
-/// hardcoded here.
+/// Every mesh stays on the default render layer: first person is opt-in, and
+/// [`RequestEnableFirstPerson`](crate::prelude::RequestEnableFirstPerson) turns
+/// the recorded [`FirstPersonView`]s into layers.
 fn apply_first_person(
     state: &VrmLoadState,
     load_context: &mut LoadContext<'_>,
     world: &mut World,
 ) {
-    apply_first_person_layers(state, world);
-    spawn_head_copies(state, load_context, world);
+    record_first_person_views(state, world);
+    let head_meshes: HashMap<(usize, usize), Handle<Mesh>> = state
+        .first_person
+        .head_mesh_labels
+        .iter()
+        .map(|(key, label)| (*key, load_context.get_label_handle(label.clone())))
+        .collect();
+    spawn_head_copies(state, &head_meshes, world);
 }
 
 /// Passes 1 and 2 of [`apply_first_person`].
-fn apply_first_person_layers(
+fn record_first_person_views(
     state: &VrmLoadState,
     world: &mut World,
 ) {
     for (key, class) in &state.first_person.classes {
-        let Some(&entity) = state.primitive_entities.get(key) else {
+        if *class != AutoClass::ThirdPersonOnly {
             continue;
-        };
-        let layers = match class {
-            AutoClass::ThirdPersonOnly => third_person_only_mesh_layers(),
-            // A split primitive's body half, and a primitive nothing is weighted
-            // to the head by.
-            AutoClass::Split | AutoClass::Both => both_view_mesh_layers(),
-        };
-        world.entity_mut(entity).insert(layers);
+        }
+        for &entity in state.primitive_entities.get(key).into_iter().flatten() {
+            world
+                .entity_mut(entity)
+                .insert(FirstPersonView::ThirdPersonOnly);
+        }
     }
 
-    let Some(vrm) = &state.vrm else {
+    let Some(first_person) = state.vrm.as_ref().and_then(|vrm| vrm.first_person.as_ref()) else {
         return;
     };
-    let Some(first_person) = &vrm.first_person else {
-        return;
-    };
+    let annotated: HashSet<Entity> = first_person
+        .mesh_annotations
+        .iter()
+        .filter_map(|annotation| state.node_entities.get(&annotation.node).copied())
+        .collect();
     for annotation in &first_person.mesh_annotations {
-        let layers = match annotation.first_person_flag {
-            FirstPersonFlag::FirstPersonOnly => first_person_only_mesh_layers(),
-            FirstPersonFlag::ThirdPersonOnly => third_person_only_mesh_layers(),
-            FirstPersonFlag::Both => both_view_mesh_layers(),
+        let view = match annotation.first_person_flag {
+            FirstPersonFlag::FirstPersonOnly => Some(FirstPersonView::FirstPersonOnly),
+            FirstPersonFlag::ThirdPersonOnly => Some(FirstPersonView::ThirdPersonOnly),
+            FirstPersonFlag::Both => None,
             // Handled per primitive in pass 1 and 3.
             FirstPersonFlag::Auto => continue,
         };
@@ -750,29 +757,36 @@ fn apply_first_person_layers(
             ));
             continue;
         };
-        insert_layers_recursive(world, entity, layers);
+        record_view_recursive(world, entity, view, &annotated);
     }
 }
 
 /// Spawns pass 3 of [`apply_first_person`].
 ///
 /// The copy inherits everything that makes the body half render: the transform,
-/// the skin, the material, the morph-weight reference and the bounds. Only
-/// `RenderLayers` differs.
+/// the skin, the material, the morph-weight reference and the bounds. Only the
+/// recorded view differs.
 fn spawn_head_copies(
     state: &VrmLoadState,
-    load_context: &mut LoadContext<'_>,
+    head_meshes: &HashMap<(usize, usize), Handle<Mesh>>,
     world: &mut World,
 ) {
-    for (key, label) in &state.first_person.head_mesh_labels {
-        let Some(&source) = state.primitive_entities.get(key) else {
+    // One copy per node that instances the split primitive.
+    let copies = head_meshes.iter().flat_map(|(key, head_mesh)| {
+        let sources = state.primitive_entities.get(key);
+        if sources.is_none() {
             vrm_warn!(format!(
                 "VRM firstPerson: no entity was recorded for mesh {} primitive {}, so its head \
                  part is not spawned",
                 key.0, key.1
             ));
-            continue;
-        };
+        }
+        sources
+            .into_iter()
+            .flatten()
+            .map(move |&source| (key, head_mesh, source))
+    });
+    for (key, head_mesh, source) in copies {
         let Some(parent) = world.get::<ChildOf>(source).map(ChildOf::parent) else {
             vrm_warn!(format!(
                 "VRM firstPerson: the body half of mesh {} primitive {} has no parent",
@@ -780,7 +794,6 @@ fn spawn_head_copies(
             ));
             continue;
         };
-        let head_mesh: Handle<Mesh> = load_context.get_label_handle(label.clone());
         let name = world
             .get::<Name>(source)
             .map(|name| format!("{name}/VrmHeadOnly"))
@@ -810,12 +823,12 @@ fn spawn_head_copies(
 
         let mut head = world.spawn((
             Name::new(name),
-            Mesh3d(head_mesh),
+            Mesh3d(head_mesh.clone()),
             transform,
             visibility,
             ChildOf(parent),
             VrmHeadOnly,
-            third_person_only_mesh_layers(),
+            FirstPersonView::ThirdPersonOnly,
         ));
         if let Some(morph_weights) = morph_weights {
             head.insert(morph_weights);
@@ -840,22 +853,34 @@ fn spawn_head_copies(
     }
 }
 
-/// `RenderLayers` is not inherited, so it is inserted on every `Mesh3d` entity of
-/// the annotated subtree.
-fn insert_layers_recursive(
+/// Records `view` on every `Mesh3d` entity of the annotated subtree, down to
+/// the next annotated node: the nearest annotation wins, as in
+/// [`first_person`](super::first_person).
+fn record_view_recursive(
     world: &mut World,
     entity: Entity,
-    layers: RenderLayers,
+    view: Option<FirstPersonView>,
+    annotated: &HashSet<Entity>,
 ) {
+    if world.get::<Mesh3d>(entity).is_some() {
+        let mut mesh = world.entity_mut(entity);
+        match view {
+            Some(view) => {
+                mesh.insert(view);
+            }
+            None => {
+                mesh.remove::<FirstPersonView>();
+            }
+        }
+    }
     let children: Vec<Entity> = world
         .get::<Children>(entity)
         .map(|children| children.iter().collect())
         .unwrap_or_default();
-    if world.get::<Mesh3d>(entity).is_some() {
-        world.entity_mut(entity).insert(layers.clone());
-    }
     for child in children {
-        insert_layers_recursive(world, child, layers.clone());
+        if !annotated.contains(&child) {
+            record_view_recursive(world, child, view, annotated);
+        }
     }
 }
 
@@ -873,6 +898,7 @@ mod tests {
     use crate::vrm::gltf::extensions::vrmc_vrm::VrmcVrm;
     use crate::vrm::look_at::LookAtPlugin;
     use bevy::animation::AnimationTargetId;
+    use bevy::camera::visibility::RenderLayers;
 
     /// `VrmcVrm` parsed from a JSON literal, so the tests below exercise the
     /// same schema the loader reads.
@@ -932,6 +958,38 @@ mod tests {
             world.get::<RestWorldTransform>(root).map(|rest| rest.0),
             world.get::<RestGlobalTransform>(root).map(|rest| rest.0)
         );
+        success!()
+    }
+
+    /// `bevy_gltf` builds every scene of a file in a fresh `World`, so an entity
+    /// a scene resolved a node to means nothing in the next scene.
+    #[test]
+    fn a_scene_does_not_resolve_nodes_through_the_previous_scene() -> TestResult {
+        let mut state = VrmLoadState {
+            spring_bone: Some(std::sync::Arc::new(serde_json::from_str(
+                r#"{"specVersion": "1.0", "springs": [{"joints": [{"node": 0}, {"node": 1}]}]}"#,
+            )?)),
+            ..Default::default()
+        };
+        // Scene 0 instantiates the chain.
+        let mut first = World::new();
+        let head = first.spawn(Transform::default()).id();
+        let tail = first.spawn((Transform::default(), ChildOf(head))).id();
+        state.node_entities = [(0, head), (1, tail)].into_iter().collect();
+        state.primitive_entities.insert((0, 0), vec![tail]);
+        state.end_scene();
+
+        // Scene 1 instantiates neither node, but its own entities get the same
+        // ids.
+        let mut second = World::new();
+        let unrelated = second.spawn(Transform::default()).id();
+        second.spawn((Transform::default(), ChildOf(unrelated)));
+        assert_eq!(unrelated, head);
+        insert_rest_transforms(&mut second, unrelated);
+        build_spring_chains(&state, &mut second);
+
+        assert!(second.get::<SpringRoot>(unrelated).is_none());
+        assert!(state.primitive_entities.is_empty());
         success!()
     }
 
@@ -1186,6 +1244,37 @@ mod tests {
         success!()
     }
 
+    #[test]
+    fn the_scene_root_is_named_after_the_meta_name() -> TestResult {
+        let mut world = World::new();
+        let named = world.spawn(Name::new("Scene0")).id();
+        let unnamed = world.spawn(Name::new("Scene0")).id();
+
+        insert_name(
+            &state_with(vrm(r#"{
+                "specVersion": "1.0",
+                "humanoid": {"humanBones": {}},
+                "meta": {"name": "Alicia Solid"}
+            }"#)),
+            &mut world,
+            named,
+        );
+        insert_name(
+            &state_with(vrm(
+                r#"{"specVersion": "1.0", "humanoid": {"humanBones": {}}}"#,
+            )),
+            &mut world,
+            unnamed,
+        );
+
+        assert_eq!(
+            world.get::<Name>(named).map(Name::as_str),
+            Some("Alicia Solid")
+        );
+        assert_eq!(world.get::<Name>(unnamed).map(Name::as_str), Some("VRM"));
+        success!()
+    }
+
     /// A file that declares no `hips` bone has no root bone. The scene root then
     /// keeps the player, so a user-supplied graph still has somewhere to live.
     #[test]
@@ -1210,35 +1299,169 @@ mod tests {
         success!()
     }
 
-    /// An `auto` annotation must not force "both" on the whole subtree: it has
-    /// already been honoured per primitive.
-    #[test]
-    fn auto_annotations_do_not_override_the_per_primitive_classification() -> TestResult {
+    /// The meshes of a first-person fixture.
+    struct FirstPersonScene {
+        world: World,
+        state: VrmLoadState,
+        body_node: Entity,
+        split_body: Entity,
+        face: Entity,
+        arms: Entity,
+        collar: Entity,
+    }
+
+    /// `root -> {Body (1, auto) -> split_body, Face (2) -> face,
+    /// Arms (3, firstPersonOnly) -> 4 -> arms,
+    /// Coat (5, thirdPersonOnly) -> Collar (6, both) -> collar}`.
+    fn first_person_scene() -> FirstPersonScene {
         let mut world = World::new();
         let root = world.spawn_empty().id();
-        let annotated = world.spawn(ChildOf(root)).id();
-        let head_only = world
-            .spawn((Mesh3d(Handle::default()), ChildOf(annotated)))
-            .id();
-        let mut first_person = state_with(vrm(r#"{
+        let mesh = |world: &mut World, parent: Entity| {
+            world
+                .spawn((Mesh3d(Handle::default()), ChildOf(parent)))
+                .id()
+        };
+        let body_node = world.spawn(ChildOf(root)).id();
+        let split_body = mesh(&mut world, body_node);
+        world
+            .entity_mut(split_body)
+            .insert(DynamicSkinnedMeshBounds);
+        let face_node = world.spawn(ChildOf(root)).id();
+        let face = mesh(&mut world, face_node);
+        let arms_node = world.spawn(ChildOf(root)).id();
+        let arms_child = world.spawn(ChildOf(arms_node)).id();
+        let arms = mesh(&mut world, arms_child);
+        let coat_node = world.spawn(ChildOf(root)).id();
+        let collar_node = world.spawn(ChildOf(coat_node)).id();
+        let collar = mesh(&mut world, collar_node);
+
+        let mut state = state_with(vrm(r#"{
                 "specVersion": "1.0",
                 "humanoid": {"humanBones": {}},
-                "firstPerson": {"meshAnnotations": [{"node": 1, "firstPersonFlag": "auto"}]}
+                "firstPerson": {"meshAnnotations": [
+                    {"node": 1, "firstPersonFlag": "auto"},
+                    {"node": 3, "firstPersonFlag": "firstPersonOnly"},
+                    {"node": 5, "firstPersonFlag": "thirdPersonOnly"},
+                    {"node": 6, "firstPersonFlag": "both"}
+                ]}
             }"#));
-        first_person.node_entities = [(1, annotated)].into_iter().collect();
-        first_person
-            .first_person
-            .classes
-            .insert((0, 0), AutoClass::ThirdPersonOnly);
-        first_person.primitive_entities = [((0, 0), head_only)].into_iter().collect();
+        state.node_entities = [
+            (1, body_node),
+            (2, face_node),
+            (3, arms_node),
+            (4, arms_child),
+            (5, coat_node),
+            (6, collar_node),
+        ]
+        .into_iter()
+        .collect();
+        state.primitive_entities = [((0, 0), vec![split_body]), ((1, 0), vec![face])]
+            .into_iter()
+            .collect();
+        state.first_person.classes = [
+            ((0, 0), AutoClass::Split),
+            ((1, 0), AutoClass::ThirdPersonOnly),
+        ]
+        .into_iter()
+        .collect();
+        FirstPersonScene {
+            world,
+            state,
+            body_node,
+            split_body,
+            face,
+            arms,
+            collar,
+        }
+    }
 
-        apply_first_person_layers(&first_person, &mut world);
+    /// First person is opt-in: the load records each mesh's view but leaves
+    /// every mesh, the head copy included, on the default layer, so a plain
+    /// camera renders the whole avatar.
+    #[test]
+    fn first_person_views_are_recorded_on_the_default_layer() -> TestResult {
+        let FirstPersonScene {
+            mut world,
+            state,
+            body_node,
+            split_body,
+            face,
+            arms,
+            collar,
+        } = first_person_scene();
+        let head_meshes = [((0, 0), Handle::default())].into_iter().collect();
+
+        record_first_person_views(&state, &mut world);
+        spawn_head_copies(&state, &head_meshes, &mut world);
 
         assert_eq!(
-            world.get::<RenderLayers>(head_only),
-            Some(&third_person_only_mesh_layers()),
-            "the primitive classification survives an `auto` annotation"
+            world.query::<&RenderLayers>().iter(&world).count(),
+            0,
+            "no mesh leaves the default layer at load time"
         );
+        let mut copies = world.query_filtered::<(Entity, &ChildOf), With<VrmHeadOnly>>();
+        let copies: Vec<(Entity, Entity)> = copies
+            .iter(&world)
+            .map(|(copy, parent)| (copy, parent.parent()))
+            .collect();
+        let view = |entity: Entity| world.get::<FirstPersonView>(entity).copied();
+        assert_eq!(view(split_body), None);
+        assert_eq!(view(face), Some(FirstPersonView::ThirdPersonOnly));
+        assert_eq!(view(arms), Some(FirstPersonView::FirstPersonOnly));
+        assert_eq!(view(collar), None, "the nearest annotation wins");
+
+        assert_eq!(copies.len(), 1);
+        let (copy, parent) = copies[0];
+        assert_eq!(parent, body_node, "the copy is a sibling of the body half");
+        assert_eq!(view(copy), Some(FirstPersonView::ThirdPersonOnly));
+        assert!(world.get::<DynamicSkinnedMeshBounds>(copy).is_some());
+        success!()
+    }
+
+    /// Every node that instances a primitive gets its view and its head copy,
+    /// not only the last one `bevy_gltf` spawned.
+    #[test]
+    fn every_instance_of_a_primitive_gets_its_first_person_view() -> TestResult {
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut instance = || {
+            let node = world.spawn(ChildOf(root)).id();
+            let mesh = world.spawn((Mesh3d(Handle::default()), ChildOf(node))).id();
+            (node, mesh)
+        };
+        let (left_node, left) = instance();
+        let (right_node, right) = instance();
+        let (_, face_a) = instance();
+        let (_, face_b) = instance();
+        let mut state = VrmLoadState {
+            primitive_entities: [((0, 0), vec![left, right]), ((1, 0), vec![face_a, face_b])]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        state.first_person.classes = [
+            ((0, 0), AutoClass::Split),
+            ((1, 0), AutoClass::ThirdPersonOnly),
+        ]
+        .into_iter()
+        .collect();
+        let head_meshes = [((0, 0), Handle::default())].into_iter().collect();
+
+        record_first_person_views(&state, &mut world);
+        spawn_head_copies(&state, &head_meshes, &mut world);
+
+        for face in [face_a, face_b] {
+            assert_eq!(
+                world.get::<FirstPersonView>(face).copied(),
+                Some(FirstPersonView::ThirdPersonOnly)
+            );
+        }
+        let parents: HashSet<Entity> = world
+            .query_filtered::<&ChildOf, With<VrmHeadOnly>>()
+            .iter(&world)
+            .map(ChildOf::parent)
+            .collect();
+        assert_eq!(parents, HashSet::from_iter([left_node, right_node]));
         success!()
     }
 
@@ -1508,10 +1731,10 @@ mod tests {
     /// `pub(crate)` inside `bevy_asset`, and `finalize` needs a context for its
     /// first-person pass besides. `AssetServer::load` builds the
     /// `LoadContext` from exactly this [`AssetPath`]
-    /// (`server/mod.rs:1659-1661`), and `bevy_gltf` derives a scene's context
+    /// (`server/mod.rs`), and `bevy_gltf` derives a scene's context
     /// from the file's with `begin_labeled_asset`
-    /// (`loader/mod.rs:1025`), which clones the path and attaches the `Scene0`
-    /// label only when the asset is registered (`:1123-1126`).
+    /// (`loader/mod.rs`), which clones the path and attaches the `Scene0`
+    /// label only when the asset is registered.
     #[test]
     fn the_source_path_is_observable_on_a_scene_load_context() -> TestResult {
         let loaded = bevy::asset::AssetPath::from("vrm/Elmer.vrm");

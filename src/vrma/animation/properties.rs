@@ -4,7 +4,8 @@
 //! [`VRM_ROOT_TARGET_NAME`] ([`vrm_root_animation_target`]), so that baked
 //! VRMA curves can address the avatar root itself instead of a bone. Expression
 //! weights are animated through [`ExpressionWeightProperty`], which reads and
-//! writes [`VrmExpressionWeights`] on the root; [`apply_expression_morph_binds`]
+//! writes [`VrmExpressionWeights`] on the root, and set by the application in
+//! [`ExpressionOverrides`], which take precedence; [`apply_expression_morph_binds`]
 //! distributes those weights into the `MorphWeights` of the bound meshes and
 //! publishes the final weight of every expression into
 //! [`EffectiveExpressionWeights`], honouring `isBinary` and the `overrideMouth`
@@ -49,15 +50,31 @@ pub fn vrm_root_animation_target() -> AnimationTargetId {
     AnimationTargetId::from_name(&Name::new(VRM_ROOT_TARGET_NAME))
 }
 
-/// Current weights of all expressions (preset + custom); lives on the VRM
+/// Animated weights of all expressions (preset + custom); lives on the VRM
 /// root, distributed into morph targets by [`apply_expression_morph_binds`].
+///
+/// `.vrma` expression curves write this; with the `.vrma` plugin every weight
+/// returns to `0.0` before the animation is evaluated, so an expression no
+/// playing clip drives is neutral. An expression in [`ExpressionOverrides`]
+/// is distributed with that weight instead.
 #[derive(Component, Reflect, Debug, Clone, Default)]
 #[reflect(Component)]
 pub struct VrmExpressionWeights(pub HashMap<String, f32>);
 
+/// Weights set by [`SetExpressions`](crate::prelude::SetExpressions) and
+/// [`ModifyExpressions`](crate::prelude::ModifyExpressions); inserted on the
+/// VRM root by the first of them and removed by
+/// [`ClearExpressions`](crate::prelude::ClearExpressions). An expression
+/// present here takes this weight instead of its animated
+/// [`VrmExpressionWeights`] one.
+#[derive(Component, Reflect, Debug, Clone, Default)]
+#[reflect(Component)]
+pub struct ExpressionOverrides(pub HashMap<String, f32>);
+
 /// Final weights of all expressions, published by
-/// [`apply_expression_morph_binds`]: every declared expression after its
-/// `isBinary` threshold and the category suppressors
+/// [`apply_expression_morph_binds`]: every declared expression's override, else
+/// its animated weight, after its `isBinary` threshold and the category
+/// suppressors
 /// (`overrideMouth` / `overrideBlink` / `overrideLookAt`) resolved to what the
 /// pass actually moves the bound morphs by.
 ///
@@ -264,7 +281,8 @@ fn expression_output_weight(
     }
 }
 
-/// Applies [`VrmExpressionWeights`] to the bound `MorphWeights`.
+/// Applies [`ExpressionOverrides`], else [`VrmExpressionWeights`], to the bound
+/// `MorphWeights`.
 ///
 /// The expression pipeline of a `.vrm`, in three passes:
 ///
@@ -290,30 +308,39 @@ fn expression_output_weight(
 pub fn apply_expression_morph_binds(
     mut roots: Query<(
         &VrmExpressionWeights,
+        Option<&ExpressionOverrides>,
         &ExpressionMorphBinds,
         &ExpressionSettings,
         Option<&mut EffectiveExpressionWeights>,
     )>,
     mut morphs: Query<&mut MorphWeights>,
 ) {
-    for (weights, binds, settings, effective) in roots.iter_mut() {
+    for (weights, overrides, binds, settings, effective) in roots.iter_mut() {
+        let overrides = overrides.map(|overrides| &overrides.0);
+        // A user-set weight wins over the animated one.
+        let raw = |name: &str| {
+            overrides
+                .and_then(|overrides| overrides.get(name))
+                .or_else(|| weights.0.get(name))
+                .copied()
+                .unwrap_or(0.0)
+        };
+
         // Pass 1: output weights, and the accumulated per-category rates.
         let mut outputs: HashMap<&str, f32> = HashMap::default();
         for (name, setting) in settings.0.iter() {
             outputs.insert(
                 name.as_str(),
-                expression_output_weight(
-                    weights.0.get(name.as_str()).copied().unwrap_or(0.0),
-                    setting.is_binary,
-                ),
+                expression_output_weight(raw(name.as_str()), setting.is_binary),
             );
         }
         // A weight without a setting (should not happen for a well-formed
         // model) still animates, unsuppressed and non-binary.
-        for (name, weight) in weights.0.iter() {
+        let overridden = overrides.into_iter().flat_map(|overrides| overrides.keys());
+        for name in weights.0.keys().chain(overridden) {
             outputs
                 .entry(name.as_str())
-                .or_insert_with(|| expression_output_weight(*weight, false));
+                .or_insert_with(|| expression_output_weight(raw(name.as_str()), false));
         }
         let multipliers = CategoryMultipliers::of(&settings.0, |name| {
             outputs.get(name).copied().unwrap_or(0.0)
@@ -515,6 +542,37 @@ mod tests {
             &[("happy", setting(ExpressionCategory::Other, false))],
         );
         assert_close(model.weights()[0], 0.4);
+    }
+
+    #[test]
+    fn an_override_wins_over_the_animated_weight() {
+        let mut model = run(
+            2,
+            &[("happy", 0.8), ("angry", 0.5)],
+            &[("happy", &[(0, 1.0)]), ("angry", &[(1, 1.0)])],
+            &[
+                ("happy", setting(ExpressionCategory::Other, false)),
+                ("angry", setting(ExpressionCategory::Other, false)),
+            ],
+        );
+        model
+            .app
+            .world_mut()
+            .entity_mut(model.root)
+            .insert(ExpressionOverrides(HashMap::from([(
+                "happy".to_owned(),
+                0.0,
+            )])));
+        model
+            .app
+            .world_mut()
+            .run_system_once(apply_expression_morph_binds)
+            .unwrap();
+
+        assert_close(model.weights()[0], 0.0);
+        assert_close(model.final_weight("happy"), 0.0);
+        // An expression without an override keeps its animated weight.
+        assert_close(model.weights()[1], 0.5);
     }
 
     #[test]

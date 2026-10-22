@@ -48,7 +48,6 @@ fn spawn_scene(
             shadow_maps_enabled: true,
             ..default()
         },
-        all_vrm_render_layers(),
         Transform::from_xyz(3.0, 3.0, 0.3).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     // Ground.
@@ -71,12 +70,13 @@ fn spawn_scene(
     }
 }
 
-/// The main camera starts in third-person mode.
+/// The main camera starts in third-person mode
+/// (the `ThirdPersonCamera` observer assigns its render layers).
 fn spawn_main_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
         MainCamera,
-        third_person_camera_layers(),
+        ThirdPersonCamera,
         Transform::from_xyz(0.0, 1.2, 2.5).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
     ));
 }
@@ -89,12 +89,12 @@ fn spawn_vrm(
 }
 
 /// Once the avatar has finished loading, attaches a picture-in-picture camera
-/// to the head bone.
+/// to the head bone and enables first-person mode (this performs the `auto` head split).
 fn attach_head_camera(
     mut commands: Commands,
-    vrms: Query<&HeadBoneEntity, Added<HeadBoneEntity>>,
+    vrms: Query<(Entity, &HeadBoneEntity), Added<HeadBoneEntity>>,
 ) {
-    for head in vrms.iter() {
+    for (vrm, head) in vrms.iter() {
         commands.entity(head.0).with_children(|spawner| {
             spawner.spawn((
                 Camera3d::default(),
@@ -110,12 +110,13 @@ fn attach_head_camera(
                     clear_color: ClearColorConfig::Custom(Color::srgb(0.05, 0.05, 0.15)),
                     ..default()
                 },
-                first_person_camera_layers(),
+                FirstPersonCamera,
                 // At eye level, tilted down so the body is in view.
                 Transform::from_xyz(0.0, 0.06, 0.0)
                     .looking_to(Dir3::new(Vec3::new(0.0, -0.4, 1.0)).unwrap(), Vec3::Y),
             ));
         });
+        commands.entity(vrm).trigger(RequestEnableFirstPerson);
     }
 }
 
@@ -124,6 +125,7 @@ fn attach_head_camera(
 /// layers and the camera transform are switched.
 fn toggle_main_camera(
     keys: Res<ButtonInput<KeyCode>>,
+    layers: Res<FirstPersonLayers>,
     mut mode: ResMut<FirstPersonMode>,
     mut cameras: Query<(&mut Transform, &mut RenderLayers), With<MainCamera>>,
 ) {
@@ -135,12 +137,12 @@ fn toggle_main_camera(
         if mode.enabled {
             // Remember the external view to restore it later.
             mode.saved_camera = Some(*transform);
-            *render_layers = first_person_camera_layers();
+            *render_layers = RenderLayers::default().with(layers.first_person_only);
         } else {
             if let Some(saved) = mode.saved_camera.take() {
                 *transform = saved;
             }
-            *render_layers = third_person_camera_layers();
+            *render_layers = RenderLayers::default().with(layers.third_person_only);
         }
     }
 }

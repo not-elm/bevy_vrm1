@@ -25,7 +25,6 @@ This crate allows you to use [VRM1.0](https://vrm.dev/en/vrm/vrm_about/) and [VR
 
 `.vrm` files are loaded by `VrmGltfPlugin`, which has to be added after `DefaultPlugins`, alongside `VrmPlugin`.
 Spawn an avatar with `VrmHandle`; the entity you spawn becomes the VRM root and receives `Initialized` once the scene is bound.
-Cameras need `third_person_camera_layers()` to see the whole avatar (see [First Person](#first-person)).
 
 ```rust
 use bevy::prelude::*;
@@ -34,11 +33,11 @@ use bevy_vrm1::prelude::*;
 fn main() {
     App::new()
         .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin))
-        .add_systems(Startup, spawn_avatar)
+        .add_systems(Startup, spawn_vrm)
         .run();
 }
 
-fn spawn_avatar(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn spawn_vrm(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(VrmHandle(asset_server.load("vrm/Elmer.vrm")));
 }
 ```
@@ -121,10 +120,10 @@ All constraint types use spherical linear interpolation (slerp) based on the wei
 
 This is a feature for hiding the avatar's head from a camera placed at its viewpoint, so that it does not block the view.
 
-To use it, give your cameras `first_person_camera_layers()` or `third_person_camera_layers()` as their `RenderLayers`.
-The meshes are assigned `RenderLayers` while the `.vrm` loads, according to the model's `meshAnnotations`, and meshes without an annotation are split by head bone weights.
+To use it, attach `FirstPersonCamera` or `ThirdPersonCamera` to your cameras and trigger `RequestEnableFirstPerson` on the VRM entity.
+The meshes are then assigned `RenderLayers` according to the model's `meshAnnotations`, and meshes without an annotation are split by head bone weights.
 
-The layers used for the separation are fixed (`LAYER_BOTH`, `LAYER_THIRD_PERSON_ONLY`, `LAYER_FIRST_PERSON_ONLY`), and `VrmLightLayersPlugin` lets lights without explicit layers cast shadows from the split-off head.
+`RequestDisableFirstPerson` makes all meshes visible from every camera again, and the layers used for the separation can be changed through the `FirstPersonLayers` resource.
 
 #### examples
 

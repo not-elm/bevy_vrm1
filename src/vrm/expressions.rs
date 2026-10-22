@@ -1,4 +1,6 @@
-use crate::prelude::{ExpressionSetting, ExpressionSettings, VrmExpressionWeights};
+use crate::prelude::{
+    ExpressionOverrides, ExpressionSetting, ExpressionSettings, VrmExpressionWeights,
+};
 use crate::vrm::{Vrm, VrmExpression};
 use bevy::app::Plugin;
 use bevy::platform::collections::HashMap;
@@ -60,8 +62,10 @@ impl ExpressionOverrideType {
 /// Sets expression weights on a VRM model, **replacing all previous overrides**.
 ///
 /// Trigger this event to directly control facial expressions.
-/// Expression weights are clamped to `0.0..=1.0`.
-/// Expressions not included in this call will return to VRMA animation control.
+/// Expression weights are clamped to `0.0..=1.0` and kept in
+/// [`ExpressionOverrides`] on the VRM, where they take precedence over VRMA
+/// animation. Expressions not included in this call will return to VRMA
+/// animation control.
 ///
 /// For partial updates that preserve existing overrides, see [`ModifyExpressions`].
 ///
@@ -255,9 +259,11 @@ impl Plugin for VrmExpressionPlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_observer(apply_set_expressions)
+        app.register_type::<ExpressionOverrides>()
+            .add_observer(apply_set_expressions)
             .add_observer(apply_modify_expressions)
-            .add_observer(apply_clear_expressions);
+            .add_observer(apply_clear_expressions)
+            .add_observer(remove_overrides_with_weights);
     }
 }
 
@@ -285,10 +291,11 @@ fn raw_expression_weights(
 
 fn apply_set_expressions(
     trigger: On<SetExpressions>,
-    mut load_time: Query<(&mut VrmExpressionWeights, Option<&ExpressionSettings>)>,
+    mut commands: Commands,
+    vrms: Query<Option<&ExpressionSettings>, With<VrmExpressionWeights>>,
 ) {
     let vrm_entity = trigger.event_target();
-    let Ok((mut weights, settings)) = load_time.get_mut(vrm_entity) else {
+    let Ok(settings) = vrms.get(vrm_entity) else {
         #[cfg(feature = "log")]
         warn!(
             "SetExpressions: VrmExpressionWeights not found for entity {:?}. VRM may not be initialized yet.",
@@ -296,19 +303,22 @@ fn apply_set_expressions(
         );
         return;
     };
-    weights.0 = raw_expression_weights(
-        &trigger.weights,
-        settings.map(|settings| &settings.0),
-        "SetExpressions",
-    );
+    commands
+        .entity(vrm_entity)
+        .insert(ExpressionOverrides(raw_expression_weights(
+            &trigger.weights,
+            settings.map(|settings| &settings.0),
+            "SetExpressions",
+        )));
 }
 
 fn apply_modify_expressions(
     trigger: On<ModifyExpressions>,
-    mut load_time: Query<(&mut VrmExpressionWeights, Option<&ExpressionSettings>)>,
+    mut commands: Commands,
+    vrms: Query<Option<&ExpressionSettings>, With<VrmExpressionWeights>>,
 ) {
     let vrm_entity = trigger.event_target();
-    let Ok((mut weights, settings)) = load_time.get_mut(vrm_entity) else {
+    let Ok(settings) = vrms.get(vrm_entity) else {
         #[cfg(feature = "log")]
         warn!(
             "ModifyExpressions: VrmExpressionWeights not found for entity {:?}. VRM may not be initialized yet.",
@@ -316,22 +326,42 @@ fn apply_modify_expressions(
         );
         return;
     };
-    weights.0.extend(raw_expression_weights(
+    let weights = raw_expression_weights(
         &trigger.weights,
         settings.map(|settings| &settings.0),
         "ModifyExpressions",
-    ));
+    );
+    commands
+        .entity(vrm_entity)
+        .entry::<ExpressionOverrides>()
+        .or_default()
+        .and_modify(move |mut overrides| overrides.0.extend(weights));
 }
 
 fn apply_clear_expressions(
     trigger: On<ClearExpressions>,
-    mut load_time: Query<&mut VrmExpressionWeights>,
+    mut commands: Commands,
+    vrms: Query<(), With<ExpressionOverrides>>,
 ) {
     let vrm_entity = trigger.event_target();
-    let Ok(mut weights) = load_time.get_mut(vrm_entity) else {
-        return;
-    };
-    weights.0.clear();
+    if vrms.contains(vrm_entity) {
+        commands.entity(vrm_entity).remove::<ExpressionOverrides>();
+    }
+}
+
+/// The user-set weights leave with the expressions they override: on detach,
+/// and when a new rig is attached.
+fn remove_overrides_with_weights(
+    trigger: On<Remove, VrmExpressionWeights>,
+    mut commands: Commands,
+    vrms: Query<(), With<ExpressionOverrides>>,
+) {
+    let vrm_entity = trigger.event_target();
+    if vrms.contains(vrm_entity) {
+        commands
+            .entity(vrm_entity)
+            .try_remove::<ExpressionOverrides>();
+    }
 }
 
 #[cfg(test)]
@@ -372,13 +402,13 @@ mod tests {
         VrmExpressionWeights(names.iter().map(|name| ((*name).to_owned(), 0.0)).collect())
     }
 
-    fn weights_of(
+    fn overrides_of(
         app: &App,
         vrm_entity: Entity,
     ) -> HashMap<String, f32> {
         app.world()
-            .get::<VrmExpressionWeights>(vrm_entity)
-            .expect("the root carries the expression weights")
+            .get::<ExpressionOverrides>(vrm_entity)
+            .expect("the root carries the user-set weights")
             .0
             .clone()
     }
@@ -401,8 +431,8 @@ mod tests {
             .trigger(SetExpressions::single(vrm_entity, "happy", 0.8));
         app.update();
 
-        let weights = weights_of(&app, vrm_entity);
-        assert_eq!(weights.len(), 1, "SetExpressions replaces all weights");
+        let weights = overrides_of(&app, vrm_entity);
+        assert_eq!(weights.len(), 1, "SetExpressions replaces all overrides");
         assert_eq!(weights["happy"], 0.8);
         success!()
     }
@@ -424,14 +454,14 @@ mod tests {
             .commands()
             .trigger(SetExpressions::single(vrm_entity, "happy", 1.0));
         app.update();
-        assert_eq!(weights_of(&app, vrm_entity)["happy"], 1.0);
+        assert_eq!(overrides_of(&app, vrm_entity)["happy"], 1.0);
 
         app.world_mut()
             .commands()
             .trigger(SetExpressions::single(vrm_entity, "angry", 0.7));
         app.update();
 
-        let weights = weights_of(&app, vrm_entity);
+        let weights = overrides_of(&app, vrm_entity);
         assert!(
             !weights.contains_key("happy"),
             "the previous weight is dropped, leaving the expression to animation"
@@ -461,7 +491,7 @@ mod tests {
             ));
         app.update();
 
-        let weights = weights_of(&app, vrm_entity);
+        let weights = overrides_of(&app, vrm_entity);
         assert_eq!(weights["happy"], 1.0, "the weight is clamped to 1.0");
         assert!(
             !weights.contains_key("nope"),
@@ -493,9 +523,33 @@ mod tests {
             .trigger(ModifyExpressions::single(vrm_entity, "angry", 0.7));
         app.update();
 
-        let weights = weights_of(&app, vrm_entity);
+        let weights = overrides_of(&app, vrm_entity);
         assert_eq!(weights["happy"], 1.0, "the existing weight is preserved");
         assert_eq!(weights["angry"], 0.7, "the named weight is merged in");
+        success!()
+    }
+
+    #[test]
+    fn modifies_in_one_frame_all_apply() -> TestResult {
+        let mut app = test_app();
+        app.add_plugins(VrmExpressionPlugin);
+
+        let vrm_entity = app
+            .world_mut()
+            .spawn((
+                load_time_weights(&["happy", "angry"]),
+                load_time_settings(&["happy", "angry"]),
+            ))
+            .id();
+
+        let mut commands = app.world_mut().commands();
+        commands.trigger(ModifyExpressions::single(vrm_entity, "happy", 0.5));
+        commands.trigger(ModifyExpressions::single(vrm_entity, "angry", 0.7));
+        app.update();
+
+        let weights = overrides_of(&app, vrm_entity);
+        assert_eq!(weights["happy"], 0.5);
+        assert_eq!(weights["angry"], 0.7);
         success!()
     }
 
@@ -520,7 +574,7 @@ mod tests {
             .trigger(ModifyExpressions::mouth(vrm_entity, "aa", 0.8));
         app.update();
 
-        let weights = weights_of(&app, vrm_entity);
+        let weights = overrides_of(&app, vrm_entity);
         assert_eq!(weights["aa"], 0.8, "the active vowel");
         for vowel in ["ih", "ou", "ee", "oh"] {
             assert_eq!(
@@ -552,7 +606,7 @@ mod tests {
                 [("happy", 0.8), ("angry", 0.5)],
             ));
         app.update();
-        assert_eq!(weights_of(&app, vrm_entity).len(), 2);
+        assert_eq!(overrides_of(&app, vrm_entity).len(), 2);
 
         app.world_mut()
             .commands()
@@ -560,14 +614,44 @@ mod tests {
         app.update();
 
         assert!(
-            weights_of(&app, vrm_entity).is_empty(),
-            "every weight is cleared"
+            app.world().get::<ExpressionOverrides>(vrm_entity).is_none(),
+            "every user-set weight is cleared"
         );
         assert!(
             app.world()
                 .get::<VrmExpressionWeights>(vrm_entity)
                 .is_some(),
-            "the component stays: the bind pass needs it"
+            "the animated weights stay: the bind pass needs them"
+        );
+        success!()
+    }
+
+    #[test]
+    fn the_overrides_leave_with_the_expression_weights() -> TestResult {
+        let mut app = test_app();
+        app.add_plugins(VrmExpressionPlugin);
+
+        let vrm_entity = app
+            .world_mut()
+            .spawn((
+                load_time_weights(&["happy"]),
+                load_time_settings(&["happy"]),
+            ))
+            .id();
+        app.world_mut()
+            .commands()
+            .trigger(SetExpressions::single(vrm_entity, "happy", 1.0));
+        app.update();
+        assert_eq!(overrides_of(&app, vrm_entity)["happy"], 1.0);
+
+        app.world_mut()
+            .entity_mut(vrm_entity)
+            .remove::<VrmExpressionWeights>();
+        app.update();
+
+        assert!(
+            app.world().get::<ExpressionOverrides>(vrm_entity).is_none(),
+            "a detached or re-attached avatar does not keep the old rig's overrides"
         );
         success!()
     }
@@ -612,7 +696,7 @@ mod tests {
         app.update();
 
         assert_eq!(
-            weights_of(&app, vrm_entity)["blink"],
+            overrides_of(&app, vrm_entity)["blink"],
             0.3,
             "the trigger stores the weight verbatim"
         );
@@ -642,6 +726,7 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<Name>(entity).is_some());
+        assert!(app.world().get::<ExpressionOverrides>(entity).is_none());
         success!()
     }
 }

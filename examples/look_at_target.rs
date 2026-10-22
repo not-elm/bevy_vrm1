@@ -7,7 +7,7 @@ use bevy_vrm1::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin, MeshPickingPlugin))
+        .add_plugins((DefaultPlugins, VrmPlugin, MeshPickingPlugin))
         .add_systems(Startup, (spawn_camera, spawn_vrm, spawn_directional_light))
         .run();
 }

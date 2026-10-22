@@ -59,8 +59,8 @@ impl Plugin for VrmHumanoidBonePlugin {
         &self,
         app: &mut App,
     ) {
-        app.register_type::<HumanoidBoneRegistry>();
-        register_bone_components(app);
+        app.register_type::<HumanoidBoneRegistry>()
+            .add_plugins(BonesPlugin);
     }
 }
 
@@ -157,25 +157,5 @@ pub(crate) fn insert_bone_holders(
             RightIndexProximal,
             RightMiddleDistal,
         );
-    }
-}
-
-/// `BonesPlugin` is unique, and both `VrmPlugin` and `VrmGltfPlugin` register it.
-pub(crate) fn register_bone_components(app: &mut App) {
-    if !app.is_plugin_added::<BonesPlugin>() {
-        app.add_plugins(BonesPlugin);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_register_bone_components_is_idempotent() {
-        let mut app = App::new();
-        register_bone_components(&mut app);
-        register_bone_components(&mut app);
-        assert!(app.is_plugin_added::<BonesPlugin>());
     }
 }

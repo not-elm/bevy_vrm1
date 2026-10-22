@@ -51,7 +51,7 @@ use crate::vrm::gltf::extensions::{vrmc_spring_bone, vrmc_vrm};
 
 use self::root::NodeRest;
 
-/// Registered once in [`VrmGltfPlugin::build`](crate::vrm::gltf::VrmGltfPlugin).
+/// Registered once by `VrmGltfPlugin`, which [`VrmPlugin`](crate::prelude::VrmPlugin) adds.
 #[derive(Clone, Default)]
 pub struct VrmExtensionHandler {
     pub(crate) state: VrmLoadState,

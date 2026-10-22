@@ -25,6 +25,7 @@ use bevy::prelude::*;
 use bevy::transform::systems::{propagate_parent_transforms, sync_simple_transforms};
 use expressions::VrmExpressionPlugin;
 use first_person::VrmFirstPersonPlugin;
+use gltf::VrmGltfPlugin;
 use mtoon::MtoonMaterialPlugin;
 use std::path::PathBuf;
 
@@ -133,7 +134,7 @@ marker_component!(
 /// The main plugin for VRM support in Bevy.
 ///
 /// Please refer to [`VrmHandle`](crate::prelude::VrmHandle) for more details.
-/// Loading a `.vrm` also requires [`VrmGltfPlugin`](crate::prelude::VrmGltfPlugin).
+/// Must be added after `DefaultPlugins`, because it registers the `.vrm` loader with `GltfPlugin`.
 pub struct VrmPlugin;
 
 impl Plugin for VrmPlugin {
@@ -147,14 +148,12 @@ impl Plugin for VrmPlugin {
             VrmHumanoidBonePlugin,
             VrmExpressionPlugin,
             VrmInstancePlugin,
+            MtoonMaterialPlugin,
             LookAtPlugin,
             BodyTrackingPlugin,
             VrmFirstPersonPlugin,
+            VrmGltfPlugin,
         ));
-        // Unique, and `VrmGltfPlugin` adds it too.
-        if !app.is_plugin_added::<MtoonMaterialPlugin>() {
-            app.add_plugins(MtoonMaterialPlugin);
-        }
 
         // Add manual transform propagation systems to follow VRM spec update order
         // See: https://vrm.dev/api/api_update/
@@ -189,7 +188,6 @@ impl Plugin for VrmPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::VrmGltfPlugin;
     use bevy::app::PluginGroupBuilder;
     use bevy::render::RenderPlugin;
     use bevy::render::settings::WgpuSettings;
@@ -209,11 +207,11 @@ mod tests {
             })
     }
 
-    /// Both plugins add the unique `MtoonMaterialPlugin`, so neither order may
-    /// panic with "plugin was already added".
+    /// `VrmPlugin` alone brings the `.vrm` loader; no other plugin is needed.
     #[test]
-    fn vrm_plugin_and_vrm_gltf_plugin_build_in_either_order() {
-        App::new().add_plugins((headless_default_plugins(), VrmPlugin, VrmGltfPlugin));
-        App::new().add_plugins((headless_default_plugins(), VrmGltfPlugin, VrmPlugin));
+    fn vrm_plugin_adds_the_vrm_gltf_plugin() {
+        let mut app = App::new();
+        app.add_plugins((headless_default_plugins(), VrmPlugin));
+        assert!(app.is_plugin_added::<VrmGltfPlugin>());
     }
 }

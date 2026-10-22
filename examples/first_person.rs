@@ -25,7 +25,7 @@ struct FirstPersonMode {
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin))
+        .add_plugins((DefaultPlugins, VrmPlugin))
         .init_resource::<FirstPersonMode>()
         .add_systems(Startup, (spawn_main_camera, spawn_scene, spawn_vrm))
         .add_systems(

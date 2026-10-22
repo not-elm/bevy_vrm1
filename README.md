@@ -23,7 +23,7 @@ This crate allows you to use [VRM1.0](https://vrm.dev/en/vrm/vrm_about/) and [VR
 
 ### Loading
 
-`.vrm` files are loaded by `VrmGltfPlugin`, which has to be added after `DefaultPlugins`, alongside `VrmPlugin`.
+`VrmPlugin` loads `.vrm` files and has to be added after `DefaultPlugins`.
 Spawn an avatar with `VrmHandle`; the entity you spawn becomes the VRM root and receives `Initialized` once the scene is bound.
 
 ```rust
@@ -32,7 +32,7 @@ use bevy_vrm1::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin))
+        .add_plugins((DefaultPlugins, VrmPlugin))
         .add_systems(Startup, spawn_vrm)
         .run();
 }

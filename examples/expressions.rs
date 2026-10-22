@@ -16,7 +16,7 @@ use bevy_vrm1::prelude::*;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin))
+        .add_plugins((DefaultPlugins, VrmPlugin))
         .add_systems(Startup, (spawn_light, spawn_camera, spawn_vrm))
         .add_systems(Update, control_expressions)
         .run();

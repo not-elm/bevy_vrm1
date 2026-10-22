@@ -73,10 +73,11 @@ VrmPlugin
 ├── VrmHumanoidBonePlugin    (Bone hierarchy mapping)
 ├── VrmExpressionPlugin      (Morph target expressions)
 ├── MtoonMaterialPlugin      (Shader & material rendering)
-└── LookAtPlugin             (Gaze control system)
+├── LookAtPlugin             (Gaze control system)
+└── VrmGltfPlugin            (.vrm loader & load-time extension handler)
 ```
 
-Loading `.vrm` files is a separate plugin (`VrmGltfPlugin`) that must be added after `DefaultPlugins` alongside VrmPlugin; it also adds `VrmGltfRuntimePlugin` (node constraints).
+`VrmPlugin` also adds the internal `VrmGltfPlugin` (the `.vrm` loader and its extension handler, plus `VrmGltfRuntimePlugin` for node constraints), so `VrmPlugin` must be added after `DefaultPlugins`.
 VRMA (animation) is a separate plugin (`VrmaPlugin`) that works alongside VrmPlugin.
 
 ### VRM Asset Loading Pipeline

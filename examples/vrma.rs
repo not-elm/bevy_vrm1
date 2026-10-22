@@ -7,7 +7,7 @@ use std::time::Duration;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, VrmPlugin, VrmGltfPlugin, VrmaPlugin))
+        .add_plugins((DefaultPlugins, VrmPlugin, VrmaPlugin))
         .add_systems(Startup, (spawn_directional_light, spawn_camera, spawn_vrm))
         .run();
 }

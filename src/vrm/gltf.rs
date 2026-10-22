@@ -5,7 +5,7 @@ pub mod materials;
 
 pub mod prelude {
     pub use crate::vrm::gltf::{
-        VrmGltfPlugin, VrmLoader,
+        VrmLoader,
         extensions::{VrmExtensions, VrmNode, vrmc_spring_bone::*, vrmc_vrm::*},
         materials::*,
     };
@@ -25,7 +25,6 @@ use bevy::prelude::*;
 use bevy::reflect::TypePath;
 use std::sync::{Arc, Mutex};
 
-use crate::prelude::MtoonMaterialPlugin;
 use crate::prelude::{
     ColliderShape, ConstraintExecutionOrder, EffectiveExpressionWeights, ExpressionMorphBinds,
     ExpressionSettings, Initialized, LookAtProperties, LookAtType, MorphBind,
@@ -35,14 +34,13 @@ use crate::prelude::{
 };
 use crate::system_set::VrmSystemSets;
 use crate::vrm::gltf::handler::VrmExtensionHandler;
-use crate::vrm::humanoid_bone::register_bone_components;
 use crate::vrm::instance::VrmSceneRoot;
 
 /// Registers the VRM extension handler and the `.vrm` asset loader.
 ///
-/// Must be added after `DefaultPlugins`.
+/// Added by [`VrmPlugin`](crate::prelude::VrmPlugin), after `DefaultPlugins`.
 #[derive(Default)]
-pub struct VrmGltfPlugin;
+pub(crate) struct VrmGltfPlugin;
 
 impl Plugin for VrmGltfPlugin {
     fn build(
@@ -51,16 +49,10 @@ impl Plugin for VrmGltfPlugin {
     ) {
         assert!(
             app.is_plugin_added::<GltfPlugin>(),
-            "VrmGltfPlugin must be added after DefaultPlugins (GltfPlugin/PbrPlugin)",
+            "VrmPlugin must be added after DefaultPlugins (GltfPlugin/PbrPlugin)",
         );
 
-        if !app.is_plugin_added::<MtoonMaterialPlugin>() {
-            app.add_plugins(MtoonMaterialPlugin);
-        }
-
-        if !app.is_plugin_added::<crate::vrm::runtime::VrmGltfRuntimePlugin>() {
-            app.add_plugins(crate::vrm::runtime::VrmGltfRuntimePlugin);
-        }
+        app.add_plugins(crate::vrm::runtime::VrmGltfRuntimePlugin);
 
         app.register_type::<Vrm>()
             .register_type::<Initialized>()
@@ -96,8 +88,6 @@ impl Plugin for VrmGltfPlugin {
             .register_type::<AnimationTransitions>()
             .register_type::<AnimatedBy>()
             .register_type::<AnimationTargetId>();
-
-        register_bone_components(app);
 
         let handler = VrmExtensionHandler::default();
 

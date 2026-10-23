@@ -1,5 +1,9 @@
 //! Provides support for `VRMC_vrm.firstPerson`.
 //!
+//! The meshes are classified while the `.vrm` loads, and `auto` meshes are
+//! split there into a body part and a head part. Every mesh stays on the
+//! default layer until [`RequestEnableFirstPerson`] applies:
+//!
 //! | firstPersonFlag | RenderLayers |
 //! |---|---|
 //! | `both` | 0 (default) |
@@ -7,13 +11,9 @@
 //! | `firstPersonOnly` | `FirstPersonLayers::first_person_only` |
 //! | `auto` | mesh is split: head part -> thirdPersonOnly, the rest -> both |
 
-use crate::prelude::ChildSearcher;
-use crate::prelude::MToonMaterial;
 use crate::vrm::Vrm;
-use crate::vrm::gltf::extensions::vrmc_vrm::{FirstPerson, FirstPersonFlag};
-use crate::vrm::prelude::HeadBoneEntity;
-use bevy::app::{App, Plugin, Update};
-use bevy::asset::{Assets, Handle};
+use crate::vrm::components::FirstPersonView;
+use bevy::app::{App, Plugin};
 use bevy::camera::visibility::{Layer, RenderLayers};
 use bevy::ecs::lifecycle::Add;
 use bevy::ecs::reflect::ReflectComponent;
@@ -21,19 +21,13 @@ use bevy::ecs::{
     component::Component,
     entity::Entity,
     event::EntityEvent,
-    hierarchy::{ChildOf, Children},
-    name::Name,
+    hierarchy::Children,
     observer::On,
-    query::{With, Without},
+    query::With,
     resource::Resource,
-    system::{Commands, Query, Res, ResMut},
+    system::{Commands, Query, Res},
 };
-use bevy::gltf::GltfNode;
-use bevy::mesh::morph::MeshMorphWeights;
-use bevy::mesh::{Indices, Mesh, Mesh3d, skinning::SkinnedMesh};
-use bevy::pbr::MeshMaterial3d;
-use bevy::platform::collections::HashSet;
-use bevy::prelude::Deref;
+use bevy::mesh::Mesh3d;
 use bevy::reflect::Reflect;
 
 pub(crate) struct VrmFirstPersonPlugin;
@@ -44,39 +38,12 @@ impl Plugin for VrmFirstPersonPlugin {
         app: &mut App,
     ) {
         app.init_resource::<FirstPersonLayers>()
-            .register_type::<FirstPersonRegistry>()
             .register_type::<FirstPersonCamera>()
             .register_type::<ThirdPersonCamera>()
             .add_observer(setup_first_person_camera)
             .add_observer(setup_third_person_camera)
             .add_observer(apply_enable_first_person)
-            .add_observer(apply_disable_first_person)
-            .add_systems(Update, split_auto_meshes);
-    }
-}
-
-/// Holds `(node name, firstPersonFlag)` pairs from `VRMC_vrm.firstPerson.meshAnnotations`.
-#[derive(Component, Deref, Reflect, Default)]
-pub struct FirstPersonRegistry(Vec<(Name, FirstPersonFlag)>);
-
-impl FirstPersonRegistry {
-    pub fn new(
-        first_person: Option<&FirstPerson>,
-        node_assets: &Assets<GltfNode>,
-        nodes: &[Handle<GltfNode>],
-    ) -> Self {
-        let Some(fp) = first_person else {
-            return Self::default();
-        };
-        Self(
-            fp.mesh_annotations
-                .iter()
-                .filter_map(|a| {
-                    let node = node_assets.get(nodes.get(a.node)?)?;
-                    Some((Name::new(node.name.clone()), a.first_person_flag))
-                })
-                .collect(),
-        )
+            .add_observer(apply_disable_first_person);
     }
 }
 
@@ -142,242 +109,42 @@ pub struct RequestEnableFirstPerson(pub Entity);
 #[derive(EntityEvent)]
 pub struct RequestDisableFirstPerson(pub Entity);
 
-/// A mesh entity waiting for the `auto` head split.
-#[derive(Component)]
-pub(crate) struct PendingAutoSplit;
-
-/// Attached to the original mesh entity after the `auto` split.
-#[derive(Component)]
-pub(crate) struct AutoSplitDone {
-    head_entity: Entity,
-}
-
 fn apply_enable_first_person(
     trigger: On<RequestEnableFirstPerson>,
     mut commands: Commands,
-    registries: Query<&FirstPersonRegistry>,
-    searcher: ChildSearcher,
-    layers: Res<FirstPersonLayers>,
+    vrms: Query<(), With<Vrm>>,
     children: Query<&Children>,
     meshes: Query<(), With<Mesh3d>>,
+    views: Query<&FirstPersonView>,
+    layers: Res<FirstPersonLayers>,
 ) {
     let vrm = trigger.event_target();
-    let Ok(registry) = registries.get(vrm) else {
+    if !vrms.contains(vrm) {
         return;
-    };
-
-    // Mesh entities already covered by an explicit annotation.
-    let mut covered = HashSet::new();
-    for (name, flag) in registry.iter() {
-        let Some(node) = searcher.find_from_name(vrm, name.as_str()) else {
-            continue;
-        };
-        for mesh_entity in descendants_with_mesh(node, &children, &meshes) {
-            covered.insert(mesh_entity);
-            apply_flag(&mut commands, mesh_entity, *flag, &layers);
-        }
     }
-
-    // Per spec: meshes without an annotation are treated as `auto`.
     for mesh_entity in descendants_with_mesh(vrm, &children, &meshes) {
-        if !covered.contains(&mesh_entity) {
-            apply_flag(&mut commands, mesh_entity, FirstPersonFlag::Auto, &layers);
-        }
+        let render_layers = match views.get(mesh_entity) {
+            Ok(FirstPersonView::ThirdPersonOnly) => RenderLayers::layer(layers.third_person_only),
+            Ok(FirstPersonView::FirstPersonOnly) => RenderLayers::layer(layers.first_person_only),
+            Err(_) => RenderLayers::default(),
+        };
+        commands.entity(mesh_entity).insert(render_layers);
     }
 }
 
 fn apply_disable_first_person(
     trigger: On<RequestDisableFirstPerson>,
     mut commands: Commands,
+    vrms: Query<(), With<Vrm>>,
     children: Query<&Children>,
     meshes: Query<(), With<Mesh3d>>,
 ) {
     let vrm = trigger.event_target();
+    if !vrms.contains(vrm) {
+        return;
+    }
     for mesh_entity in descendants_with_mesh(vrm, &children, &meshes) {
-        commands
-            .entity(mesh_entity)
-            .insert(RenderLayers::default())
-            .remove::<PendingAutoSplit>();
-    }
-}
-
-fn apply_flag(
-    commands: &mut Commands,
-    mesh_entity: Entity,
-    flag: FirstPersonFlag,
-    layers: &FirstPersonLayers,
-) {
-    match flag {
-        FirstPersonFlag::Both => {
-            commands.entity(mesh_entity).insert(RenderLayers::default());
-        }
-        FirstPersonFlag::ThirdPersonOnly => {
-            commands
-                .entity(mesh_entity)
-                .insert(RenderLayers::layer(layers.third_person_only));
-        }
-        FirstPersonFlag::FirstPersonOnly => {
-            commands
-                .entity(mesh_entity)
-                .insert(RenderLayers::layer(layers.first_person_only));
-        }
-        FirstPersonFlag::Auto => {
-            commands.entity(mesh_entity).insert(PendingAutoSplit);
-        }
-    }
-}
-
-fn split_auto_meshes(
-    mut commands: Commands,
-    mut mesh_assets: ResMut<Assets<Mesh>>,
-    already_split: Query<(Entity, &AutoSplitDone), With<PendingAutoSplit>>,
-    unskinned: Query<
-        Entity,
-        (
-            With<PendingAutoSplit>,
-            Without<SkinnedMesh>,
-            Without<AutoSplitDone>,
-        ),
-    >,
-    pending: Query<
-        (
-            Entity,
-            &Mesh3d,
-            &SkinnedMesh,
-            &ChildOf,
-            Option<&MeshMaterial3d<MToonMaterial>>,
-            Option<&MeshMorphWeights>,
-            Option<&Name>,
-        ),
-        (With<PendingAutoSplit>, Without<AutoSplitDone>),
-    >,
-    parents: Query<&ChildOf>,
-    vrms: Query<&HeadBoneEntity, With<Vrm>>,
-    children: Query<&Children>,
-    layers: Res<FirstPersonLayers>,
-) {
-    // Re-enabling after a previous split: just restore the layers.
-    for (entity, done) in already_split.iter() {
-        commands
-            .entity(entity)
-            .insert(RenderLayers::default())
-            .remove::<PendingAutoSplit>();
-        commands
-            .entity(done.head_entity)
-            .insert(RenderLayers::layer(layers.third_person_only));
-    }
-
-    // Meshes without a skin cannot be weighted to the head bone: treat as `both`.
-    for entity in unskinned.iter() {
-        commands
-            .entity(entity)
-            .insert(RenderLayers::default())
-            .remove::<PendingAutoSplit>();
-    }
-
-    for (entity, mesh3d, skinned, child_of, material, morph_weights, name) in pending.iter() {
-        // The VRM root is the ancestor holding `Vrm` + `HeadBoneEntity`.
-        // It may not be initialized yet; retry on the next frame.
-        let Some(head) = find_head_bone(entity, &parents, &vrms) else {
-            continue;
-        };
-
-        // The head bone and all of its descendants.
-        let mut head_set = HashSet::new();
-        collect_descendants(head, &children, &mut head_set);
-
-        // Joint indices of this skin that point into the head subtree.
-        let head_joint_ids = skinned
-            .joints
-            .iter()
-            .enumerate()
-            .filter(|(_, joint)| head_set.contains(*joint))
-            .map(|(index, _)| index as u16)
-            .collect::<HashSet<u16>>();
-
-        // The mesh asset may not be loaded yet; retry on the next frame.
-        let Some(mesh) = mesh_assets.get(&mesh3d.0) else {
-            continue;
-        };
-        match classify_auto_mesh(mesh, &head_joint_ids) {
-            // Nothing is weighted to the head: keep visible everywhere.
-            AutoSplit::Both => {
-                commands
-                    .entity(entity)
-                    .insert(RenderLayers::default())
-                    .remove::<PendingAutoSplit>();
-            }
-            // The whole mesh belongs to the head (face, eyes, hair):
-            // hide it from first-person cameras, no split needed.
-            AutoSplit::ThirdPersonOnly => {
-                commands
-                    .entity(entity)
-                    .insert(RenderLayers::layer(layers.third_person_only))
-                    .remove::<PendingAutoSplit>();
-            }
-            // Mixed weights: split into a head part and the rest.
-            AutoSplit::Split(parts) => {
-                let (head_mesh, rest_mesh) = *parts;
-                let head_handle = mesh_assets.add(head_mesh);
-                let rest_handle = mesh_assets.add(rest_mesh);
-
-                // The head part is a new sibling entity under the same glTF node,
-                // visible only to third-person cameras.
-                let head_name = name.map(Name::as_str).unwrap_or("mesh");
-                let mut head_commands = commands.spawn((
-                    Name::new(format!("{head_name}.headSplit")),
-                    ChildOf(child_of.parent()),
-                    Mesh3d(head_handle),
-                    skinned.clone(),
-                    RenderLayers::layer(layers.third_person_only),
-                ));
-                if let Some(material) = material {
-                    head_commands.insert(material.clone());
-                }
-                if let Some(morph_weights) = morph_weights {
-                    head_commands.insert(morph_weights.clone());
-                }
-                let head_entity = head_commands.id();
-
-                // The original entity keeps only the non-head part and stays visible everywhere.
-                commands
-                    .entity(entity)
-                    .insert((
-                        Mesh3d(rest_handle),
-                        RenderLayers::default(),
-                        AutoSplitDone { head_entity },
-                    ))
-                    .remove::<PendingAutoSplit>();
-            }
-        }
-    }
-}
-
-/// Walks up the hierarchy to the VRM root and returns its head bone entity.
-fn find_head_bone(
-    mesh_entity: Entity,
-    parents: &Query<&ChildOf>,
-    vrms: &Query<&HeadBoneEntity, With<Vrm>>,
-) -> Option<Entity> {
-    let mut current = mesh_entity;
-    loop {
-        if let Ok(head) = vrms.get(current) {
-            return Some(head.0);
-        }
-        current = parents.get(current).ok()?.parent();
-    }
-}
-
-fn collect_descendants(
-    entity: Entity,
-    children: &Query<&Children>,
-    output: &mut HashSet<Entity>,
-) {
-    output.insert(entity);
-    if let Ok(entity_children) = children.get(entity) {
-        for child in entity_children {
-            collect_descendants(*child, children, output);
-        }
+        commands.entity(mesh_entity).insert(RenderLayers::default());
     }
 }
 
@@ -400,66 +167,153 @@ fn descendants_with_mesh(
     found
 }
 
-/// Classification of an `auto` mesh relative to the head bone subtree.
-enum AutoSplit {
-    /// No triangles are weighted to the head: visible everywhere.
-    Both,
-    /// Every triangle is weighted to the head (face, eyes, hair):
-    /// the whole mesh must be hidden from first-person cameras.
-    ThirdPersonOnly,
-    /// Mixed weights: (head part, rest part), split by triangle, index-only.
-    Split(Box<(Mesh, Mesh)>),
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::VrmHeadOnly;
+    use crate::success;
+    use crate::tests::{TestResult, test_app};
+    use bevy::asset::Handle;
+    use bevy::ecs::hierarchy::ChildOf;
 
-fn classify_auto_mesh(
-    mesh: &Mesh,
-    head_joint_ids: &HashSet<u16>,
-) -> AutoSplit {
-    use bevy::mesh::VertexAttributeValues;
-
-    if head_joint_ids.is_empty() {
-        return AutoSplit::Both;
-    }
-    let Some(VertexAttributeValues::Uint16x4(joint_indices)) =
-        mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)
-    else {
-        return AutoSplit::Both;
-    };
-    let Some(VertexAttributeValues::Float32x4(joint_weights)) =
-        mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)
-    else {
-        return AutoSplit::Both;
-    };
-
-    let is_head_vertex: Vec<bool> = joint_indices
-        .iter()
-        .zip(joint_weights)
-        .map(|(idx, w)| (0..4).any(|k| w[k] > 0.0 && head_joint_ids.contains(&idx[k])))
-        .collect();
-
-    let Some(indices) = mesh.indices() else {
-        return AutoSplit::Both;
-    };
-    let indices: Vec<u32> = indices.iter().map(|i| i as u32).collect();
-    let (mut head, mut rest) = (Vec::new(), Vec::new());
-    for tri in indices.as_chunks::<3>().0 {
-        let target = if tri.iter().any(|&v| is_head_vertex[v as usize]) {
-            &mut head
-        } else {
-            &mut rest
-        };
-        target.extend_from_slice(tri);
+    struct Avatar {
+        vrm: Entity,
+        body: Entity,
+        head_copy: Entity,
+        first_person_only: Entity,
     }
 
-    match (head.is_empty(), rest.is_empty()) {
-        (true, _) => AutoSplit::Both,
-        (false, true) => AutoSplit::ThirdPersonOnly,
-        (false, false) => {
-            let mut head_mesh = mesh.clone();
-            head_mesh.insert_indices(Indices::U32(head));
-            let mut rest_mesh = mesh.clone();
-            rest_mesh.insert_indices(Indices::U32(rest));
-            AutoSplit::Split(Box::new((head_mesh, rest_mesh)))
+    /// The shape the loader leaves behind: a body half on the default layer,
+    /// its head copy and a `firstPersonOnly` mesh, all below the VRM root.
+    fn spawn_avatar(app: &mut App) -> Avatar {
+        let world = app.world_mut();
+        let vrm = world.spawn(Vrm).id();
+        let node = world.spawn(ChildOf(vrm)).id();
+        let body = world.spawn((Mesh3d(Handle::default()), ChildOf(node))).id();
+        let head_copy = world
+            .spawn((
+                Mesh3d(Handle::default()),
+                VrmHeadOnly,
+                FirstPersonView::ThirdPersonOnly,
+                ChildOf(node),
+            ))
+            .id();
+        let first_person_only = world
+            .spawn((
+                Mesh3d(Handle::default()),
+                FirstPersonView::FirstPersonOnly,
+                ChildOf(vrm),
+            ))
+            .id();
+        Avatar {
+            vrm,
+            body,
+            head_copy,
+            first_person_only,
         }
+    }
+
+    fn app() -> App {
+        let mut app = test_app();
+        app.add_plugins(VrmFirstPersonPlugin);
+        app
+    }
+
+    fn layers(
+        app: &App,
+        entity: Entity,
+    ) -> Option<RenderLayers> {
+        app.world().get::<RenderLayers>(entity).cloned()
+    }
+
+    /// The loaded avatar renders whole on the default layer until first person
+    /// is enabled; enabling applies the views recorded at load time, and
+    /// disabling puts every mesh back on the default layer.
+    #[test]
+    fn enabling_applies_the_recorded_views_and_disabling_reverts_them() -> TestResult {
+        let mut app = app();
+        let avatar = spawn_avatar(&mut app);
+        for mesh in [avatar.body, avatar.head_copy, avatar.first_person_only] {
+            assert_eq!(layers(&app, mesh), None);
+        }
+
+        app.world_mut()
+            .trigger(RequestEnableFirstPerson(avatar.vrm));
+        app.update();
+        let default_layers = FirstPersonLayers::default();
+        assert_eq!(layers(&app, avatar.body), Some(RenderLayers::default()));
+        assert_eq!(
+            layers(&app, avatar.head_copy),
+            Some(RenderLayers::layer(default_layers.third_person_only))
+        );
+        assert_eq!(
+            layers(&app, avatar.first_person_only),
+            Some(RenderLayers::layer(default_layers.first_person_only))
+        );
+
+        app.world_mut()
+            .trigger(RequestDisableFirstPerson(avatar.vrm));
+        app.update();
+        for mesh in [avatar.body, avatar.head_copy, avatar.first_person_only] {
+            assert_eq!(layers(&app, mesh), Some(RenderLayers::default()));
+        }
+        success!()
+    }
+
+    #[test]
+    fn enabling_reads_the_configured_layers() -> TestResult {
+        let mut app = app();
+        app.insert_resource(FirstPersonLayers {
+            first_person_only: 3,
+            third_person_only: 4,
+        });
+        let avatar = spawn_avatar(&mut app);
+
+        app.world_mut()
+            .trigger(RequestEnableFirstPerson(avatar.vrm));
+        app.update();
+
+        assert_eq!(layers(&app, avatar.head_copy), Some(RenderLayers::layer(4)));
+        assert_eq!(
+            layers(&app, avatar.first_person_only),
+            Some(RenderLayers::layer(3))
+        );
+        success!()
+    }
+
+    #[test]
+    fn a_target_that_is_not_a_vrm_is_left_alone() -> TestResult {
+        let mut app = app();
+        let owner = app.world_mut().spawn_empty().id();
+        let mesh = app
+            .world_mut()
+            .spawn((Mesh3d(Handle::default()), ChildOf(owner)))
+            .id();
+
+        app.world_mut().trigger(RequestEnableFirstPerson(owner));
+        app.world_mut().trigger(RequestDisableFirstPerson(owner));
+        app.update();
+
+        assert_eq!(layers(&app, mesh), None);
+        success!()
+    }
+
+    #[test]
+    fn cameras_see_the_default_layer_and_their_own_view() -> TestResult {
+        let mut app = app();
+        let first_person = app.world_mut().spawn(FirstPersonCamera).id();
+        let third_person = app.world_mut().spawn(ThirdPersonCamera).id();
+        app.update();
+
+        let default_layers = FirstPersonLayers::default();
+        assert_eq!(
+            layers(&app, first_person),
+            Some(RenderLayers::default().with(default_layers.first_person_only))
+        );
+        assert_eq!(
+            layers(&app, third_person),
+            Some(RenderLayers::default().with(default_layers.third_person_only))
+        );
+        success!()
     }
 }

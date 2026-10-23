@@ -1,7 +1,10 @@
+use crate::error::vrm_warn;
 use bevy::color::LinearRgba;
 use bevy::prelude::Reflect;
 use bevy::render::render_resource::ShaderType;
 use serde::{Deserialize, Serialize};
+
+pub const VRMC_MATERIALS_HDR_EMISSIVE_MULTIPLIER: &str = "VRMC_materials_hdr_emissiveMultiplier";
 
 #[derive(Serialize, Deserialize, Reflect, Debug, Clone)]
 pub struct VrmcMaterialsExtensitions {
@@ -117,6 +120,27 @@ impl VrmcMaterialsExtensitions {
     }
 }
 
+#[derive(Serialize, Deserialize, Reflect, Debug, Clone, Copy, PartialEq)]
+pub struct VrmcMaterialsHdrEmissiveMultiplier {
+    #[serde(rename = "emissiveMultiplier", default = "default_one")]
+    pub emissive_multiplier: f32,
+}
+
+impl VrmcMaterialsHdrEmissiveMultiplier {
+    pub fn from_material_extensions(
+        extensions: &serde_json::map::Map<String, serde_json::Value>
+    ) -> Option<Self> {
+        let value = extensions.get(VRMC_MATERIALS_HDR_EMISSIVE_MULTIPLIER)?;
+        match serde_json::from_value(value.clone()) {
+            Ok(multiplier) => Some(multiplier),
+            Err(e) => {
+                vrm_warn!("Failed to parse VRMC_materials_hdr_emissiveMultiplier", e);
+                None
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Reflect, Debug, Clone, Copy)]
 pub struct MatcapTexture {
     pub index: usize,
@@ -180,7 +204,10 @@ impl Default for KhrTextureTransform {
 mod tests {
     use crate::success;
     use crate::tests::TestResult;
-    use crate::vrm::gltf::materials::{KhrTextureTransform, VrmTexture, VrmcMaterialsExtensitions};
+    use crate::vrm::gltf::materials::{
+        KhrTextureTransform, VrmTexture, VrmcMaterialsExtensitions,
+        VrmcMaterialsHdrEmissiveMultiplier,
+    };
 
     #[test]
     fn deserialize_minimal_vrmc_materials_mtoon() -> TestResult {
@@ -285,6 +312,55 @@ mod tests {
         assert_eq!(texture.index, 3);
         assert_eq!(texture.tex_coord, 0.0);
         assert_eq!(texture.scale, 1.0);
+
+        success!()
+    }
+
+    #[test]
+    fn parse_hdr_emissive_multiplier() -> TestResult {
+        let extensions = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+            r#"{"VRMC_materials_hdr_emissiveMultiplier":{"emissiveMultiplier":2.5}}"#,
+        )?;
+        let multiplier = VrmcMaterialsHdrEmissiveMultiplier::from_material_extensions(&extensions)
+            .expect("VRMC_materials_hdr_emissiveMultiplier should be parsed");
+
+        assert_eq!(multiplier.emissive_multiplier, 2.5);
+
+        success!()
+    }
+
+    #[test]
+    fn hdr_emissive_multiplier_does_not_read_khr_emissive_strength() -> TestResult {
+        let extensions = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+            r#"{"VRMC_materials_hdr_emissiveMultiplier":{"emissiveStrength":4.0}}"#,
+        )?;
+        let multiplier = VrmcMaterialsHdrEmissiveMultiplier::from_material_extensions(&extensions)
+            .expect("the extension is declared, its unknown property is just ignored");
+
+        assert_eq!(multiplier.emissive_multiplier, 1.0);
+
+        success!()
+    }
+
+    #[test]
+    fn parse_absent_or_malformed_hdr_emissive_multiplier() -> TestResult {
+        let absent = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+            r#"{"VRMC_materials_mtoon":{"specVersion":"1.0"}}"#,
+        )?;
+        assert!(VrmcMaterialsHdrEmissiveMultiplier::from_material_extensions(&absent).is_none());
+
+        for malformed in [
+            r#"{"VRMC_materials_hdr_emissiveMultiplier":2.0}"#,
+            r#"{"VRMC_materials_hdr_emissiveMultiplier":null}"#,
+            r#"{"VRMC_materials_hdr_emissiveMultiplier":{"emissiveMultiplier":"2.0"}}"#,
+        ] {
+            let extensions =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(malformed)?;
+            assert!(
+                VrmcMaterialsHdrEmissiveMultiplier::from_material_extensions(&extensions).is_none(),
+                "`{malformed}` should be treated as absent"
+            );
+        }
 
         success!()
     }

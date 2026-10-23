@@ -21,6 +21,31 @@ This crate allows you to use [VRM1.0](https://vrm.dev/en/vrm/vrm_about/) and [VR
 | Node Constraint | ✅                  |
 | First Person    | ✅                  |
 
+### Loading
+
+`VrmPlugin` loads `.vrm` files and has to be added after `DefaultPlugins`.
+Spawn an avatar with `VrmHandle`; the entity you spawn becomes the VRM root and receives `Initialized` once the scene is bound.
+
+```rust
+use bevy::prelude::*;
+use bevy_vrm1::prelude::*;
+
+fn main() {
+    App::new()
+        .add_plugins((DefaultPlugins, VrmPlugin))
+        .add_systems(Startup, spawn_vrm)
+        .run();
+}
+
+fn spawn_vrm(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn(VrmHandle(asset_server.load("vrm/Elmer.vrm")));
+}
+```
+
+#### examples
+
+- [simple.rs](./examples/simple.rs)
+
 ### Spring Bone
 
 ![SpringBone](./docs/spring_bone.gif)

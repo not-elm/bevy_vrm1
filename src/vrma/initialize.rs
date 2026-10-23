@@ -1,12 +1,15 @@
 //! This module inserts [`SceneRoot`] and VRMA-related components from the loaded [`VrmaHandle`].
 
 use crate::error::vrm_error;
+use crate::system_param::prelude::*;
 use crate::vrm::Initialized;
-use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
+use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, insert_bone_holders};
+use crate::vrm::{RestGlobalTransform, RestTransform, RestWorldTransform, Vrm};
 use crate::vrma::animation::animation_graph::RequestUpdateAnimationGraph;
-use crate::vrma::animation::expressions::VrmaExpressionNames;
+use crate::vrma::animation::expressions::VrmaExpressionRegistry;
 use crate::vrma::gltf::extensions::VrmaExtensions;
 use crate::vrma::loader::VrmaAsset;
+use crate::vrma::{RetargetSource, VrmAnimationSourceClip, VrmaPlaybackState};
 use crate::vrma::{VrmAnimationClipHandle, Vrma, VrmaDuration, VrmaHandle, VrmaPath};
 use bevy::gltf::GltfNode;
 use bevy::platform::collections::HashSet;
@@ -21,8 +24,25 @@ impl Plugin for VrmaInitializePlugin {
         &self,
         app: &mut App,
     ) {
-        app.add_systems(Update, (spawn_vrma, trigger_loaded));
+        app.add_systems(
+            Update,
+            (spawn_vrma, request_initialize_vrma, trigger_loaded),
+        )
+        .add_observer(on_vrm_initialized);
     }
+}
+
+/// Rebuilds the animation graph whenever a VRM (re)attaches its rig.
+fn on_vrm_initialized(
+    trigger: On<Insert, Initialized>,
+    vrms: Query<(), With<Vrm>>,
+    mut commands: Commands,
+) {
+    let vrm = trigger.event_target();
+    if vrms.get(vrm).is_err() {
+        return;
+    }
+    commands.trigger(RequestUpdateAnimationGraph { vrm });
 }
 
 fn spawn_vrma(
@@ -83,21 +103,60 @@ fn spawn_vrma(
             vrm_error!("[VRMA] Not found animation clip for {name}");
             continue;
         };
+        let source_clip = VrmAnimationSourceClip(animation_clip_handle.clone());
         let animation_clip_handle = clip_assets.add(animation_clip);
         commands.entity(handle_entity).insert((
             Vrma,
             Name::new(name),
+            source_clip,
             VrmAnimationClipHandle(animation_clip_handle.clone()),
             WorldAssetRoot(scene_root),
             VrmaDuration(obtain_vrma_duration(&clip_assets, &vrma.gltf.animations)),
             VrmaPath(vrma_path),
-            VrmaExpressionNames::new(&extensions),
+            VrmaExpressionRegistry::new(&extensions, &node_assets, &vrma.gltf.nodes),
             HumanoidBoneRegistry::new(
                 &extensions.vrmc_vrm_animation.humanoid.human_bones,
                 &node_assets,
                 &vrma.gltf.nodes,
             ),
+            VrmaPlaybackState::default(),
         ));
+    }
+}
+
+/// Captures the source rig's rest pose, puts the bone markers and holders on
+/// it, and marks the VRMA [`Initialized`] once its bones spawn.
+fn request_initialize_vrma(
+    mut commands: Commands,
+    models: Query<(Entity, &HumanoidBoneRegistry), (With<Vrma>, Without<Initialized>)>,
+    transforms: Query<(&Transform, &GlobalTransform)>,
+    searcher: ChildSearcher,
+) {
+    for (root, registry) in models.iter() {
+        if !searcher.has_been_spawned_all_bones(root, registry) {
+            continue;
+        }
+        if let Ok((_, global)) = transforms.get(root) {
+            commands.entity(root).insert(RestWorldTransform(*global));
+        }
+        let mut bones = Vec::new();
+        for (bone, name) in registry.iter() {
+            let Some(entity) = searcher.find_from_name(root, name) else {
+                continue;
+            };
+            let Ok((tf, gtf)) = transforms.get(entity) else {
+                continue;
+            };
+            commands.entity(entity).insert((
+                bone.clone(),
+                RestTransform(*tf),
+                RestGlobalTransform(*gtf),
+                RetargetSource,
+            ));
+            bones.push((bone.clone(), entity));
+        }
+        insert_bone_holders(root, &mut commands, &bones);
+        commands.entity(root).insert(Initialized);
     }
 }
 
@@ -110,7 +169,9 @@ fn obtain_vrma_duration(
         .filter_map(|handle| assets.get(handle))
         .map(|clip| clip.duration() as f64)
         .fold(0., |v1, v2| v2.max(v1));
-    Duration::from_secs_f64(duration)
+    // A sampler timestamp is any finite float, so a clip can outlast what a
+    // `Duration` holds (about 1.8e19 s); `from_secs_f64` would panic on it.
+    Duration::try_from_secs_f64(duration).unwrap_or(Duration::MAX)
 }
 
 fn trigger_loaded(
@@ -147,6 +208,18 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct GraphRequests(Vec<Entity>);
+
+    /// A `.vrma` whose sampler holds a huge timestamp must not abort the app
+    /// while its duration is read, before the bake caps its sample count.
+    #[test]
+    fn a_huge_clip_duration_saturates_instead_of_panicking() {
+        let mut clips = Assets::<AnimationClip>::default();
+        let mut clip = AnimationClip::default();
+        clip.set_duration(f32::MAX);
+        let handle = clips.add(clip);
+
+        assert_eq!(obtain_vrma_duration(&clips, &[handle]), Duration::MAX);
+    }
 
     #[test]
     fn waits_for_unloaded_handles_and_requests_one_graph_per_model() {
@@ -197,5 +270,56 @@ mod tests {
         let requests = &app.world().resource::<GraphRequests>().0;
         assert_eq!(requests.len(), 2);
         assert_ne!(requests[0], requests[1]);
+    }
+
+    #[test]
+    fn a_vrma_is_initialized_and_its_rests_are_captured_once_its_bones_are_spawned() {
+        use crate::prelude::{Hips, HipsBoneEntity};
+        use crate::vrm::VrmBone;
+
+        let mut app = App::new();
+        app.add_systems(Update, request_initialize_vrma);
+        let registry =
+            HumanoidBoneRegistry::from_pairs([(VrmBone("hips".to_owned()), Name::new("hips"))]);
+        let vrma = app
+            .world_mut()
+            .spawn((
+                Vrma,
+                registry,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+
+        app.update();
+        assert!(app.world().get::<Initialized>(vrma).is_none());
+
+        let hips = app
+            .world_mut()
+            .spawn((
+                Name::new("hips"),
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                GlobalTransform::from_xyz(0.0, 1.0, 0.0),
+                ChildOf(vrma),
+            ))
+            .id();
+        app.update();
+        assert!(
+            app.world().get::<Initialized>(vrma).is_some(),
+            "with every bone spawned the VRMA is initialized and the graph can be built"
+        );
+        assert!(
+            app.world().get::<RestTransform>(hips).is_some()
+                && app.world().get::<RestGlobalTransform>(hips).is_some(),
+            "the source bone's rest pose is captured, or the retarget moves no curve"
+        );
+        assert_eq!(
+            app.world()
+                .get::<HipsBoneEntity>(vrma)
+                .map(|holder| holder.0),
+            Some(hips),
+            "the `.vrma` holds its bones, as a `.vrm` does"
+        );
+        assert!(app.world().get::<Hips>(hips).is_some());
     }
 }

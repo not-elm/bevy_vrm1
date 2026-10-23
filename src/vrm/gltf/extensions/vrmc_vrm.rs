@@ -20,6 +20,11 @@ pub struct VrmcVrm {
 pub struct Expressions {
     #[serde(default)]
     pub preset: HashMap<String, VrmPreset>,
+    /// Read leniently: a malformed custom expression is dropped on its own
+    /// instead of failing the whole `VRMC_vrm` parse, which would cost the
+    /// avatar every other extension it declares.
+    #[serde(default, deserialize_with = "lenient_map")]
+    pub custom: HashMap<String, VrmPreset>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -27,6 +32,12 @@ pub struct VrmPreset {
     /// If this value is `true`, `weight` value greater than 0.5 is 1.0, otherwise 0.0.
     #[serde(rename = "isBinary", default)]
     pub is_binary: bool,
+    #[serde(
+        rename = "materialColorBinds",
+        default,
+        deserialize_with = "lenient_vec"
+    )]
+    pub material_color_binds: Vec<MaterialColorBind>,
     #[serde(rename = "morphTargetBinds")]
     pub morph_target_binds: Option<Vec<MorphTargetBind>>,
     #[serde(rename = "overrideBlink", default = "default_override_type")]
@@ -35,6 +46,12 @@ pub struct VrmPreset {
     pub override_look_at: String,
     #[serde(rename = "overrideMouth", default = "default_override_type")]
     pub override_mouth: String,
+    #[serde(
+        rename = "textureTransformBinds",
+        default,
+        deserialize_with = "lenient_vec"
+    )]
+    pub texture_transform_binds: Vec<TextureTransformBind>,
 }
 
 fn default_override_type() -> String {
@@ -46,6 +63,60 @@ pub struct MorphTargetBind {
     pub index: usize,
     pub node: usize,
     pub weight: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MaterialColorBind {
+    pub material: usize,
+    #[serde(rename = "type")]
+    pub r#type: String,
+    #[serde(rename = "targetValue")]
+    pub target_value: [f32; 4],
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct TextureTransformBind {
+    pub material: usize,
+    #[serde(default)]
+    pub offset: [f32; 2],
+    #[serde(default = "default_uv_scale")]
+    pub scale: [f32; 2],
+}
+
+fn default_uv_scale() -> [f32; 2] {
+    [1.0, 1.0]
+}
+
+/// Reads a list, dropping the entries that do not deserialize. Anything that
+/// is not a list at all (a `null`, say) reads as an empty one.
+fn lenient_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let serde_json::Value::Array(values) = serde_json::Value::deserialize(deserializer)? else {
+        return Ok(Vec::new());
+    };
+    Ok(values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect())
+}
+
+/// Reads a map, dropping the entries that do not deserialize. Anything that is
+/// not a map at all reads as an empty one.
+fn lenient_map<'de, D, T>(deserializer: D) -> Result<HashMap<String, T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let serde_json::Value::Object(entries) = serde_json::Value::deserialize(deserializer)? else {
+        return Ok(HashMap::default());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(name, value)| Some((name, serde_json::from_value(value).ok()?)))
+        .collect())
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -184,7 +255,8 @@ mod tests {
     use crate::success;
     use crate::tests::TestResult;
     use crate::vrm::gltf::extensions::vrmc_vrm::{
-        FirstPersonFlag, LookAtProperties, LookAtType, MeshAnnotation, Meta, RangeMap, VrmPreset,
+        Expressions, FirstPersonFlag, LookAtProperties, LookAtType, MeshAnnotation, Meta, RangeMap,
+        TextureTransformBind, VrmPreset,
     };
 
     #[test]
@@ -216,6 +288,104 @@ mod tests {
 
         assert!(!meta.allow_redistribution);
         assert!(meta.authors.is_empty());
+        success!()
+    }
+
+    #[test]
+    fn expressions_model_the_color_and_texture_transform_binds() -> TestResult {
+        let expressions: Expressions = serde_json::from_str(
+            r#"{
+                "preset": {
+                    "happy": {
+                        "isBinary": true,
+                        "materialColorBinds": [
+                            {"material": 1, "type": "emissionColor", "targetValue": [1, 0, 0, 1]}
+                        ],
+                        "morphTargetBinds": [{"index": 0, "node": 2, "weight": 1}],
+                        "textureTransformBinds": [{"material": 1, "offset": [0.5, 0.5]}]
+                    }
+                },
+                "custom": {
+                    "Wave": {
+                        "materialColorBinds": [
+                            {"material": 3, "type": "outlineColor", "targetValue": [0, 0, 1, 1]}
+                        ]
+                    }
+                }
+            }"#,
+        )?;
+
+        let happy = &expressions.preset["happy"];
+        assert!(happy.is_binary);
+        assert_eq!(happy.material_color_binds.len(), 1);
+        assert_eq!(happy.material_color_binds[0].material, 1);
+        assert_eq!(happy.material_color_binds[0].r#type, "emissionColor");
+        assert_eq!(
+            happy.material_color_binds[0].target_value,
+            [1.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            happy.texture_transform_binds,
+            [TextureTransformBind {
+                material: 1,
+                offset: [0.5, 0.5],
+                scale: [1.0, 1.0],
+            }]
+        );
+
+        let wave = &expressions.custom["Wave"];
+        assert_eq!(wave.material_color_binds.len(), 1);
+        assert_eq!(wave.material_color_binds[0].r#type, "outlineColor");
+
+        success!()
+    }
+
+    /// `custom` and the two bind lists are parsed by this crate since v0.11.0; a
+    /// file that got one of them wrong used to load, because they were ignored,
+    /// and still has to.
+    #[test]
+    fn malformed_custom_expressions_and_null_bind_lists_are_tolerated() -> TestResult {
+        let expressions: Expressions = serde_json::from_str(
+            r#"{
+                "preset": {
+                    "happy": {
+                        "materialColorBinds": null,
+                        "textureTransformBinds": {},
+                        "morphTargetBinds": [{"index": 0, "node": 2, "weight": 1}]
+                    }
+                },
+                "custom": {
+                    "Broken": {"isBinary": null},
+                    "Wave": {"morphTargetBinds": [{"index": 1, "node": 2, "weight": 1}]}
+                }
+            }"#,
+        )?;
+
+        let happy = &expressions.preset["happy"];
+        assert!(happy.material_color_binds.is_empty());
+        assert!(happy.texture_transform_binds.is_empty());
+        assert!(!expressions.custom.contains_key("Broken"));
+        assert!(expressions.custom.contains_key("Wave"));
+        success!()
+    }
+
+    #[test]
+    fn malformed_bind_does_not_reject_the_whole_expression() -> TestResult {
+        let expressions: Expressions = serde_json::from_str(
+            r#"{
+                "preset": {
+                    "happy": {
+                        "materialColorBinds": [{"material": 1, "type": "color"}],
+                        "morphTargetBinds": [{"index": 0, "node": 2, "weight": 1}]
+                    }
+                }
+            }"#,
+        )?;
+
+        let happy = &expressions.preset["happy"];
+        assert!(happy.material_color_binds.is_empty());
+        assert_eq!(happy.morph_target_binds.as_ref().map(Vec::len), Some(1));
+
         success!()
     }
 

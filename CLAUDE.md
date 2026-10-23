@@ -68,23 +68,23 @@ The `VrmPlugin` is the main entry point that orchestrates sub-plugins:
 
 ```
 VrmPlugin
-├── VrmLoaderPlugin          (Asset loading: .vrm files)
-├── VrmInitializePlugin      (VRM spawning & initialization)
+├── VrmInstancePlugin        (VrmHandle spawning & root binding)
 ├── VrmSpringBonePlugin      (Spring physics)
 ├── VrmHumanoidBonePlugin    (Bone hierarchy mapping)
 ├── VrmExpressionPlugin      (Morph target expressions)
-├── VrmNodeConstraintPlugin  (VRMC_node_constraint support)
 ├── MtoonMaterialPlugin      (Shader & material rendering)
-└── LookAtPlugin             (Gaze control system)
+├── LookAtPlugin             (Gaze control system)
+└── VrmGltfPlugin            (.vrm loader & load-time extension handler)
 ```
 
+`VrmPlugin` also adds the internal `VrmGltfPlugin` (the `.vrm` loader and its extension handler, plus `VrmGltfRuntimePlugin` for node constraints), so `VrmPlugin` must be added after `DefaultPlugins`.
 VRMA (animation) is a separate plugin (`VrmaPlugin`) that works alongside VrmPlugin.
 
 ### VRM Asset Loading Pipeline
 
-1. **VrmHandle → VrmAsset**: User spawns entity with `VrmHandle`, loader creates `VrmAsset` from glTF
-2. **Asset → Components**: Extracts VRM extensions and creates registries (`VrmExpressionRegistry`, `HumanoidBoneRegistry`, etc.)
-3. **Delayed Initialization**: Waits for all bone entities to spawn, then triggers initialization events to wire up components
+1. **VrmHandle → Gltf**: User spawns entity with `VrmHandle`, `VrmLoader` loads the `.vrm` through Bevy's glTF loader
+2. **Extensions → Components**: `GltfExtensionHandler` hooks (`src/vrm/gltf/handler/`) parse the VRM extensions and write the VRM components into the scene asset while the file loads
+3. **Root Binding**: When the scene instance is ready, the root data is moved onto the `VrmHandle` entity and `Initialized` is inserted
 
 ### Critical System Execution Order (VrmSystemSets)
 
@@ -112,21 +112,19 @@ VrmSystemSets::DetermineRedraw (triggers RequestRedraw if needed)
 
 ### Key Architectural Patterns
 
-#### 1. Registry Pattern
-Metadata extracted from glTF extensions is stored in registry components (HashMap-based), allowing deferred binding when entities are spawned:
-- `HumanoidBoneRegistry`: Maps `VrmBone` names to glTF node entities
-- `VrmExpressionRegistry`: Maps expression names to morph target node info
-- `NodeConstraintRegistry`: Maps constraint sources to destination entities
+#### 1. Load-Time Resolution
+Metadata extracted from glTF extensions is resolved into components while the file loads, so nothing is bound by name at runtime:
+- `<Bone>BoneEntity` holders: Point from the VRM root to the humanoid bone entities
+- `ExpressionSettings` / `ExpressionMorphBinds`: Map expression names to morph target bindings
+- `VrmNodeConstraint` / `ConstraintExecutionOrder`: Bind constraint destinations to their sources
+
+`HumanoidBoneRegistry` remains only for the VRMA source rig.
 
 #### 2. RestTransform Baseline
 Systems use stored `RestTransform`/`RestGlobalTransform` (captured at initialization) as a baseline to compute deltas. This enables multiple systems to read the same base state without conflicts.
 
-#### 3. Event-Driven Initialization
-Uses Bevy observers to trigger initialization when conditions are met:
-- `RequestInitializeHumanoidBones`
-- `RequestInitializeSpringBone`
-- `RequestInitializeNodeConstraints`
-- `RequestInitializeExpressions`
+#### 3. Entity Remapping
+Components written into the scene asset are copied into each instance through reflection, so they must be registered with `register_type`, and any `Entity` field must be marked `#[entities]` (see `entity_component!` in `src/macros.rs`).
 
 #### 4. VRMA Retargeting
 VRMA maintains separate registries per skeleton and uses custom animation curves (`BoneRotationAnimationCurve`, `HipsTranslationAnimationCurve`) to retarget animations from VRMA skeleton to VRM skeleton.
@@ -135,7 +133,7 @@ VRMA maintains separate registries per skeleton and uses custom animation curves
 
 ### Node Constraint System
 
-Three constraint types (all run in parallel during `VrmSystemSets::Constraints`):
+Three constraint types (evaluated in `ConstraintExecutionOrder` by one pass during `VrmSystemSets::Constraints`):
 
 - **RotationConstraint**: Transfers entire local rotation from source to destination (use case: sub-arms)
 - **RollConstraint**: Transfers rotation around a specific axis only (use case: twist bones)
@@ -205,15 +203,14 @@ src/
 ├── system_set.rs           (VrmSystemSets enum)
 ├── system_param.rs         (Helper system params: ChildSearcher, ParentSearcher, etc.)
 ├── vrm/                    (VRM 1.0 implementation)
-│   ├── loader.rs           (VrmAsset loading)
-│   ├── initialize.rs       (VRM spawning logic)
-│   ├── expressions.rs      (Expression registry)
+│   ├── instance.rs         (VrmHandle spawning & root binding)
+│   ├── expressions.rs      (Expression triggers)
 │   ├── humanoid_bone.rs    (Bone mapping)
 │   ├── look_at.rs          (Gaze control)
 │   ├── spring_bone/        (Physics simulation)
-│   ├── node_constraint/    (Constraint types)
+│   ├── runtime.rs          (Node constraint evaluation)
 │   ├── mtoon/              (Shader implementation)
-│   └── gltf/               (glTF extension parsing)
+│   └── gltf/               (VrmGltfPlugin: glTF extension parsing & load-time handler)
 └── vrma/                   (VRMA animation implementation)
     ├── loader.rs           (VRMA asset loading)
     ├── initialize.rs       (VRMA scene setup)
@@ -230,5 +227,4 @@ src/
 
 1. **System Ordering**: When adding new VRM-related systems, always ensure they run in the correct `VrmSystemSets` and respect the specification order
 2. **Transform Propagation**: If a system modifies `Transform` and another system needs to read `GlobalTransform` in the same frame, manual propagation may be needed
-3. **Registry Dependencies**: Systems that need bone entities must run after `RequestInitializeHumanoidBones` completes
-4. **Changed Filters**: Constraint systems use `Changed<Transform>` filters for performance; ensure source transforms are actually marked as changed
+3. **Bone Dependencies**: Systems that need bone entities should read the `<Bone>BoneEntity` holders on the VRM root, which exist once `Initialized` is inserted

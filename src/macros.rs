@@ -106,7 +106,7 @@ macro_rules! entity_component {
             #[reflect(Component)]
             #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
             #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
-            pub struct $name(pub bevy::prelude::Entity);
+            pub struct $name(#[entities] pub bevy::prelude::Entity);
         };
     }
 

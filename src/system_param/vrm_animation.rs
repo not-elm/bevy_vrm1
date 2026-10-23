@@ -1,12 +1,11 @@
 use crate::prelude::ChildSearcher;
 use bevy::ecs::system::SystemParam;
-use bevy::prelude::{AnimationPlayer, Children, Entity, Query, Reflect};
+use bevy::prelude::{AnimationPlayer, Entity, Query, Reflect};
 
 #[derive(SystemParam)]
 pub struct VrmAnimation<'w, 's> {
     searcher: ChildSearcher<'w, 's>,
     players: Query<'w, 's, &'static AnimationPlayer>,
-    childrens: Query<'w, 's, &'static Children>,
 }
 
 impl VrmAnimation<'_, '_> {
@@ -41,21 +40,7 @@ impl VrmAnimation<'_, '_> {
         &self,
         vrm: Entity,
     ) -> bool {
-        let Some(expressions_root) = self.searcher.find_expressions_root(vrm) else {
-            return true;
-        };
-        let Ok(children) = self.childrens.get(expressions_root) else {
-            return true;
-        };
-        for expression in children {
-            if self
-                .players
-                .get(*expression)
-                .is_ok_and(|player| !player.all_finished())
-            {
-                return false;
-            }
-        }
-        true
+        // Expression curves are played by the root bone's player.
+        self.finished_humanoid_bones(vrm)
     }
 }

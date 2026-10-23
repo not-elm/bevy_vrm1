@@ -4,11 +4,11 @@ mod bone_rotation;
 mod bone_translation;
 pub(crate) mod expressions;
 mod play;
+mod properties;
 
 use crate::prelude::VrmSystemSets;
 use crate::vrma::RetargetSource;
 use crate::vrma::animation::animation_graph::VrmaAnimationGraphPlugin;
-use crate::vrma::animation::expressions::VrmaRetargetExpressionsPlugin;
 use crate::vrma::animation::play::VrmaAnimationPlayPlugin;
 use bevy::app::App;
 use bevy::prelude::*;
@@ -18,6 +18,12 @@ pub mod prelude {
     pub use crate::vrma::animation::{
         VrmaAnimationPlayers,
         play::{PlayVrma, StopVrma},
+        properties::{
+            EffectiveExpressionWeights, ExpressionMorphBinds, ExpressionOverrides,
+            ExpressionSetting, ExpressionSettings, ExpressionWeightProperty, MorphBind,
+            MorphBindTable, VRM_ROOT_TARGET_NAME, VrmExpressionIndex, VrmExpressionWeights,
+            apply_expression_morph_binds, vrm_root_animation_target,
+        },
     };
 }
 
@@ -29,11 +35,7 @@ impl Plugin for VrmaAnimationPlayersPlugin {
         app: &mut App,
     ) {
         app.register_type::<VrmaAnimationPlayers>()
-            .add_plugins((
-                VrmaAnimationGraphPlugin,
-                VrmaAnimationPlayPlugin,
-                VrmaRetargetExpressionsPlugin,
-            ))
+            .add_plugins((VrmaAnimationGraphPlugin, VrmaAnimationPlayPlugin))
             .add_systems(
                 PostUpdate,
                 request_redraw

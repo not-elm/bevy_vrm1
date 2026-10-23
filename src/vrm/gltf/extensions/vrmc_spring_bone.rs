@@ -34,7 +34,8 @@ impl VRMCSpringBone {
     ) -> Vec<Collider> {
         collider_group_indices
             .iter()
-            .flat_map(|index| self.collider_groups[*index].colliders.clone())
+            .filter_map(|index| self.collider_groups.get(*index))
+            .flat_map(|group| group.colliders.clone())
             .flat_map(|index| self.colliders.get(index as usize).cloned())
             .collect()
     }
@@ -61,6 +62,7 @@ pub struct Collider {
 #[derive(Serialize, Deserialize)]
 pub struct Spring {
     /// Spring name
+    #[serde(default)]
     pub name: String,
 
     /// The list of joints that make up the springBone.
@@ -77,15 +79,36 @@ pub struct Spring {
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 pub struct SpringJoint {
     pub node: usize,
-    #[serde(rename = "dragForce")]
+    #[serde(rename = "dragForce", default = "default_drag_force")]
     pub drag_force: Option<f32>,
-    #[serde(rename = "gravityDir")]
+    #[serde(rename = "gravityDir", default = "default_gravity_dir")]
     pub gravity_dir: Option<[f32; 3]>,
-    #[serde(rename = "gravityPower")]
+    #[serde(rename = "gravityPower", default = "default_gravity_power")]
     pub gravity_power: Option<f32>,
-    #[serde(rename = "hitRadius")]
+    #[serde(rename = "hitRadius", default = "default_hit_radius")]
     pub hit_radius: Option<f32>,
+    #[serde(default = "default_stiffness")]
     pub stiffness: Option<f32>,
+}
+
+fn default_drag_force() -> Option<f32> {
+    Some(0.5)
+}
+
+fn default_gravity_dir() -> Option<[f32; 3]> {
+    Some([0.0, -1.0, 0.0])
+}
+
+fn default_gravity_power() -> Option<f32> {
+    Some(0.0)
+}
+
+fn default_hit_radius() -> Option<f32> {
+    Some(0.0)
+}
+
+fn default_stiffness() -> Option<f32> {
+    Some(1.0)
 }
 
 /// The shape of the collision detection for [Collider]
@@ -145,6 +168,7 @@ impl ColliderShape {
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Component, Reflect, Default)]
 #[reflect(Component, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Sphere {
     /// Local coordinate of the sphere center
     pub offset: [f32; 3],
@@ -155,6 +179,7 @@ pub struct Sphere {
 /// 楕円形の
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Component, Reflect, Default)]
 #[reflect(Component, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Capsule {
     /// Local coordinate of the center of the half sphere at the start point of the capsule
     pub offset: [f32; 3],
@@ -168,7 +193,9 @@ pub struct Capsule {
 mod tests {
     use crate::success;
     use crate::tests::TestResult;
-    use crate::vrm::gltf::extensions::vrmc_spring_bone::VRMCSpringBone;
+    use crate::vrm::gltf::extensions::vrmc_spring_bone::{
+        Capsule, ColliderShape, Sphere, VRMCSpringBone,
+    };
 
     #[test]
     fn deserialize_vrmc_spring_bone() -> TestResult {
@@ -197,5 +224,72 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<VRMCSpringBone>(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn spring_joint_takes_the_specification_defaults_for_omitted_properties() -> TestResult {
+        let spring_bone: VRMCSpringBone =
+            serde_json::from_str(r#"{"specVersion":"1.0","springs":[{"joints":[{"node":3}]}]}"#)?;
+        let joint = &spring_bone.springs[0].joints[0];
+
+        assert_eq!(joint.node, 3);
+        assert_eq!(joint.drag_force, Some(0.5));
+        assert_eq!(joint.gravity_dir, Some([0.0, -1.0, 0.0]));
+        assert_eq!(joint.gravity_power, Some(0.0));
+        assert_eq!(joint.hit_radius, Some(0.0));
+        assert_eq!(joint.stiffness, Some(1.0));
+
+        success!()
+    }
+
+    #[test]
+    fn spring_joint_keeps_the_values_of_a_partially_specified_joint() -> TestResult {
+        let spring_bone: VRMCSpringBone = serde_json::from_str(
+            r#"{"specVersion":"1.0","springs":[{"joints":[{"node":3,"stiffness":0.75}]}]}"#,
+        )?;
+        let joint = &spring_bone.springs[0].joints[0];
+
+        assert_eq!(joint.stiffness, Some(0.75));
+        assert_eq!(joint.drag_force, Some(0.5));
+        assert_eq!(joint.gravity_dir, Some([0.0, -1.0, 0.0]));
+        assert_eq!(joint.gravity_power, Some(0.0));
+        assert_eq!(joint.hit_radius, Some(0.0));
+
+        success!()
+    }
+
+    #[test]
+    fn spring_takes_the_specification_defaults_for_omitted_properties() -> TestResult {
+        let spring_bone: VRMCSpringBone =
+            serde_json::from_str(r#"{"specVersion":"1.0","springs":[{"joints":[{"node":3}]}]}"#)?;
+        let spring = &spring_bone.springs[0];
+
+        assert_eq!(spring.name, "");
+        assert!(spring.collider_groups.is_none());
+        assert!(spring.center.is_none());
+
+        success!()
+    }
+
+    #[test]
+    fn collider_shape_takes_the_specification_defaults_for_omitted_properties() -> TestResult {
+        let sphere: ColliderShape = serde_json::from_str(r#"{"sphere":{}}"#)?;
+        assert_eq!(sphere, ColliderShape::Sphere(Sphere::default()));
+        assert_eq!(sphere.radius(), 0.0);
+
+        let capsule: ColliderShape = serde_json::from_str(r#"{"capsule":{}}"#)?;
+        assert_eq!(capsule, ColliderShape::Capsule(Capsule::default()));
+        assert_eq!(capsule.radius(), 0.0);
+
+        let offset: ColliderShape = serde_json::from_str(r#"{"sphere":{"radius":0.5}}"#)?;
+        assert_eq!(
+            offset,
+            ColliderShape::Sphere(Sphere {
+                offset: [0.0; 3],
+                radius: 0.5
+            })
+        );
+
+        success!()
     }
 }

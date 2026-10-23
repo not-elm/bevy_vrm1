@@ -1,6 +1,7 @@
 //! - [`look at specification(en)`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md)
 //! - [`look at specification(ja)`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.ja.md)
 
+use crate::error::vrm_warn;
 use crate::prelude::*;
 use crate::system_set::VrmSystemSets;
 use bevy::app::{App, Plugin};
@@ -120,7 +121,9 @@ pub(crate) fn track_looking_target(
                     );
                 }
                 LookAtType::Expression => {
-                    todo!("Expression look at is not supported yet");
+                    bevy::utils::once!(vrm_warn!(
+                        "Expression look at is not supported yet, skipping gaze control"
+                    ));
                 }
             }
         });
@@ -324,4 +327,66 @@ fn to_eye_rotation(
     (rest_tf.rotation * rest_gtf.rotation().inverse())
         * Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), pitch.to_radians(), 0.0)
         * rest_gtf.rotation()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::success;
+    use crate::tests::{TestResult, test_app};
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn expression_properties() -> LookAtProperties {
+        let range = RangeMap {
+            input_max_value: 90.0,
+            output_scale: 15.0,
+        };
+        LookAtProperties {
+            offset_from_head_bone: [0.0, 0.0, 0.0],
+            range_map_horizontal_inner: range,
+            range_map_horizontal_outer: range,
+            range_map_vertical_down: range,
+            range_map_vertical_up: range,
+            r#type: LookAtType::Expression,
+        }
+    }
+
+    #[test]
+    fn expression_look_at_leaves_the_eyes_untouched() -> TestResult {
+        let mut app = test_app();
+
+        let target = app
+            .world_mut()
+            .spawn(GlobalTransform::from_xyz(0.0, 1.3, 1.0))
+            .id();
+        let head = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                GlobalTransform::from_xyz(0.0, 1.4, 0.0),
+            ))
+            .id();
+        let eyes = app
+            .world_mut()
+            .spawn((Transform::default(), GlobalTransform::IDENTITY))
+            .id();
+        app.world_mut().spawn((
+            LookAt::Target(target),
+            expression_properties(),
+            HeadBoneEntity(head),
+            LeftEyeBoneEntity(eyes),
+            RightEyeBoneEntity(eyes),
+        ));
+
+        app.world_mut()
+            .run_system_once(track_looking_target)
+            .expect("Failed to run system");
+        app.world_mut().flush();
+
+        assert_eq!(
+            *app.world().get::<Transform>(eyes).unwrap(),
+            Transform::default()
+        );
+        success!()
+    }
 }

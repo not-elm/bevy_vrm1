@@ -2,7 +2,7 @@ pub mod vrmc_node_constraint;
 pub mod vrmc_spring_bone;
 pub mod vrmc_vrm;
 
-use crate::error::AppResult;
+use crate::error::{AppResult, vrm_warn};
 use crate::vrm::gltf::extensions::vrmc_spring_bone::VRMCSpringBone;
 use crate::vrm::gltf::extensions::vrmc_vrm::VrmcVrm;
 use anyhow::Context;
@@ -22,9 +22,17 @@ impl VrmExtensions {
     pub fn new(json: &serde_json::map::Map<String, serde_json::Value>) -> AppResult<Self> {
         Ok(Self {
             vrmc_vrm: serde_json::from_value(obtain_vrmc_vrm(json)?)?,
-            vrmc_spring_bone: obtain_vrmc_springs(json)
-                .ok()
-                .map(|v| serde_json::from_value(v).unwrap()),
+            vrmc_spring_bone: obtain_vrmc_springs(json).ok().and_then(|value| {
+                match serde_json::from_value(value) {
+                    Ok(spring_bone) => Some(spring_bone),
+                    Err(error) => {
+                        vrm_warn!(
+                            "Failed to parse VRMC_springBone, skipping spring bones: {error}"
+                        );
+                        None
+                    }
+                }
+            }),
         })
     }
 

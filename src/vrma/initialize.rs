@@ -169,8 +169,6 @@ fn obtain_vrma_duration(
         .filter_map(|handle| assets.get(handle))
         .map(|clip| clip.duration() as f64)
         .fold(0., |v1, v2| v2.max(v1));
-    // A sampler timestamp is any finite float, so a clip can outlast what a
-    // `Duration` holds (about 1.8e19 s); `from_secs_f64` would panic on it.
     Duration::try_from_secs_f64(duration).unwrap_or(Duration::MAX)
 }
 

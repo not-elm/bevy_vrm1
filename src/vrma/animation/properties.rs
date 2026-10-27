@@ -317,7 +317,6 @@ pub fn apply_expression_morph_binds(
 ) {
     for (weights, overrides, binds, settings, effective) in roots.iter_mut() {
         let overrides = overrides.map(|overrides| &overrides.0);
-        // A user-set weight wins over the animated one.
         let raw = |name: &str| {
             overrides
                 .and_then(|overrides| overrides.get(name))
@@ -326,7 +325,6 @@ pub fn apply_expression_morph_binds(
                 .unwrap_or(0.0)
         };
 
-        // Pass 1: output weights, and the accumulated per-category rates.
         let mut outputs: HashMap<&str, f32> = HashMap::default();
         for (name, setting) in settings.0.iter() {
             outputs.insert(
@@ -334,8 +332,6 @@ pub fn apply_expression_morph_binds(
                 expression_output_weight(raw(name.as_str()), setting.is_binary),
             );
         }
-        // A weight without a setting (should not happen for a well-formed
-        // model) still animates, unsuppressed and non-binary.
         let overridden = overrides.into_iter().flat_map(|overrides| overrides.keys());
         for name in weights.0.keys().chain(overridden) {
             outputs
@@ -346,10 +342,6 @@ pub fn apply_expression_morph_binds(
             outputs.get(name).copied().unwrap_or(0.0)
         });
 
-        // The final weight per expression: what the bound morphs receive. A
-        // *binary* expression whose multiplier is below `1.0` is fully
-        // suppressed (`0.0`), because a suppressed blink must not end up
-        // half-closed.
         let finals: HashMap<_, f32> = outputs
             .iter()
             .map(|(name, output)| {
@@ -373,7 +365,6 @@ pub fn apply_expression_morph_binds(
                 .collect();
         }
 
-        // Pass 2: reset every mesh a bind points at.
         let mut touched: Vec<Entity> = binds.0.values().flatten().map(|bind| bind.target).collect();
         touched.sort_unstable();
         touched.dedup();
@@ -385,7 +376,6 @@ pub fn apply_expression_morph_binds(
             }
         }
 
-        // Pass 3: accumulate the weighted contributions.
         for (name, bind_list) in binds.0.iter() {
             let Some(weight) = finals.get(name.as_str()).copied() else {
                 continue;
@@ -534,7 +524,6 @@ mod tests {
 
     #[test]
     fn bind_weight_is_applied() {
-        // 0.8 * 0.5
         let model = run(
             1,
             &[("happy", 0.8)],
@@ -571,7 +560,6 @@ mod tests {
 
         assert_close(model.weights()[0], 0.0);
         assert_close(model.final_weight("happy"), 0.0);
-        // An expression without an override keeps its animated weight.
         assert_close(model.weights()[1], 0.5);
     }
 
@@ -617,9 +605,7 @@ mod tests {
                 ("aa", setting(ExpressionCategory::Mouth, false)),
             ],
         );
-        // `happy` is `Other`, so it is unaffected.
         assert_close(model.weights()[0], 1.0);
-        // `aa` is `Mouth`, and `block` drives the mouth rate to 1.
         assert_close(model.weights()[1], 0.0);
     }
 
@@ -635,7 +621,6 @@ mod tests {
             ],
         );
         assert_close(model.weights()[0], 0.6);
-        // mouth rate 0.6, so mouth multiplier is 1 - 0.6.
         assert_close(model.weights()[1], 0.4);
     }
 
@@ -655,14 +640,11 @@ mod tests {
         );
         assert_close(model.weights()[0], 0.5);
         assert_close(model.weights()[1], 0.5);
-        // 0.5 + 0.5 = 1.0 -> multiplier 0.0. Per-target factors would leave
-        // (1 - 0.5) * (1 - 0.5) = 0.25 here.
         assert_close(model.weights()[2], 0.0);
     }
 
     #[test]
     fn accumulated_rates_are_clamped_to_one() {
-        // `a`, `b` and `c` each blend-override blink; `blink` is the target.
         const BINDS: [(&str, &[(usize, f32)]); 4] = [
             ("a", &[(0, 1.0)]),
             ("b", &[(1, 1.0)]),
@@ -673,15 +655,11 @@ mod tests {
             ("a", blending(ExpressionCategory::Other)),
             ("b", blending(ExpressionCategory::Other)),
             ("c", blending(ExpressionCategory::Other)),
-            // `blink` overrides nothing itself.
             ("blink", setting(ExpressionCategory::Blink, false)),
         ];
-        // Output weights are 0.0, 1.0 and 1.0 (`c`'s raw 2.0 is clamped), so the
-        // blink rate sums to 2.0 and is clamped to 1.0 -> multiplier 0.0.
         let weights = [("a", 0.0), ("b", 1.0), ("c", 2.0), ("blink", 1.0)];
         let model = run(4, &weights, &BINDS, &overrides);
         assert_close(model.weights()[3], 0.0);
-        // The overriding expressions are `Other`, so they are not suppressed.
         assert_close(model.weights()[0], 0.0);
         assert_close(model.weights()[1], 1.0);
         assert_close(model.weights()[2], 1.0);
@@ -715,7 +693,6 @@ mod tests {
             ],
         );
         assert_close(model.weights()[0], 0.3);
-        // blink multiplier is 0.7 < 1.0, and `blink` is binary.
         assert_close(model.weights()[1], 0.0);
     }
 
@@ -777,7 +754,6 @@ mod tests {
 
     #[test]
     fn each_name_gets_its_own_evaluator_id() {
-        // `EvaluatorId` has no `Debug`, so compare the pre-hashed key it wraps.
         fn key(property: &ExpressionWeightProperty) -> u64 {
             match property.evaluator_id() {
                 EvaluatorId::ComponentField(key) => key.hash(),
@@ -827,7 +803,6 @@ mod tests {
                 weight: 1.0,
             }],
         )]));
-        // `(Entity, Entity)` is a bevy `EntityMapper`.
         table.map_entities(&mut (source, target));
         assert_eq!(table.0["happy"][0].target, target);
     }
@@ -888,7 +863,6 @@ mod tests {
                 ("blink", setting(ExpressionCategory::Blink, true)),
             ],
         );
-        // `aa` is throttled; `blink` is a suppressed binary expression.
         assert_close(model.weights()[0], 0.0);
         assert_close(model.final_weight("aa"), 0.0);
         assert_close(model.final_weight("blink"), 0.0);

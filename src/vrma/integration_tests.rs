@@ -155,10 +155,6 @@ fn e2e_app() -> App {
     .init_resource::<WorldInstanceSpawner>()
     .init_resource::<LoadedVrmas>()
     .init_resource::<ProbeLog>()
-    // The scene spawner drops any component whose reflected type is not
-    // registered, and panics on one it cannot find, so the fixture inventory is
-    // registered up front. (`VrmSceneRoot` and `VrmHandle` are registered by
-    // `VrmInstancePlugin`.)
     .register_type::<Vrm>()
     .register_type::<Initialized>()
     .register_type::<VrmPath>()
@@ -189,7 +185,6 @@ fn e2e_app() -> App {
             .chain()
             .in_set(SceneSpawnerSystems::WorldInstanceSpawn),
     )
-    // After `animate_targets` wrote the pose this frame, before propagation.
     .add_systems(PostUpdate, record_probe.after(AnimationSystems))
     .add_observer(|event: On<LoadedVrma>, mut loads: ResMut<LoadedVrmas>| {
         loads.0.push(event.vrma);
@@ -727,7 +722,6 @@ fn a_preserved_vrma_rebakes_before_the_attach_frame_is_evaluated() -> TestResult
 
     let owner = spawn_owner(&mut app, a.gltf.clone());
     let vrma = add_vrma(&mut app, owner, source_prefix, angle, active_playback());
-    // A second, independent avatar sharing model A: it must survive the swap.
     let bystander = spawn_owner(&mut app, a.gltf.clone());
     let bystander_vrma = add_vrma(&mut app, bystander, source_prefix, 0.9, active_playback());
 
@@ -740,7 +734,6 @@ fn a_preserved_vrma_rebakes_before_the_attach_frame_is_evaluated() -> TestResult
     let first_working = working_handle(&app, vrma.entity);
     let bystander_working = working_handle(&app, bystander_vrma.entity);
 
-    // A first-time graph threads one frame late; the pose must still be A's.
     wait_first_evaluation(&mut app, owner, angle, rest_a, "A");
     wait_first_evaluation(
         &mut app,
@@ -750,8 +743,6 @@ fn a_preserved_vrma_rebakes_before_the_attach_frame_is_evaluated() -> TestResult
         "bystander before the swap",
     );
 
-    // A -> a plain, non-VRM scene: the rig is invalidated but the generation and
-    // the `.vrma` entity survive.
     set_handle(&mut app, owner, plain);
     run_frames(&mut app, 6);
     assert!(app.world().get::<Vrm>(owner).is_none());
@@ -766,8 +757,6 @@ fn a_preserved_vrma_rebakes_before_the_attach_frame_is_evaluated() -> TestResult
         "the vrma persists"
     );
 
-    // plain -> B, a different rest pose. The production `Insert<Initialized>`
-    // observer drives the graph rebuild; nothing is triggered by hand.
     watch(&mut app, owner, vrma.entity);
     set_handle(&mut app, owner, b.gltf.clone());
     let mut attach_frame = None;
@@ -813,8 +802,6 @@ fn a_preserved_vrma_rebakes_before_the_attach_frame_is_evaluated() -> TestResult
     );
     assert_spine_pose(&app, owner, angle, rest_b, "post-B");
 
-    // The bystander is a separate instance of model A: neither its baked clip
-    // nor its evaluated pose may move.
     assert_eq!(
         bystander_working,
         working_handle(&app, bystander_vrma.entity),
@@ -852,15 +839,12 @@ fn a_hot_reload_restores_the_live_animation_and_transitions_exactly() -> TestRes
     wait_ready(&mut app, owner);
     run_frames(&mut app, 3);
 
-    // Start the clip through the production event, with a real fade.
     play_vrma(&mut app, vrma.entity, Duration::from_millis(100));
     run_frames(&mut app, 6);
 
     let node = node_index(&app, vrma.entity);
     let root_bone = root_bone_of(&app, owner);
     let first_root = scene_root_of(&app, owner);
-    // Compose a live state with progress no setter can reach: a completion, a
-    // seek offset, a speed and a repeat mode.
     {
         let mut entity = app.world_mut().entity_mut(root_bone);
         let mut player = entity
@@ -873,8 +857,6 @@ fn a_hot_reload_restores_the_live_animation_and_transitions_exactly() -> TestRes
             .set_speed(2.0)
             .set_repeat(RepeatAnimation::Count(3));
     }
-    // `Time<Virtual>` clamps a frame delta to 0.25 s (its default max), so the
-    // completion is accumulated across frames rather than in one large step.
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(
         0.25,
     )));
@@ -890,8 +872,6 @@ fn a_hot_reload_restores_the_live_animation_and_transitions_exactly() -> TestRes
         completions >= 1,
         "the live clip must accumulate a completion before the reload"
     );
-    // Freeze a rich, deterministic state so the snapshot is stable across the
-    // reload-detection frames.
     app.world_mut()
         .entity_mut(root_bone)
         .get_mut::<AnimationPlayer>()
@@ -913,7 +893,6 @@ fn a_hot_reload_restores_the_live_animation_and_transitions_exactly() -> TestRes
         "the snapshot keeps the live transitions"
     );
 
-    // Hot reload the same asset with a new rest pose.
     set_asset_spine_rest(&mut app, &scene.asset, scene.spine, rest_b, prefix);
 
     let mut reloaded_frame = None;
@@ -1000,8 +979,6 @@ fn a_faded_out_clip_is_not_resurrected_by_a_reload() -> TestResult {
     let fading_node = node_index(&app, fading.entity);
     let staying_node = node_index(&app, staying.entity);
 
-    // Play `fading`, then cross-fade to `staying`: the fade-out removes
-    // `fading` from the player entirely.
     play_vrma(&mut app, fading.entity, Duration::ZERO);
     run_frames(&mut app, 3);
     play_vrma(&mut app, staying.entity, Duration::from_millis(300));
@@ -1023,7 +1000,6 @@ fn a_faded_out_clip_is_not_resurrected_by_a_reload() -> TestResult {
     assert!(!faded.active, "a clip that left the player is inactive");
     assert!(faded.animation.is_none(), "and carries no live animation");
 
-    // Reload: the stopped clip must stay stopped.
     set_asset_spine_rest(&mut app, &scene.asset, scene.spine, rest_b, prefix);
     let mut reloaded = false;
     for _ in 0..12 {
@@ -1073,7 +1049,6 @@ fn a_duplicate_ready_is_inert_and_a_managed_detach_removes_the_vrma() -> TestRes
     );
     let working = working_handle(&app, vrma.entity);
 
-    // A duplicate ready must not attach a second time, re-bake or re-clone.
     let instance_id = **app
         .world()
         .get::<WorldInstance>(owner)
@@ -1095,7 +1070,6 @@ fn a_duplicate_ready_is_inert_and_a_managed_detach_removes_the_vrma() -> TestRes
     );
     assert_eq!(generation(&app, owner), Some(1));
 
-    // Detach the managed avatar: the rig and every child go, the entity stays.
     let rig_root = scene_root_of(&app, owner);
     app.world_mut()
         .commands()

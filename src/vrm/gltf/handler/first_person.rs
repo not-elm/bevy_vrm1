@@ -80,8 +80,6 @@ pub(crate) fn process_primitive(
     buffer_data: &[Vec<u8>],
     user_mesh: &mut Option<Mesh>,
 ) {
-    // An unannotated mesh is `auto`, so only the head subtree can stop the work
-    // here: without it every mesh stays `both`.
     if state.head_subtree.is_empty() {
         return;
     }
@@ -103,37 +101,20 @@ pub(crate) fn process_primitive(
     if class != AutoClass::Split {
         return;
     }
-    // The halves would be rebuilt from the raw accessors, which a mesh-rotating
-    // load leaves 180° off their converted bind poses
-    // (`VrmLoadState::rotate_meshes`): the primitive stays whole, visible in both
-    // views, the conservative direction as below.
     if state.rotate_meshes {
         state.first_person.classes.insert(key, AutoClass::Both);
         return;
     }
 
     let Some(parts) = split(state, gltf_document, gltf_mesh, gltf_primitive, buffer_data) else {
-        // The classification was `Split` but the geometry could not be divided.
-        // Falling back to `Both` keeps the face visible in both views, which is
-        // the conservative direction: hiding geometry that turns out to be the
-        // body would make an avatar lose its torso.
         state.first_person.classes.insert(key, AutoClass::Both);
         return;
     };
     let (body, head) = parts;
 
-    // `classify` decides per *vertex*, but `build_submesh` sends a whole triangle
-    // to the head as soon as any of its vertices is a head vertex. The two can
-    // disagree and leave one half empty. An empty mesh must never be added as an
-    // asset: bevy's mesh allocator extracts it, skips the zero-length allocation,
-    // then tries to copy into the missing slot and logs a use-after-free
-    // (`bevy_render::slab_allocator`).
     let body_vertices = body.count_vertices();
     let head_vertices = head.count_vertices();
     if body_vertices == 0 || head_vertices == 0 {
-        // Keep bevy's own mesh and classify the primitive as a whole: no head
-        // triangle means it is visible in both views, no body triangle means it
-        // is head-only.
         let class = if head_vertices == 0 {
             AutoClass::Both
         } else {
@@ -143,7 +124,6 @@ pub(crate) fn process_primitive(
         return;
     }
 
-    // The body half replaces the primitive bevy is about to build.
     *user_mesh = Some(body);
 
     let label = format!("Mesh{}/Primitive{}/VrmHeadOnly", key.0, key.1);
@@ -193,9 +173,6 @@ fn auto_meshes(
                 .map(move |child| (child.index(), node.index()))
         })
         .collect();
-    // A cyclic node hierarchy makes `bevy_gltf` fail the load (`check_for_cycles`),
-    // but this runs *before* that check, so the ancestor walk is bounded by the
-    // node count instead of trusting the document, as in `root.rs`.
     let max_depth = document.nodes().len();
     document
         .nodes()
@@ -368,10 +345,6 @@ fn split(
 
     let reader = gltf_primitive.reader(|buffer| buffer_data.get(buffer.index()).map(Vec::as_slice));
     let positions: Vec<[f32; 3]> = reader.read_positions()?.collect();
-    // `bevy_gltf` computes flat normals for a primitive without `NORMAL` by
-    // duplicating its vertices, which it would do to the body half only (it is
-    // handed back as `user_mesh`) and never to the head half, so the two halves
-    // would shade differently. Such a primitive is left unsplit.
     let normals: Vec<[f32; 3]> = reader.read_normals()?.collect();
     let tex_coords_0: Option<Vec<[f32; 2]>> =
         reader.read_tex_coords(0).map(|uv| uv.into_f32().collect());
@@ -385,7 +358,6 @@ fn split(
         Some(read) => read.into_u32().collect(),
         None => (0..positions.len() as u32).collect(),
     };
-    // Morph deltas are per-vertex, exactly like the base attributes.
     let morph_targets: Vec<_> = reader
         .read_morph_targets()
         .map(|(positions, normals, tangents)| {
@@ -418,7 +390,6 @@ fn split(
     let mut body = build_submesh(&data, false)?;
     let mut head = build_submesh(&data, true)?;
 
-    // What `bevy_gltf` does for the meshes it builds itself.
     if !data.morph_targets.is_empty()
         && let Some(names) = gltf_mesh
             .extras()
@@ -428,11 +399,6 @@ fn split(
         body.set_morph_target_names(names.target_names.clone());
         head.set_morph_target_names(names.target_names);
     }
-    // `bevy_gltf` generates the tangents and the skinned bounds for the body
-    // half, which it receives as `user_mesh`, but never sees the head half.
-    // Without tangents a normal-mapped material loses its normal map on the
-    // head part only; without the bounds the copy's `Aabb` stays at the bind
-    // pose.
     if !head.contains_attribute(Mesh::ATTRIBUTE_TANGENT)
         && gltf_primitive.material().normal_texture().is_some()
         && let Err(error) = head.generate_tangents()
@@ -518,17 +484,10 @@ fn build_submesh(
     data: &PrimitiveData<'_>,
     keep_head: bool,
 ) -> Option<Mesh> {
-    // Triangles are consumed three at a time, which is only the meaning of the
-    // index list for a triangle *list*. A strip shares vertices between
-    // consecutive triangles, and lines and points have no triangles at all, so
-    // chopping them into triples would invent and drop geometry: they are not
-    // divided.
     if data.topology != PrimitiveTopology::TriangleList || !data.indices.len().is_multiple_of(3) {
         return None;
     }
 
-    // Source vertex -> destination vertex, and the source indices in output
-    // order (needed to rebuild the per-vertex morph deltas).
     let mut remap: HashMap<u32, u32> = HashMap::default();
     let mut sources: Vec<usize> = Vec::new();
     let mut positions = Vec::new();
@@ -556,9 +515,6 @@ fn build_submesh(
                 indices.push(mapped);
                 continue;
             }
-            // A vertex index with no position - or a shorter attribute array than
-            // the position one - is a malformed accessor. The whole split is
-            // refused rather than half-applied.
             let compacted = compact_vertex(data, index, &mut sources, &mut remap)?;
             positions.push(compacted.position);
             if let Some(value) = compacted.normals {
@@ -609,11 +565,6 @@ fn build_submesh(
     }
 
     if !data.morph_targets.is_empty() {
-        // The morph buffer is weight-major:
-        // `morph_targets[target * vertex_count + vertex]`
-        // (`crates/bevy_pbr/src/render/morph.wgsl`, `get_morph_target`), which
-        // is the order `bevy_gltf` produces by walking the vertices of one
-        // target at a time (`crates/bevy_gltf/src/loader/mod.rs`).
         let vertex_count = sources.len();
         let mut rebuilt = Vec::with_capacity(data.morph_targets.len() * vertex_count);
         for (position, normal, tangent) in &data.morph_targets {
@@ -770,8 +721,6 @@ mod tests {
                     "`{attribute:?}` is carried over"
                 );
             }
-            // The morph buffer is weight-major and one entry per vertex, so one
-            // target over three vertices is three entries.
             let targets = mesh
                 .morph_targets()
                 .expect("the morph targets are carried over");
@@ -781,7 +730,6 @@ mod tests {
             assert_eq!(targets[0].tangent, Vec3::ZERO);
         }
 
-        // The joint weights decide which half a triangle belongs to.
         assert_eq!(first_joint(&body), 0);
         assert_eq!(first_joint(&head), 1);
         success!()
@@ -828,15 +776,12 @@ mod tests {
     fn an_index_list_that_is_not_triangles_refuses_the_split() -> TestResult {
         let mut fixture = Fixture::new();
         let mut data = fixture.primitive();
-        // A borrow-safe copy is not needed: the fixture outlives `data`, so only
-        // the index list is replaced.
         let fixture2 = Fixture::new();
         let mut data2 = fixture2.primitive();
         data2.indices = vec![0, 1];
         drop(data);
 
         assert!(build_submesh(&data2, false).is_none());
-        // The fixture is still usable, so the test does not leak a borrow.
         assert_eq!(fixture.morph_targets.len(), 1);
         success!()
     }
@@ -1016,8 +961,6 @@ mod tests {
     #[test]
     fn a_neck_dominant_vertex_stays_visible() -> TestResult {
         let head_slots: HashSet<u16> = [1u16].into_iter().collect();
-        // Slot 1 is the head joint, slot 0 the neck. v0 is the throat (0.3 head
-        // / 0.7 neck), v1 the jaw (0.8 head / 0.2 neck).
         let joints = [[1, 0, 0, 0], [1, 0, 0, 0]];
         let weights = [[0.3, 0.7, 0.0, 0.0], [0.8, 0.2, 0.0, 0.0]];
         assert_eq!(

@@ -275,7 +275,6 @@ fn track_body_tracking(
     for (root_entity, look_at, properties, tracking, head, neck, chest, spine, mut smoothed) in
         vrms.iter_mut()
     {
-        // 1. Build stable LookAt space from the rest pose in the owner's frame.
         let Ok((&head_tf, &head_gtf)) = transforms.get(head.0) else {
             continue;
         };
@@ -286,9 +285,6 @@ fn track_body_tracking(
             continue;
         };
 
-        // The rest pose is relative to the entity that owns the scene. A managed
-        // root is that entity; a raw spawn's root is the scene root below it,
-        // whose own rest is divided out.
         let root_rest_rot = rests
             .get(root_entity)
             .map_or(Quat::IDENTITY, |(_, rest)| rest.rotation());
@@ -484,7 +480,6 @@ mod tests {
             ))
             .id();
         let owner_entity = app.world_mut().spawn((owner_tf, owner_gtf)).id();
-        // The rest pose is captured in the owner's frame, at load time.
         let scene = app
             .world_mut()
             .spawn((

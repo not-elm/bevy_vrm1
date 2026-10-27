@@ -196,17 +196,11 @@ fn rotates_meshes(
 /// because every consumer of a retargeted `.vrma` clip needs to agree on it.
 #[must_use]
 pub(crate) fn bone_target_id(bone: &str) -> AnimationTargetId {
-    // `AnimationTargetId::from_iter` hashes the strings directly, which is what
-    // `from_name(&Name::new(..))` does, but without needing an owned
-    // `CowArc<'static, str>`.
     AnimationTargetId::from_iter([bone])
 }
 
 impl GltfExtensionHandler for VrmExtensionHandler {
     fn dyn_clone(&self) -> Box<dyn ErasedGltfExtensionHandler> {
-        // See the module docs: `bevy_gltf` clones the registry per file load, so
-        // this hands out a fresh `Default` state every time (and the plugin-level
-        // configuration alongside it).
         Box::new(self.clone())
     }
 
@@ -270,8 +264,6 @@ impl GltfExtensionHandler for VrmExtensionHandler {
         _gltf_mesh_on_non_skinned_nodes: bool,
         user_mesh: &mut Option<Mesh>,
     ) -> impl ConditionalSendFuture<Output = ()> {
-        // Every step here is synchronous and has to happen *before* the empty
-        // future is returned, so no `&mut self.state` borrow can escape into it.
         if self.state.is_vrm() && gltf_mesh_on_skinned_nodes {
             first_person::process_primitive(
                 &mut self.state,
@@ -298,9 +290,6 @@ impl GltfExtensionHandler for VrmExtensionHandler {
         if !self.state.is_vrm() {
             return;
         }
-        // `on_spawn_mesh_and_material` runs once per node that instances this
-        // (mesh, primitive), and each of those entities gets the per-primitive
-        // classification and the head split.
         self.state
             .primitive_entities
             .entry((mesh.index(), primitive.index()))

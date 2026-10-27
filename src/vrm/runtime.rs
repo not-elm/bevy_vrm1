@@ -39,20 +39,6 @@ impl Plugin for VrmGltfRuntimePlugin {
         &self,
         app: &mut App,
     ) {
-        // `VrmSystemSets::Constraints` is the VRM spec's constraint step: it is
-        // what `VrmSystemSets::PropagateAfterConstraints` is chained after
-        // (`src/vrm.rs`) and what `VrmSystemSets::GazeControl` looks
-        // downstream of, so putting the pass here gets the constraints'
-        // `GlobalTransform` published before gaze control reads the head and
-        // eyes — the established manual-propagation order, unchanged.
-        //
-        // `.after(AnimationSystems)` because the sources are humanoid bones
-        // driven by `AnimationPlayer`.
-        // `.before(TransformSystems::Propagate)` because this system writes
-        // `Transform` and bevy's propagation reads it; the constraint step
-        // must be done before the engine publishes globals, and bevy already
-        // orders `AnimationSystems` the same way
-        // (`bevy_animation/src/lib.rs`).
         app.add_systems(
             PostUpdate,
             apply_node_constraints
@@ -61,23 +47,6 @@ impl Plugin for VrmGltfRuntimePlugin {
                 .before(TransformSystems::Propagate),
         );
 
-        // `VrmPlugin`'s manual propagation pass (`src/vrm.rs`) is only
-        // constrained to run after `VrmSystemSets::Constraints`, and bevy's own
-        // `TransformSystems::Propagate` is unordered against it, so which of
-        // the two publishes a constrained bone first was up to the executor.
-        //
-        // That matters because the manual pass is what makes the constraints
-        // visible to `VrmSystemSets::GazeControl`, which reads `GlobalTransform`
-        // (`src/vrm/look_at.rs`), and because bevy's parallel propagation
-        // skips any root whose `TransformTreeChanged` is not set
-        // (`bevy_transform/src/systems.rs`); only bevy's `mark_dirty_trees`
-        // sets it, and it runs inside `TransformSystems::Propagate`
-        // (`bevy_transform/src/plugins.rs`). Ordering the manual pass after
-        // it therefore guarantees both that the tree is marked and that the
-        // globals are published, every frame.
-        //
-        // The edge is additive: the pass is idempotent, and it also resolves the
-        // pre-existing `GlobalTransform` ambiguity between the two propagations.
         app.configure_sets(
             PostUpdate,
             VrmSystemSets::PropagateAfterConstraints.after(TransformSystems::Propagate),
@@ -102,16 +71,11 @@ pub fn apply_node_constraints(
 ) {
     for order in orders.iter() {
         for &destination in order.destinations() {
-            // A destination that has been despawned (or not spawned yet) is not
-            // an error: the list is load-time data that outlives the entities
-            // it names, so a stale entry is skipped and the walk continues.
             let Some(rotation) =
                 constraint_rotation(destination, &constraints, &rests, &parents, &transforms)
             else {
                 continue;
             };
-            // Written only when it moved: `VrmSystemSets::DetermineRedraw` reads
-            // `Changed<Transform>`, so a constant pose must not request a redraw.
             if let Ok(mut transform) = transforms.get_mut(destination)
                 && transform.rotation != rotation
             {
@@ -132,8 +96,6 @@ fn constraint_rotation(
     let constraint = constraints.get(destination).ok()?;
     let weight = constraint.weight;
     let destination_rest = rests.get(destination).ok()?.0;
-    // The spec's `slerp(rest, .., 0.0)`: a faded-out constraint returns the
-    // bone to rest rather than freezing it in the last driven pose.
     if weight == 0.0 {
         return Some(destination_rest.rotation);
     }
@@ -189,19 +151,10 @@ fn roll_rotation(
     roll_axis: Dir3,
     weight: f32,
 ) -> Option<Quat> {
-    // Spec pseudocode:
-    //   deltaSrcQuatInParent = srcRestQuat * deltaSrcQuat * srcRestQuat^-1
-    //   deltaSrcQuatInDst    = dstRestQuat^-1 * deltaSrcQuatInParent * dstRestQuat
-    // The first line conjugates by the *source's* rest rotation;
-    // conjugating by `destination_rest` instead would rotate the delta through
-    // the wrong basis.
     let delta_in_parent = source_rest * source_delta * source_rest.inverse();
     let delta_in_destination = destination_rest.inverse() * delta_in_parent * destination_rest;
 
     let axis = roll_axis.as_vec3();
-    // `from_rotation_arc` needs unit inputs. The product is unit for unit
-    // quaternions, but a `Transform` whose rotation was written as something
-    // else must not turn into a NaN quaternion here.
     let to_vec = (delta_in_destination * axis).normalize_or_zero();
     if to_vec == Vec3::ZERO {
         return None;
@@ -224,8 +177,6 @@ fn aim_rotation(
     parents: &Query<&ChildOf>,
     transforms: &Query<&mut Transform>,
 ) -> Option<Quat> {
-    // The spec's `dstParentWorldQuat`. A destination without a parent is a
-    // root, and for a root that is the identity.
     let destination_parent = match parents.get(destination) {
         Ok(child_of) => compute_global(child_of.0, parents, transforms)?,
         Err(_) => GlobalTransform::IDENTITY,
@@ -235,20 +186,12 @@ fn aim_rotation(
     let destination_local = *transforms.get(destination).ok()?;
     let destination_global = destination_parent.mul_transform(destination_local);
 
-    // `toVec = (srcWorldPos - dstWorldPos).normalized`. A bare `Vec3::normalize()`
-    // here would be `NaN` when the source and the destination coincide — a
-    // configuration a sleeve bone and a hand bone reach whenever the arm is at
-    // the origin — and the `NaN` would be written into the scene. There is no
-    // direction to aim at, so the constraint is skipped instead.
     let to_vec =
         (source_global.translation() - destination_global.translation()).normalize_or_zero();
     if to_vec == Vec3::ZERO {
         return None;
     }
 
-    // `fromVec = aimAxis.applyQuaternion(dstParentWorldQuat * dstRestQuat)`: the
-    // rest pose's aim axis in world space. The destination's *current* rotation
-    // is deliberately not used, or the constraint would chase its own output.
     let from_vec =
         (destination_parent_rotation * destination_rest * aim_axis.as_vec3()).normalize_or_zero();
     if from_vec == Vec3::ZERO {
@@ -414,7 +357,6 @@ mod tests {
         set_rotation(&mut app, source, Quat::from_rotation_x(FRAC_PI_2));
         run_constraints(&mut app);
 
-        // `slerp(rest, rest * delta, 0.5)` is half of the source's 90 degrees.
         assert!(
             rotation_is(
                 rotation(&app, destination),
@@ -453,8 +395,6 @@ mod tests {
         run_constraints(&mut app);
         assert!(!rotation_is(rotation(&app, destination), destination_rest));
 
-        // Fading the constraint out is the spec's `slerp(rest, .., 0.0)`: the
-        // bone goes back to rest instead of freezing in the last driven pose.
         app.world_mut()
             .get_mut::<VrmNodeConstraint>(destination)
             .unwrap()
@@ -546,8 +486,6 @@ mod tests {
         run_constraints(&mut app);
 
         let expected = spec_roll(source_rest, source_delta, destination_rest, roll_axis, 1.0);
-        // The same formula with the destination's rest rotation where the
-        // source's belongs: the bug the roll basis must not reintroduce.
         let wrong_basis = spec_roll(
             destination_rest,
             source_delta,
@@ -608,7 +546,6 @@ mod tests {
         let parent_rotation = world.get::<Transform>(parent).expect("parent").rotation;
         let world_rotation =
             parent_rotation * world.get::<Transform>(destination).expect("dst").rotation;
-        // The parent is a root, so its local rotation is its global rotation.
         assert_eq!(parent_rotation, Quat::from_rotation_y(FRAC_PI_2));
 
         let aimed = world_rotation * aim_axis.as_vec3();
@@ -755,16 +692,12 @@ mod tests {
 
         let driven = Quat::from_rotation_x(FRAC_PI_2);
         assert!(rotation_is(rotation(&app, middle), driven));
-        // `middle` was written before `tail` read it, so `tail` inherits the
-        // driver's rotation rather than `middle`'s rest pose.
         assert!(
             rotation_is(rotation(&app, tail), driven),
             "got {:?}",
             rotation(&app, tail)
         );
 
-        // Reversed order, poses reset: `tail` now reads `middle` before its own
-        // constraint, so it stays at its rest rotation.
         set_rotation(&mut app, middle, Quat::IDENTITY);
         set_rotation(&mut app, tail, Quat::IDENTITY);
         app.world_mut()
@@ -813,7 +746,6 @@ mod tests {
                 },
             ))
             .id();
-        // The dead destination comes first: the walk has to continue, not bail.
         app.world_mut()
             .spawn(ConstraintExecutionOrder(vec![gone, destination]));
 
@@ -854,7 +786,6 @@ mod tests {
             .id();
         set_rotation(&mut app, source, Quat::from_rotation_x(FRAC_PI_2));
 
-        // No entity carries `ConstraintExecutionOrder` yet.
         run_constraints(&mut app);
         assert_eq!(
             rotation(&app, destination),
@@ -862,7 +793,6 @@ mod tests {
             "a destination the execution order does not name must not move"
         );
 
-        // The execution order is the only thing that starts it.
         app.world_mut()
             .spawn(ConstraintExecutionOrder(vec![destination]));
         run_constraints(&mut app);
@@ -905,13 +835,11 @@ mod tests {
     fn constraints_run_after_animation_and_before_propagation() -> TestResult {
         fn register(app: &mut App) {
             app.add_plugins((TransformPlugin, VrmGltfRuntimePlugin));
-            // Stands in for `AnimationPlugin`'s output.
             app.add_systems(PostUpdate, animate_source.in_set(AnimationSystems));
             app.add_systems(
                 PostUpdate,
                 observe_after_propagate.after(TransformSystems::Propagate),
             );
-            // Installed by `VrmPlugin` exactly like this (`src/vrm.rs`).
             app.add_systems(
                 PostUpdate,
                 (sync_simple_transforms, propagate_parent_transforms)

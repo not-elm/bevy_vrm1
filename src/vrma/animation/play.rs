@@ -108,8 +108,6 @@ fn apply_play_vrma(
     let Ok((node_index, retarget_pending, needs_bake)) = vrmas.get(vrma_entity) else {
         return;
     };
-    // An unbaked clip, or one this avatar's graph has not bound yet, is
-    // started by the restore once it is ready.
     let ready = !retarget_pending
         && !needs_bake
         && graphs
@@ -130,7 +128,6 @@ fn apply_play_vrma(
     if trigger.reset_spring_bones {
         reset_spring_bone_velocities(*vrm_entity, &spring_roots, &mut joint_states, &childrens);
     }
-    // The latest play wins over one still waiting for its clip.
     for sibling in childrens.get(*vrm_entity).into_iter().flatten() {
         if let Ok(mut state) = playback.get_mut(*sibling)
             && *sibling != vrma_entity
@@ -321,7 +318,6 @@ fn restore_vrma_playback(
         }
         commands.entity(vrma).remove::<VrmaNeedsRestore>();
     }
-    // Last, so a deferred `PlayVrma` fades out the clips restored above.
     for (root_bone, node, fade, animation) in deferred_plays {
         let Ok((mut player, transitions)) = players.get_mut(root_bone) else {
             continue;
@@ -799,7 +795,6 @@ mod tests {
             .expect("the resident clip plays")
             .seek_to(0.5);
 
-        // Until `y`'s graph is rebuilt, `node` on `y` is the resident's clip.
         app.world_mut().entity_mut(moved).insert(ChildOf(y));
         app.world_mut()
             .run_system_once(super::snapshot_vrma_playback)

@@ -145,9 +145,6 @@ pub(crate) fn parse_root_extensions(
         for (bone, human_bone) in &vrm.humanoid.human_bones {
             state.bone_nodes.insert(bone.clone(), human_bone.node);
         }
-        // The head bone is required by the schema, but a file that does not
-        // declare it must still load; the `auto` split then has no head subtree
-        // and every mesh stays visible in both views.
         if let Some(head) = vrm.humanoid.human_bones.get(HEAD_BONE) {
             state.head_subtree = collect_subtree(gltf, head.node);
         }
@@ -186,9 +183,6 @@ fn collect_subtree(
         node: &gltf::Node<'_>,
         out: &mut HashSet<usize>,
     ) {
-        // A cyclic node hierarchy makes `bevy_gltf` fail the whole load
-        // (`check_for_cycles`), but this runs *before* that check, so the
-        // recursion is bounded rather than trusted.
         if !out.insert(node.index()) {
             return;
         }
@@ -259,17 +253,11 @@ struct RestPoses {
 fn collect_rest_poses(gltf: &gltf::Gltf) -> RestPoses {
     let nodes: Vec<_> = gltf.document.nodes().collect();
 
-    // `gltf::Node` has no `parent()`, so the parent of every node is collected
-    // in one pass over the child lists.
     let parents: HashMap<usize, usize> = nodes
         .iter()
         .flat_map(|node| node.children().map(|child| (child.index(), node.index())))
         .collect();
 
-    // Compose world transforms top-down. Sorting by depth makes the parent of
-    // every node available before the node itself, and the walk bound keeps a
-    // cyclic document from looping forever (`bevy_gltf` rejects cycles later,
-    // but this runs before that check).
     let mut order: Vec<usize> = (0..nodes.len()).collect();
     order.sort_by_key(|index| depth_of(*index, &parents, nodes.len()));
 
@@ -454,7 +442,6 @@ mod tests {
         assert!(state.is_vrm());
         assert!(state.spring_bone.is_some(), "Elmer has hair physics");
 
-        // The humanoid map, addressed by VRM bone name.
         assert_eq!(state.bone_nodes.len(), 54);
         assert_eq!(state.bone_nodes.get("hips"), Some(&1));
         let head = *state.bone_nodes.get("head").expect("`head` is required");
@@ -467,8 +454,6 @@ mod tests {
             "the head subtree carries the face, eyes and hair bones"
         );
 
-        // Every skin is resolvable per mesh, which is what the `firstPerson`
-        // classification needs.
         let skinned = state
             .mesh_skins
             .values()
@@ -476,7 +461,6 @@ mod tests {
             .count();
         assert_eq!(skinned, 3, "all three of Elmer's meshes are skinned");
 
-        // The rest poses cover every node of the document.
         assert_eq!(state.node_rest.len(), gltf.document.nodes().len());
         for (index, rest) in &state.node_rest {
             assert!(!rest.path.is_empty(), "node {index} has no name path");
@@ -485,11 +469,8 @@ mod tests {
                 "a path always ends in a name"
             );
         }
-        // VRoid writes a unit-scaled scene root, so dividing the uniform root
-        // scale out is the identity here.
         assert_eq!(state.root_scale, 1.0);
 
-        // Expressions, look-at and the `firstPerson` default.
         let vrm = state.vrm.as_ref().expect("VRMC_vrm is present");
         let expressions = vrm
             .expressions
@@ -508,8 +489,6 @@ mod tests {
         let look_at = vrm.look_at.as_ref().expect("Elmer declares lookAt");
         assert_eq!(look_at.offset_from_head_bone, [0.0, 0.06, 0.0]);
         assert_eq!(look_at.range_map_horizontal_inner.input_max_value, 90.0);
-        // Elmer annotates nothing, which per the specification means every mesh
-        // is `auto` -- the case the experiment dropped.
         assert!(
             vrm.first_person
                 .as_ref()
@@ -517,7 +496,6 @@ mod tests {
             "Elmer relies on the `auto` default"
         );
 
-        // Spring bones, with their specification defaults already applied.
         let spring_bone = state.spring_bone.as_ref().unwrap();
         assert_eq!(spring_bone.springs.len(), 40);
         assert_eq!(spring_bone.colliders.len(), 28);
@@ -574,8 +552,6 @@ mod tests {
     }
 
     fn document(json: &str) -> gltf::Gltf {
-        // Validation is off: the fixtures below declare meshes without real
-        // accessors, which is enough for the node walks under test.
         gltf::Gltf::from_slice_without_validation(json.as_bytes())
             .expect("the test document should parse")
     }
@@ -589,9 +565,7 @@ mod tests {
 
         let hips = &rests.nodes[&1];
         assert_eq!(hips.rest, Transform::from_xyz(0.0, 1.0, 0.0));
-        // The parent's uniform scale is composed into the world rest …
         assert_eq!(hips.world.translation(), Vec3::new(0.0, 2.0, 0.0));
-        // … and is available as the child's parent rotation.
         assert_eq!(hips.parent_world_rotation, Quat::IDENTITY);
         assert_eq!(
             hips.world_translation_without_root_scale(rests.root_scale),
@@ -611,8 +585,6 @@ mod tests {
         let gltf = document(&two_level_scene());
         let rests = collect_rest_poses(&gltf);
 
-        // `collect_path` (`bevy_gltf/src/loader/gltf_ext/scene.rs`) pushes
-        // the topmost node's name first.
         assert_eq!(
             rests.nodes[&1].path,
             vec![Name::new("Armature"), Name::new("Hips")]
@@ -668,9 +640,6 @@ mod tests {
         );
 
         let skins = collect_mesh_skins(&gltf);
-        // The second node instances the same mesh without a skin, so there is no
-        // single answer and the mesh counts as unskinned instead of taking the
-        // first node's answer.
         assert_eq!(skins.get(&0), Some(&None));
         success!()
     }

@@ -175,13 +175,6 @@ impl Plugin for VrmPlugin {
                 .after(VrmSystemSets::Expressions)
                 .before(VrmSystemSets::SpringBone),
         );
-        // `update_spring_bones` publishes the `GlobalTransform` of the joints it
-        // simulates, but not of the chain's last joint or of anything parented
-        // under a joint, and bevy's own propagation has already run by then
-        // (`VrmGltfRuntimePlugin` orders the manual passes after it). Without one
-        // more pass those render with the pose from before the spring step, one
-        // frame behind the strand. `mark_dirty_trees` comes first because the
-        // spring step writes after bevy marked this frame's dirty trees.
         app.add_systems(
             PostUpdate,
             (

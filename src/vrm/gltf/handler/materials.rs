@@ -88,20 +88,12 @@ pub(crate) fn process_material(
     };
 
     if mtoon.outline_width_mode == "screenCoordinates" {
-        // The crate's shader has no screen-space outline
-        // (`OutlineWidthMode::None` is the only other variant,
-        // `src/vrm/mtoon/material/outline.rs`), so this is the same silent
-        // downgrade the spec would otherwise ask for, and it is the
-        // conservative direction — now said out loud.
         vrm_warn!(format!(
             "VRM MToon: `{material_label}` requests a screenCoordinates outline, which is not \
              supported; drawing no outline instead"
         ));
     }
 
-    // A *sibling* material extension, read from the same `extensions` map and
-    // independent of the shape of the MToon block next to it. A material
-    // without it keeps a multiplier of `1.0`.
     let hdr_emissive_multiplier =
         VrmcMaterialsHdrEmissiveMultiplier::from_material_extensions(extensions)
             .map_or(1.0, |multiplier| multiplier.emissive_multiplier);
@@ -134,14 +126,6 @@ pub(crate) fn swap_material(
     };
     entity.remove::<MeshMaterial3d<StandardMaterial>>();
     entity.insert(MeshMaterial3d(handle.clone()));
-
-    // The outline is *not* a second entity: `MToonOutlinePlugin::queue_outlines`
-    // (`src/vrm/mtoon/outline_pass.rs`) walks
-    // `RenderVisibleEntities::get::<Mesh3d>()` of the view and draws a second
-    // phase for the very same mesh entity, keyed by its
-    // `MeshMaterial3d<MToonMaterial>`. The outline therefore inherits the
-    // entity's `RenderLayers` through `VisibleEntities` with nothing to
-    // propagate here.
 }
 
 /// The full `VRMC_materials_mtoon` -> [`MToonMaterial`] mapping.
@@ -157,12 +141,7 @@ fn mtoon_material(
     MToonMaterial {
         base_color: base.base_color,
         base_color_texture: base.base_color_texture.clone(),
-        // `bevy_gltf` reads `KHR_texture_transform` off the base color texture
-        // only, and MToon applies one transform to every texture of the
-        // material, so this single value is the right one.
         uv_transform: base.uv_transform,
-        // See the module docs: `KHR_materials_emissive_strength` is already
-        // folded into `base.emissive`.
         emissive: base.emissive * hdr_emissive_multiplier,
         emissive_texture: base.emissive_texture.clone(),
         shade: Shade::from(extension),
@@ -180,7 +159,6 @@ fn mtoon_material(
         gi_equalization_factor: extension.gi_equalization_factor,
         alpha_mode: base.alpha_mode,
         double_sided: base.double_sided,
-        // glTF declares neither; see the module docs.
         depth_bias: 0.0,
         opaque_renderer_method: OpaqueRendererMethod::default(),
         render_queue_offset: extension.render_queue_offset_number,
@@ -300,13 +278,9 @@ mod tests {
         assert_eq!(outline.mode, OutlineWidthMode::WorldCoordinates);
         assert_eq!(outline.width_factor, 0.5);
 
-        // The default is "no outline", and a width factor alone must not
-        // conjure one.
         let none = extension(r#"{"specVersion":"1.0","outlineWidthFactor":0.5}"#)?;
         assert_eq!(MToonOutline::from(&none).mode, OutlineWidthMode::None);
 
-        // Screen-space outlines are unsupported; the warning is emitted by
-        // `process_material` and the mode degrades to "none" here.
         let screen = extension(
             r#"{"specVersion":"1.0","outlineWidthMode":"screenCoordinates","outlineWidthFactor":0.5}"#,
         )?;
@@ -332,8 +306,6 @@ mod tests {
         assert_eq!(material.cull_mode, base.cull_mode);
         assert_eq!(material.render_queue_offset, 3.0);
         assert!(material.transparent_with_z_write);
-        // glTF declares neither, and `bevy_pbr`'s own `GltfMaterial` ->
-        // `StandardMaterial` conversion leaves both at their defaults.
         assert_eq!(material.depth_bias, 0.0);
         assert_eq!(
             material.opaque_renderer_method,

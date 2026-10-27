@@ -181,16 +181,10 @@ fn build_spring_chains(
         return;
     };
 
-    // Resolve the colliders once: spec array index -> (entity, shape). A
-    // collider node that was never spawned is dropped with a warning; the
-    // remaining colliders of the group still apply.
     let mut resolved_colliders: Vec<Option<(Entity, ColliderShape)>> = Vec::new();
     for collider in &spring_bone.colliders {
         let resolved = match state.node_entities.get(&collider.node).copied() {
             Some(entity) => {
-                // The shape is also a component of the collider node, as the
-                // runtime initializer used to put it, so collider gizmos and app
-                // code can find it there.
                 world.entity_mut(entity).insert(collider.shape);
                 Some((entity, collider.shape))
             }
@@ -206,8 +200,6 @@ fn build_spring_chains(
     }
 
     for spring in &spring_bone.springs {
-        // Resolve the joints; a chain that names a node nobody spawned cannot be
-        // simulated, so it is skipped as a whole.
         let mut joints: Vec<Entity> = Vec::with_capacity(spring.joints.len());
         let mut props: Vec<SpringJointProps> = Vec::with_capacity(spring.joints.len());
         let mut broken = false;
@@ -221,10 +213,6 @@ fn build_spring_chains(
                 break;
             };
             joints.push(entity);
-            // The schema materialises the specification defaults for every
-            // omitted property (`dragForce` 0.5, `gravityDir` [0,-1,0],
-            // `gravityPower` 0.0, `hitRadius` 0.0, `stiffness` 1.0), so a joint
-            // only reads as `None` when the file wrote an explicit `null`.
             props.push(SpringJointProps {
                 drag_force: joint.drag_force.unwrap_or(0.5),
                 gravity_dir: joint.gravity_dir.map(Vec3::from).unwrap_or(Vec3::NEG_Y),
@@ -261,9 +249,6 @@ fn build_spring_chains(
                 );
                 break;
             };
-            // `reparented_to` instead of reading the tail's local translation:
-            // a spring chain is allowed to skip nodes, so the next joint is not
-            // necessarily a direct child of this one.
             let tail_in_head = tail_rest_global.0.reparented_to(&head_rest_global.0);
             world.entity_mut(head).insert((
                 props[pair],
@@ -274,8 +259,6 @@ fn build_spring_chains(
                 ),
             ));
         }
-        // The last joint carries its properties but simulates no pair of its
-        // own, because it is the tail of the last segment.
         if let (Some(&last), Some(&last_props)) = (joints.last(), props.last()) {
             world.entity_mut(last).insert(last_props);
         }
@@ -325,8 +308,6 @@ fn resolve_constraints(
             pendings.push((destination, *pending));
         }
     }
-    // Sorted by entity so the topological order below is reproducible: query
-    // iteration order is not.
     pendings.sort_by_key(|(entity, _)| *entity);
 
     let mut constraints: Vec<(Entity, Entity)> = Vec::new();
@@ -451,11 +432,6 @@ fn build_expressions(
                 ));
                 continue;
             };
-            // The bind drives a morph index of a mesh, and only a node that
-            // carries `MorphWeights` has any. `bevy_gltf` puts
-            // `MorphWeights` on the node and `MeshMorphWeights` on each of its
-            // primitives (`loader/mod.rs`), so this is
-            // also the check that the node has a mesh at all.
             if !world.get::<MorphWeights>(target).is_some() {
                 vrm_warn!(format!(
                     "VRM expressions: node {} of the morph binds of `{name}` carries no morph \
@@ -473,9 +449,6 @@ fn build_expressions(
         if !expression.material_color_binds.is_empty()
             || !expression.texture_transform_binds.is_empty()
         {
-            // Both bind kinds are parsed by the schema and kept, so a follow-up
-            // can apply them without another migration; nothing applies them
-            // today, and pretending otherwise would be worse than saying so.
             vrm_warn!(format!(
                 "VRM expressions: the material color and texture transform binds of `{name}` \
                  are parsed but not applied"
@@ -564,19 +537,12 @@ fn setup_animation(
     world: &mut World,
     root: Entity,
 ) {
-    // The root bone is the parent of `hips`:
-    // `ChildSearcher::find_root_bone` and the VRMA retarget both look it up by
-    // `Vrm::ROOT_BONE`.
     let root_bone = state
         .bone_nodes
         .get("hips")
         .and_then(|node| state.node_entities.get(node))
         .copied()
         .and_then(|hips| world.get::<ChildOf>(hips).map(ChildOf::parent));
-    // A file without a `hips` bone has no root bone and therefore no humanoid
-    // rig at all. Fall back to the scene root so a user-supplied graph still has
-    // a player; the VRMA path cannot attach to a rig that does not exist, and
-    // it bails on `find_root_bone` first anyway.
     let animation_root = root_bone.unwrap_or(root);
 
     for (bone, node) in &state.bone_nodes {
@@ -657,22 +623,15 @@ fn insert_humanoid_bone_holders(
             .map(|(entity, bone)| (bone.clone(), entity))
             .collect()
     };
-    // Query iteration order is undefined; the inserts do not depend on it, but
-    // sorting keeps the result reproducible for a log or an assertion.
     bones.sort_by_key(|(_, entity)| *entity);
     if bones.is_empty() {
         return;
     }
 
     {
-        // `insert_bone_holders` writes through `Commands`, which `bevy_gltf`'s
-        // loader does not have. The world's own command queue takes that role —
-        // `bevy_ecs` documents these two calls for exactly this case.
         let mut commands = world.commands();
         insert_bone_holders(root, &mut commands, &bones);
     }
-    // Applied before `WorldAsset::new` freezes the world, so the holders are part
-    // of the asset the scene spawn pipeline copies out of.
     world.flush();
 }
 
@@ -768,7 +727,6 @@ fn record_first_person_views(
             FirstPersonFlag::FirstPersonOnly => Some(FirstPersonView::FirstPersonOnly),
             FirstPersonFlag::ThirdPersonOnly => Some(FirstPersonView::ThirdPersonOnly),
             FirstPersonFlag::Both => None,
-            // Handled per primitive in pass 1 and 3.
             FirstPersonFlag::Auto => continue,
         };
         let Some(&entity) = state.node_entities.get(&annotation.node) else {
@@ -792,7 +750,6 @@ fn spawn_head_copies(
     head_meshes: &HashMap<(usize, usize), Handle<Mesh>>,
     world: &mut World,
 ) {
-    // One copy per node that instances the split primitive.
     let copies = head_meshes.iter().flat_map(|(key, head_mesh)| {
         let sources = state.primitive_entities.get(key);
         if sources.is_none() {
@@ -822,18 +779,8 @@ fn spawn_head_copies(
         let transform = world.get::<Transform>(source).copied().unwrap_or_default();
         let visibility = world.get::<Visibility>(source).copied().unwrap_or_default();
 
-        // Everything the body half needs in order to render at all. Read before
-        // spawning: `World::spawn` mutably borrows the world for as long as the
-        // returned `EntityWorldMut` lives.
-        //
-        // `MeshMorphWeights` is what drives the node's `MorphWeights`, so the
-        // head half has to reference the same node or its expressions do nothing.
         let morph_weights = world.get::<MeshMorphWeights>(source).cloned();
         let skinned = world.get::<SkinnedMesh>(source).cloned();
-        // The source's `Aabb` is a superset of the head half's, which only costs
-        // a little frustum-culling precision; the skinned-mesh bounds markers
-        // come along because they are what makes those bounds track the animated
-        // pose at all.
         let aabb = world.get::<Aabb>(source).copied();
         let dynamic_bounds = world.get::<DynamicSkinnedMeshBounds>(source).is_some();
         let no_frustum_culling = world.get::<NoFrustumCulling>(source).is_some();
@@ -973,8 +920,6 @@ mod tests {
                 .map(|rest| rest.0),
             Some(GlobalTransform::from(Transform::from_xyz(1.0, 2.0, 3.0)))
         );
-        // The model's own world transform, so a retarget does not depend on
-        // where the application placed the avatar.
         assert_eq!(
             world.get::<RestWorldTransform>(root).map(|rest| rest.0),
             world.get::<RestGlobalTransform>(root).map(|rest| rest.0)
@@ -992,7 +937,6 @@ mod tests {
             )?)),
             ..Default::default()
         };
-        // Scene 0 instantiates the chain.
         let mut first = World::new();
         let head = first.spawn(Transform::default()).id();
         let tail = first.spawn((Transform::default(), ChildOf(head))).id();
@@ -1000,8 +944,6 @@ mod tests {
         state.primitive_entities.insert((0, 0), vec![tail]);
         state.end_scene();
 
-        // Scene 1 instantiates neither node, but its own entities get the same
-        // ids.
         let mut second = World::new();
         let unrelated = second.spawn(Transform::default()).id();
         second.spawn((Transform::default(), ChildOf(unrelated)));
@@ -1060,8 +1002,6 @@ mod tests {
     /// Sources are evaluated before the destinations that read them.
     #[test]
     fn constraints_are_sorted_source_before_destination() -> TestResult {
-        // `(destination, source)`: `a` reads `b`, `b` reads `c`, `c` reads `d`,
-        // and `d` is not a destination itself, so the graph is a chain.
         let (a, b, c, d) = (node(1), node(2), node(3), node(4));
         let order = toposort_constraints(&[(a, b), (b, c), (c, d)]);
 
@@ -1129,8 +1069,6 @@ mod tests {
             Some([destination].as_slice())
         );
 
-        // A constraint whose source node was never spawned is dropped, and the
-        // pending marker still goes away.
         let orphan = world.spawn_empty().id();
         world.entity_mut(orphan).insert(PendingNodeConstraint {
             source_node: 999,
@@ -1152,7 +1090,6 @@ mod tests {
         let root = world.spawn_empty().id();
         let preset_target = world.spawn(MorphWeights::new(vec![0.0; 3], None)?).id();
         let custom_target = world.spawn(MorphWeights::new(vec![0.0; 2], None)?).id();
-        // A node without `MorphWeights`: its bind must be skipped.
         let weightless = world.spawn_empty().id();
         let state = state_with(vrm(r#"{
                 "specVersion": "1.0",
@@ -1244,8 +1181,6 @@ mod tests {
     fn animation_targets_are_attached_to_the_root_and_the_bones() -> TestResult {
         let mut world = World::new();
         let root = world.spawn_empty().id();
-        // Distinct from the scene root, because the two carry different roles:
-        // the root bone is the animation root.
         let root_bone = world.spawn(ChildOf(root)).id();
         let hips = world.spawn(ChildOf(root_bone)).id();
         let state = VrmLoadState {
@@ -1266,8 +1201,6 @@ mod tests {
             Some(bone_target_id("hips")),
             "a bone is addressed by its VRM bone name, so one clip retargets to any avatar"
         );
-        // Both the root and the bone are targets of the player on the root bone,
-        // which is where the VRMA graph handle is written.
         assert_eq!(
             world.get::<AnimatedBy>(hips).map(|animated| animated.0),
             Some(root_bone)
@@ -1276,8 +1209,6 @@ mod tests {
             world.get::<AnimatedBy>(root).map(|animated| animated.0),
             Some(root_bone)
         );
-        // `ChildSearcher::find_root_bone` and the VRMA retarget look the root
-        // bone up by this name, and `PlayVrma` plays on the player it holds.
         assert_eq!(
             world.get::<Name>(root_bone).map(|name| name.as_str()),
             Some(Vrm::ROOT_BONE)
@@ -1285,8 +1216,6 @@ mod tests {
         assert!(world.get::<AnimationPlayer>(root_bone).is_some());
         assert!(world.get::<AnimationTransitions>(root_bone).is_some());
         assert!(world.get::<RetargetSource>(root_bone).is_some());
-        // The scene root is not the animation root, so it must not hold a
-        // player of its own: no `AnimatedBy` points at it.
         assert!(world.get::<AnimationPlayer>(root).is_none());
         success!()
     }
@@ -1605,8 +1534,6 @@ mod tests {
         let root = world
             .spawn((Transform::default(), GlobalTransform::IDENTITY))
             .id();
-        // The root bone is `setup_animation`'s animation root: the parent of
-        // `hips`.
         let root_bone = world
             .spawn((
                 Transform::default(),
@@ -1625,11 +1552,9 @@ mod tests {
                     ChildOf(parent),
                 ))
                 .id();
-            // The eyes hang off the head rather than continuing the chain.
             parent = if name == "head" { entity } else { parent };
             chain.push(entity);
         }
-        // `chain` is exactly `GAZE_BONES` in order, so it is the node order.
         let mut chain = chain.into_iter();
         GazeScene {
             root,
@@ -1706,7 +1631,6 @@ mod tests {
         finalize_for_gaze(&mut app, &state, scene.root);
 
         let world = app.world();
-        // The holders the two gaze systems read.
         assert_eq!(
             world.get::<HeadBoneEntity>(scene.root).map(|head| head.0),
             Some(scene.head),
@@ -1737,10 +1661,8 @@ mod tests {
             world.get::<HipsBoneEntity>(scene.root).map(|bone| bone.0),
             Some(scene.hips)
         );
-        // A holder belongs to the root, not to a bone.
         assert!(world.get::<HeadBoneEntity>(scene.hips).is_none());
 
-        // The bone's own marker rides on the bone.
         assert!(world.get::<Head>(scene.head).is_some());
         assert!(world.get::<LeftEye>(scene.left_eye).is_some());
         assert!(world.get::<Hips>(scene.hips).is_some());
@@ -1762,13 +1684,8 @@ mod tests {
         let state = gaze_state(&scene);
 
         finalize_for_gaze(&mut app, &state, scene.root);
-        // `finalize` bakes only the private `VrmSceneRoot`; the public `Vrm`
-        // marker is written by the attach stage (`vrm::instance`), which this
-        // pipeline-level helper does not run. Body tracking reads the root
-        // `GlobalTransform` through `With<Vrm>`, so the fixture must supply it.
         app.world_mut().entity_mut(scene.root).insert(Vrm);
 
-        // Off to the right, slightly below the head: both a yaw and a pitch.
         let target = app
             .world_mut()
             .spawn((
@@ -1788,7 +1705,6 @@ mod tests {
         app.update();
 
         let world = app.world();
-        // `track_looking_target` drove the eyes.
         assert!(
             turned(world, scene.left_eye),
             "the left eye did not turn towards the target"
@@ -1797,12 +1713,9 @@ mod tests {
             turned(world, scene.right_eye),
             "the right eye did not turn towards the target"
         );
-        // `track_body_tracking` drove the chain, which is only reachable through
-        // `HeadBoneEntity` + the optional `Neck` / `Chest` / `Spine` holders.
         for bone in [scene.spine, scene.chest, scene.neck, scene.head] {
             assert!(turned(world, bone), "a body-tracking bone did not turn");
         }
-        // The avatar root itself is not a gaze bone.
         assert!(!turned(world, scene.root));
         success!()
     }
@@ -1843,7 +1756,6 @@ mod tests {
             VrmPath::new("vrm/Elmer.vrm").0,
             "and it is exactly the path the caller passed to `AssetServer::load`"
         );
-        // The same holds for the labeled handle a caller spawns the scene from.
         let labeled = bevy::asset::AssetPath::from("vrm/Elmer.vrm#Scene0");
         assert_eq!(labeled.path(), loaded.path());
         success!()

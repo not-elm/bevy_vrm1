@@ -26,9 +26,6 @@ pub(crate) fn process_node(
     state.node_entities.insert(index, entity.id());
     entity.insert(VrmNodeIndex(index));
 
-    // A node claimed by two humanoid bones is malformed. Taking the lowest bone
-    // name keeps the choice stable across loads, where a `HashMap` iteration
-    // order would not.
     if let Some(bone) = state
         .bone_nodes
         .iter()
@@ -210,8 +207,6 @@ mod tests {
         };
         let gltf = node_zero();
 
-        // Scoped so the `EntityWorldMut`'s borrow of the world ends before the
-        // assertions below read it.
         let id = {
             let mut node = app.world_mut().spawn_empty();
             process_node(

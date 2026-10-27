@@ -40,7 +40,6 @@ impl VrmAnimation<'_, '_> {
         &self,
         vrm: Entity,
     ) -> bool {
-        // Expression curves are played by the root bone's player.
         self.finished_humanoid_bones(vrm)
     }
 }

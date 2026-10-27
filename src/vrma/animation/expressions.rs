@@ -141,7 +141,6 @@ fn expression_weight_curve(
     let property = ExpressionWeightProperty::new(expression);
     let weight_at = |t: f32| Some(curve.0.sample_clamped(t).downcast::<Vec3>().ok()?.x);
     let domain = curve.0.domain();
-    // `bevy_gltf` builds a one-keyframe channel as a constant over all time.
     if !domain.is_bounded() {
         return Some(VariableCurve::new(AnimatableCurve::new(
             property,
@@ -842,7 +841,6 @@ mod tests {
     fn a_single_keyframe_expression_track_is_retargeted() -> TestResult {
         let mut app = setup_app(false);
         let (vrm, _) = spawn_avatar(app.world_mut());
-        // `bevy_gltf` builds a one-keyframe channel as a constant over all time.
         let (_, clip) = spawn_expression_vrma_with(
             app.world_mut(),
             vrm,

@@ -43,7 +43,6 @@ fn apply_detach_vrm(
     trigger: On<RequestDetachVrm>,
     managed: Query<(), With<VrmHandle>>,
     vrm_root: Query<(), With<Vrm>>,
-    // A `.vrma` root also carries a `WorldAssetRoot`, but it is not a VRM.
     raw_owner: Query<
         (),
         (
@@ -75,7 +74,6 @@ fn detach_managed(
     if world.get::<VrmHandle>(entity).is_none() {
         return;
     }
-    // Captured before `WorldAssetRoot` is removed, which unregisters the instance.
     let tracked = world
         .get::<WorldInstance>(entity)
         .map(|instance| **instance)
@@ -84,7 +82,6 @@ fn detach_managed(
 
     remove_root_data(world, entity);
     remove_model_name(world, entity);
-    // `WorldAssetRoot`'s `on_remove` reads `WorldInstance`, so it goes first.
     world.entity_mut(entity).remove::<WorldAssetRoot>();
     world
         .entity_mut(entity)
@@ -138,14 +135,11 @@ fn detach_raw(
         (Some(entity), find_raw_instance_root(world, entity))
     };
 
-    // Captured before `WorldAssetRoot` is removed, which unregisters the instance.
     let tracked = owner
         .and_then(|owner| world.get::<WorldInstance>(owner).map(|instance| **instance))
         .map(|instance_id| instance_entities(world, instance_id))
         .unwrap_or_default();
     let spawned = !tracked.is_empty();
-    // An owner whose scene spawned without a VRM in it is a plain glTF (a level,
-    // a prop), which this event does not tear down.
     if root.is_none()
         && spawned
         && tracked
@@ -165,9 +159,6 @@ fn detach_raw(
     {
         strip_raw_root(world, root);
     }
-    // The entity the request named stays alive. When that is the owner, the
-    // instance's scene root is just another instance entity and goes with the
-    // rest; only a request that named the root itself keeps it (stripped).
     let kept_root = root.filter(|_| entity_is_root);
     for tracked_entity in tracked {
         if Some(tracked_entity) == kept_root {
@@ -177,9 +168,6 @@ fn detach_raw(
             world.entity_mut(tracked_entity).despawn();
         }
     }
-    // A pending owner keeps its `WorldInstance`: bevy still spawns the queued
-    // instance once the asset loads, and the instance observer recognises it by
-    // that id as a cancelled spawn to clean up.
     if spawned
         && let Some(owner) = owner
         && world.get_entity(owner).is_ok()
@@ -556,7 +544,6 @@ mod tests {
             VrmPath::new("vrm/Elmer.vrm"),
             RestWorldTransform::default(),
             LookAtProperties::default(),
-            // User-inserted components.
             LookAt::Cursor,
             BodyTracking::default(),
             SmoothedGaze::default(),

@@ -141,10 +141,6 @@ impl Plugin for VrmGltfPlugin {
             .map(|handlers| handlers.0.clone())
             .unwrap_or_default();
 
-        // The application configures glTF loading on `GltfPlugin`; a `.vrm` is
-        // a glTF and honours the same configuration as the stock loader does.
-        // `default_convert_coordinates` only reaches non-`.vrm` loads that bevy
-        // routes here; a `.vrm` always names its own (see `vrm_load_settings`).
         let (
             custom_vertex_attributes,
             default_convert_coordinates,
@@ -198,10 +194,6 @@ impl AssetLoader for VrmLoader {
         settings: &GltfLoaderSettings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Gltf, GltfError> {
-        // `Gltf` has two loaders now, so bevy falls back to the last registered
-        // one, this one, for a typed `load::<Gltf>` whose extension matches
-        // neither exactly (`Ship.GLB`, an extensionless URL). Only a `.vrm` gets
-        // the VRM settings; anything else loads exactly as the stock loader would.
         if !is_vrm_path(load_context.path()) {
             return self.0.load(reader, settings, load_context).await;
         }
@@ -249,7 +241,6 @@ fn release_binary_chunk(source: &mut Option<::gltf::Gltf>) {
 ///   split rebuilds meshes from the raw accessors, which `rotate_meshes` would
 ///   leave 180° off their converted bind poses.
 fn vrm_load_settings(settings: &GltfLoaderSettings) -> GltfLoaderSettings {
-    // `GltfLoaderSettings` does not implement `Clone`, so copy the fields.
     GltfLoaderSettings {
         load_meshes: settings.load_meshes,
         load_materials: settings.load_materials,

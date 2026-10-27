@@ -288,8 +288,6 @@ mod tests {
     fn spawner_app() -> App {
         let mut app = test_app();
         app.init_asset::<WorldAsset>()
-            // `world_instance_spawner_system` reads `AssetEvent<DynamicWorld>`
-            // unconditionally, so the spawner needs both asset storages.
             .init_asset::<DynamicWorld>()
             .init_resource::<WorldInstanceSpawner>()
             .register_type::<Vrm>()
@@ -347,8 +345,6 @@ mod tests {
                 spawner.spawn_as_child(scene.clone(), first_parent);
                 spawner.spawn_as_child(scene.clone(), second_parent);
             });
-        // This harness runs the spawner on `Update`; allow its deferred ready
-        // event to be delivered before inspecting the instances.
         for _ in 0..2 {
             app.update();
         }
@@ -364,8 +360,6 @@ mod tests {
             "the VRM root itself is a fresh entity of the app world"
         );
 
-        // The `<Bone>BoneEntity` holder: gaze control, body tracking and the
-        // first-person auto split all read it off the root.
         let mut heads = Vec::new();
         for root in [first_root, second_root] {
             heads.push(
@@ -395,9 +389,6 @@ mod tests {
             );
         }
 
-        // The spring chain: joints, colliders and the center node are all
-        // references into the same world, and a chain that verlet-integrates
-        // against the scratch world shares no transform with the avatar.
         for root in [first_root, second_root] {
             let spring = app
                 .world()
@@ -431,8 +422,6 @@ mod tests {
                 app.world().get::<VrmBone>(center),
                 Some(&VrmBone::from("center"))
             );
-            // Only the entity half of a `(Entity, ColliderShape)` pair is a
-            // reference; the shape is data and must survive the copy untouched.
             assert_eq!(shape, ColliderShape::default());
         }
         success!()

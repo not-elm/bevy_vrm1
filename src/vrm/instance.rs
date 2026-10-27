@@ -252,15 +252,12 @@ fn classify_pending(
     asset_server: Option<&AssetServer>,
 ) -> PendingOutcome {
     let Some(gltf) = gltfs.get(handle) else {
-        // Not in `Assets<Gltf>` yet: either still loading or it failed.
         return if asset_server.is_some_and(|server| server.load_state(handle.id()).is_failed()) {
             PendingOutcome::Unresolvable
         } else {
             PendingOutcome::Loading
         };
     };
-    // The `Gltf` loaded but exposes no scene: no VRM can ever be instantiated
-    // from it.
     let Some(scene) = gltf.scenes.first() else {
         return PendingOutcome::Unresolvable;
     };
@@ -270,8 +267,6 @@ fn classify_pending(
     if world_assets.contains(scene.id()) {
         return PendingOutcome::Ready(scene.clone());
     }
-    // The scene exists on the `Gltf` but its `WorldAsset` is not loaded yet. Only
-    // a `Failed` load is fatal; otherwise it is still on its way.
     if asset_server.is_some_and(|server| server.load_state(scene.id()).is_failed()) {
         PendingOutcome::Unresolvable
     } else {
@@ -329,11 +324,6 @@ fn resolve_vrm_scene(world: &mut World) {
         }
     }
 
-    // Whether each target scene is a VRM scene at all. A scene with no
-    // `VrmSceneRoot` has nothing to attach, so re-resolving an unchanged non-VRM
-    // handle must **not** re-insert `WorldAssetRoot`: the spawner responds to
-    // `Changed<WorldAssetRoot>` and would respawn the instance on every re-arm,
-    // forever. Only a genuine VRM scene needs the dead-rig recovery path.
     let scene_has_vrm: Vec<bool> = {
         let world_assets = world.get_resource::<Assets<WorldAsset>>();
         ready
@@ -356,11 +346,6 @@ fn resolve_vrm_scene(world: &mut World) {
             continue;
         }
         world.entity_mut(entity).remove::<PendingVrmScene>();
-        // Already resolved: the `WorldAssetRoot` still names this exact scene and
-        // either the rig is alive or the scene is not a VRM at all (so there is
-        // nothing to recover). Re-inserting would spuriously respawn the
-        // instance. A VRM scene whose recorded rig died *is* re-inserted, so the
-        // same handle recovers instead of staying broken.
         let already_resolved = world
             .get::<WorldAssetRoot>(entity)
             .is_some_and(|root| root.0.id() == scene.id())
@@ -409,8 +394,6 @@ fn attach_vrm_instance(
     scene_roots: Query<(), With<VrmSceneRoot>>,
     mut commands: Commands,
 ) {
-    // A world asset spawned without a parent triggers the event with
-    // `Entity::PLACEHOLDER`; nothing crate-managed can be attached there.
     let parent = ready.event_target();
     if parent == Entity::PLACEHOLDER {
         return;
@@ -422,10 +405,6 @@ fn attach_vrm_instance(
             .find(|entity| scene_roots.contains(*entity))
     });
 
-    // A ready for an instance that has already been superseded (bevy reuses the
-    // `InstanceId` on hot reload, and a stale event can outlive a swap) must not
-    // touch the owner's current rig. A crate-managed VRM scene that still landed
-    // is removed so it cannot stay as an orphan.
     if instances
         .get(parent)
         .is_ok_and(|world_instance| **world_instance != ready.instance_id)
@@ -446,9 +425,6 @@ fn attach_vrm_instance(
                     attach_managed(world, parent, root, instance_id);
                 });
             }
-            // The new instance is not a VRM (or has no scene): drop any stale rig
-            // so an `Initialized` root never outlives the rig it described. The
-            // guard keeps a delayed drop from wiping a newer attach.
             None => {
                 let instance_id = ready.instance_id;
                 commands.queue(move |world: &mut World| {
@@ -457,9 +433,6 @@ fn attach_vrm_instance(
             }
         }
     } else if raw_owner.contains(parent) {
-        // Raw `WorldAssetRoot(..)` spawn: the VRM stays on the child, as before.
-        // Deferred and re-validated in the live world, so a duplicate ready does
-        // not re-fire `Insert<Initialized>` and a stale shape is cleaned up.
         if let Some(root) = scene_root {
             let instance_id = ready.instance_id;
             commands.queue(move |world: &mut World| {
@@ -468,10 +441,6 @@ fn attach_vrm_instance(
         }
     } else if scene_root.is_some() && instances.contains(parent) && !dynamic_owner.contains(parent)
     {
-        // The owner's own `WorldAssetRoot` queued this instance and no longer
-        // wants it: a spawn that survived a detach. Its entities are removed. An
-        // instance bevy spawned for anything else (`spawn_as_child`, a
-        // `DynamicWorldRoot`) belongs to the application and is left alone.
         let instance_id = ready.instance_id;
         commands.queue(move |world: &mut World| cleanup_stale_instance(world, instance_id, parent));
     }
@@ -502,26 +471,19 @@ fn attach_managed(
     if world.get_entity(parent).is_err() || world.get_entity(scene_root).is_err() {
         return;
     }
-    // Cancelled or repurposed before this deferred command ran: a detached owner
-    // (no `VrmHandle`) or a removed `WorldAssetRoot` means the instance is stale,
-    // so it is cleaned up rather than promoted onto the entity.
     if world.get::<VrmHandle>(parent).is_none() || world.get::<WorldAssetRoot>(parent).is_none() {
         cleanup_stale_instance(world, instance_id, parent);
         return;
     }
-    // The scene root must still belong to the very instance that became ready.
     if !instance_owns(world, instance_id, scene_root) {
         return;
     }
-    // Superseded between the ready event and this deferred command.
     if world
         .get::<WorldInstance>(parent)
         .is_some_and(|world_instance| **world_instance != instance_id)
     {
         return;
     }
-    // Idempotent: this exact rig is already attached (a duplicate ready for the
-    // same instance must not move the root data a second time).
     if world
         .get::<VrmInstanceState>(parent)
         .is_some_and(|state| state.scene_root == scene_root)
@@ -532,30 +494,13 @@ fn attach_managed(
         .get::<VrmGeneration>(parent)
         .map_or(1, |previous| previous.0.saturating_add(1));
 
-    // Now that a fresh rig is attached, any data left by a previous one is stale:
-    // holders may name despawned bones and an `Initialized` root may point at a
-    // rig that no longer exists. Clear before moving the new values in.
-    //
-    // Only a rig that is still recorded left such data: an invalidation and a
-    // detach clear theirs. On the first attach the root-data types present on
-    // the entity were put there by the application (a `LookAtProperties` for a
-    // model that declares no `lookAt`, say) and must survive, as they did when
-    // the model's values were only inserted.
     if world.get::<VrmInstanceState>(parent).is_some() {
         clear_attached_state(world, parent);
     }
     move_root_data(world, scene_root, parent);
-    // Every insert and removal above flushed the world's command queue, so an
-    // application observer (on `Remove<Initialized>` or `Add<VrmPath>`, say) may
-    // already have detached or despawned the owner or the scene. Re-check
-    // before each step that touches them again.
     if !attach_still_wanted(world, parent, scene_root) {
         return;
     }
-    // The loader names the scene root after `meta.name`. A `Name` the
-    // application gave the entity wins. A scene root that is also the root bone
-    // (a `hips` listed directly in the glTF scene) carries `Vrm::ROOT_BONE`
-    // instead, which is a lookup key rather than the model's name.
     if world.get::<Name>(parent).is_none()
         && let Some(name) = world
             .get::<Name>(scene_root)
@@ -575,8 +520,6 @@ fn attach_managed(
         VrmGeneration(generation),
         VrmInstanceState { scene_root },
     ));
-    // An `On<Add, Vrm>` observer may have detached the owner; `Initialized` must
-    // then not be resurrected on it.
     if !attach_still_wanted(world, parent, scene_root)
         || world
             .get::<VrmInstanceState>(parent)
@@ -584,8 +527,6 @@ fn attach_managed(
     {
         return;
     }
-    // Last, so observers on `On<Insert, Initialized>` see `Vrm`, the generation
-    // and every root component already in place.
     world.entity_mut(parent).insert(Initialized);
 }
 
@@ -621,13 +562,10 @@ fn attach_raw_instance(
         return;
     }
     let owns = instance_owns(world, instance_id, root);
-    // The owner is still the raw `WorldAssetRoot(..)` spawn this event was for:
-    // not managed, not a `.vrma`, and still wanting an instance.
     let still_raw = world.get::<WorldAssetRoot>(owner).is_some()
         && world.get::<VrmHandle>(owner).is_none()
         && world.get::<Vrma>(owner).is_none()
         && world.get::<VrmaHandle>(owner).is_none();
-    // The ready must still be the owner's current instance.
     let still_current = world
         .get::<WorldInstance>(owner)
         .is_none_or(|world_instance| **world_instance == instance_id);
@@ -638,8 +576,6 @@ fn attach_raw_instance(
         }
         return;
     }
-    // The scene is ours but the owner no longer wants it: a cancelled or
-    // superseded raw spawn that landed late.
     if owns {
         cleanup_stale_instance(world, instance_id, owner);
     }
@@ -769,9 +705,6 @@ fn cleanup_stale_instance(
     world.resource_scope(|world, mut spawner: Mut<WorldInstanceSpawner>| {
         spawner.despawn_instance_sync(world, &instance_id);
     });
-    // Only clear the owner's `WorldInstance` if it still names the instance just
-    // cleaned up. A raw owner that has already re-targeted carries the *new*
-    // instance there, and removing it would strip the live request.
     if world
         .get::<WorldInstance>(parent)
         .is_some_and(|world_instance| **world_instance == instance_id)
@@ -962,9 +895,6 @@ impl Plugin for VrmInstancePlugin {
             .add_systems(Update, invalidate_dead_rigs)
             .add_systems(
                 SpawnScene,
-                // Re-arm after `Update` (and so after any handle mutation there)
-                // but before the resolver, which then sees `Changed<VrmHandle>`
-                // from the same frame.
                 (rearm_pending_vrm, resolve_vrm_scene)
                     .chain()
                     .before(SceneSpawnerSystems::WorldInstanceSpawn),
@@ -1037,8 +967,6 @@ mod tests {
             .id();
         world.entity_mut(root_bone).insert(ChildOf(root));
         if self_player {
-            // The no-`hips` fallback: the player is the scene root itself, and
-            // the synthetic target is animated by it.
             world
                 .entity_mut(root)
                 .insert((AnimationPlayer::default(), AnimatedBy(root)));
@@ -1106,8 +1034,6 @@ mod tests {
             skins: Vec::new(),
             named_skins: Default::default(),
             default_scene: None,
-            // `bevy_animation` is an unconditional dependency of this crate
-            // (see `Cargo.toml`), so these fields are always present on `Gltf`.
             animations: Vec::new(),
             named_animations: Default::default(),
             source: None,
@@ -1231,7 +1157,6 @@ mod tests {
             Some(1),
             "the first attach is generation 1"
         );
-        // Application components survive.
         assert_eq!(
             app.world().get::<Transform>(vrm).map(|t| t.translation),
             Some(Vec3::new(0.0, 0.0, 1.0))
@@ -1240,7 +1165,6 @@ mod tests {
             app.world().get::<Name>(vrm).map(Name::as_str),
             Some("avatar")
         );
-        // The root inventory moved.
         assert!(app.world().get::<VrmPath>(vrm).is_some());
         assert!(app.world().get::<RestWorldTransform>(vrm).is_some());
         let head = app
@@ -1256,8 +1180,6 @@ mod tests {
         assert!(app.world().get::<AnimationTargetId>(vrm).is_some());
         assert!(app.world().get::<AnimatedBy>(vrm).is_some());
 
-        // The internal scene root keeps the hierarchy and the marker, and no
-        // longer carries the transferred target.
         let root = scene_root_of(&app, vrm);
         assert_ne!(root, vrm);
         assert!(app.world().get::<VrmSceneRoot>(root).is_some());
@@ -1530,7 +1452,6 @@ mod tests {
             "the asset is not loaded, so no instance exists yet"
         );
 
-        // Cancel by triggering on the owner (the raw-pending shape).
         app.world_mut()
             .commands()
             .entity(owner)
@@ -1540,8 +1461,6 @@ mod tests {
         }
         assert!(app.world().get::<WorldAssetRoot>(owner).is_none());
 
-        // The asset arrives afterwards: the engine's queued spawn runs anyway, and
-        // the observer scoped to the instance has to clean it up.
         app.world_mut()
             .resource_mut::<Assets<WorldAsset>>()
             .insert(&scene_handle, vrm_scene(false).0)
@@ -1584,7 +1503,6 @@ mod tests {
         assert!(app.world().get::<VrmHandle>(vrm).is_none());
         assert!(app.world().get_entity(scene_root).is_err());
 
-        // Re-attach: the same entity is reused as the VRM.
         app.world_mut().entity_mut(vrm).insert(VrmHandle(gltf));
         for _ in 0..6 {
             app.update();
@@ -1620,8 +1538,6 @@ mod tests {
         assert_eq!(app.world().get::<VrmGeneration>(vrm).map(|g| g.0), Some(1));
         let first_root = scene_root_of(&app, vrm);
 
-        // Replace the asset: bevy despawns the instance and re-instantiates it
-        // under the same `InstanceId`.
         app.world_mut()
             .resource_mut::<Assets<WorldAsset>>()
             .insert(&scene_handle, vrm_scene_with_neck())
@@ -1682,7 +1598,6 @@ mod tests {
         let vrm = spawn_ready(&mut app, first);
         assert_eq!(app.world().get::<VrmGeneration>(vrm).map(|g| g.0), Some(1));
 
-        // A -> non-VRM: the rig is invalidated, but the counter must survive.
         app.world_mut()
             .entity_mut(vrm)
             .get_mut::<VrmHandle>()
@@ -1698,7 +1613,6 @@ mod tests {
             "the generation is kept across invalidation"
         );
 
-        // non-VRM -> B: the new rig must be strictly newer than A.
         app.world_mut()
             .entity_mut(vrm)
             .get_mut::<VrmHandle>()
@@ -2126,7 +2040,6 @@ mod tests {
             app.update();
         }
 
-        // Re-target before `first` loads.
         app.world_mut()
             .entity_mut(owner)
             .insert(WorldAssetRoot(second));
@@ -2134,8 +2047,6 @@ mod tests {
             app.update();
         }
 
-        // `first` arrives afterwards: its queued spawn still runs, and its
-        // crate-managed scene must be removed, not parented as an orphan.
         app.world_mut()
             .resource_mut::<Assets<WorldAsset>>()
             .insert(&first, vrm_scene(false).0)
@@ -2188,7 +2099,6 @@ mod tests {
             app.world().get::<Vrm>(root).is_some(),
             "the child is the VRM"
         );
-        // A raw full detach also drops the private VRMA graph state on this root.
         app.world_mut()
             .entity_mut(root)
             .insert(VrmAnimationGraphState::default());
@@ -2256,7 +2166,6 @@ mod tests {
             .get::<WorldInstance>(vrm)
             .expect("the non-VRM instance resolved");
 
-        // Re-inserting the same handle re-arms the resolver via `Changed`.
         app.world_mut().entity_mut(vrm).insert(VrmHandle(plain));
         for _ in 0..3 {
             app.update();
@@ -2287,7 +2196,6 @@ mod tests {
         let root = scene_root_of(&app, vrm);
         let instance_id = **app.world().get::<WorldInstance>(vrm).unwrap();
 
-        // The owner gives up the avatar, but a stale ready still arrives.
         app.world_mut().entity_mut(vrm).remove::<VrmHandle>();
         app.world_mut().commands().trigger(WorldInstanceReady {
             entity: vrm,
@@ -2321,8 +2229,6 @@ mod tests {
         let root = scene_root_of(&app, vrm);
         let instance_id = **app.world().get::<WorldInstance>(vrm).unwrap();
 
-        // The owner gives up the handle (and the attached markers) before the
-        // deferred command would run.
         app.world_mut()
             .entity_mut(vrm)
             .remove::<(VrmHandle, Vrm, Initialized, VrmInstanceState)>();
@@ -2345,7 +2251,6 @@ mod tests {
     #[test]
     fn an_unrelated_world_asset_root_ancestor_is_not_touched() -> TestResult {
         let mut app = instance_app();
-        // An unrelated scene owner with its own instance registration.
         let outer_scene = app
             .world_mut()
             .resource_mut::<Assets<WorldAsset>>()
@@ -2354,7 +2259,6 @@ mod tests {
         for _ in 0..3 {
             app.update();
         }
-        // Its metadata is gone, so ownership cannot be verified from it.
         app.world_mut().entity_mut(owner).remove::<WorldInstance>();
 
         let rig = app.world_mut().spawn(Vrm).id();
@@ -2416,7 +2320,6 @@ mod tests {
             .next()
             .unwrap();
 
-        // Reparent the bone away, taking its subtree with it.
         let holder = app.world_mut().spawn_empty().id();
         app.world_mut().entity_mut(holder).add_child(bone);
         app.update();
@@ -2467,11 +2370,9 @@ mod tests {
             .next()
             .unwrap();
 
-        // The private graph state the runtime persists on the stable owner.
         app.world_mut()
             .entity_mut(vrm)
             .insert(VrmAnimationGraphState::default());
-        // Reparent a node away, taking its subtree with it.
         let holder = app.world_mut().spawn_empty().id();
         app.world_mut().entity_mut(holder).add_child(bone);
         app.update();

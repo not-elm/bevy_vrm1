@@ -39,16 +39,13 @@ fn update_spring_bones(
             let Ok((child_of, mut state, props)) = joints.get_mut(joint) else {
                 continue;
             };
-            if state.is_added() {
-                // The rest pose was captured while the file loaded, without the
-                // avatar's placement, so the tail starts from the live pose.
-                if let Some((_, tail_gtf)) = spring_root
+            if state.is_added()
+                && let Some((_, tail_gtf)) = spring_root
                     .joints
                     .get(index + 1)
                     .and_then(|tail| transforms.get(*tail).ok())
-                {
-                    state.seed_tail(global_to_center_local(tail_gtf.translation(), &center_gtf));
-                }
+            {
+                state.seed_tail(global_to_center_local(tail_gtf.translation(), &center_gtf));
             }
             let parent_gtf = transforms
                 .get(child_of.parent())
@@ -184,7 +181,6 @@ mod tests {
             let mut app = test_app();
             app.add_plugins(SpringBoneUpdatePlugin);
             let world = app.world_mut();
-            // The scene root, under an application entity at z = 1.
             let root = world
                 .spawn((
                     Transform::default(),

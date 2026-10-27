@@ -252,8 +252,9 @@ fn compute_global(
 mod tests {
     use super::*;
     use crate::success;
-    use crate::tests::{TestResult, test_app};
-    use bevy::ecs::system::RunSystemOnce;
+    use crate::tests::{
+        TestResult, rotation, rotation_is, run_constraints, set_rotation, test_app,
+    };
     use bevy::transform::TransformPlugin;
     use bevy::transform::systems::{propagate_parent_transforms, sync_simple_transforms};
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
@@ -272,42 +273,6 @@ mod tests {
     /// Stands in for the source bone a `AnimationPlugin` graph drives.
     #[derive(Component)]
     struct Animated;
-
-    fn run_constraints(app: &mut App) {
-        app.world_mut()
-            .run_system_once(apply_node_constraints)
-            .expect("Failed to run apply_node_constraints");
-        app.world_mut().flush();
-    }
-
-    fn rotation(
-        app: &App,
-        entity: Entity,
-    ) -> Quat {
-        app.world().get::<Transform>(entity).unwrap().rotation
-    }
-
-    /// Rotates in place: the translation matters to the aim constraint, so it
-    /// must survive.
-    fn set_rotation(
-        app: &mut App,
-        entity: Entity,
-        rotation: Quat,
-    ) {
-        app.world_mut()
-            .entity_mut(entity)
-            .get_mut::<Transform>()
-            .expect("the entity has a Transform")
-            .rotation = rotation;
-    }
-
-    /// `q` and `-q` are the same rotation, so compare up to sign.
-    fn rotation_is(
-        actual: Quat,
-        expected: Quat,
-    ) -> bool {
-        actual.abs_diff_eq(expected, 1e-5) || actual.abs_diff_eq(-expected, 1e-5)
-    }
 
     fn rest(rotation: Quat) -> RestTransform {
         RestTransform(Transform::from_rotation(rotation))

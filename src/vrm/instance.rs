@@ -907,7 +907,9 @@ impl Plugin for VrmInstancePlugin {
 mod tests {
     use super::*;
     use crate::success;
-    use crate::tests::{TestResult, test_app};
+    use crate::tests::{
+        TestResult, gltf_with_scene, gltf_with_scenes, plain_scene, scene_root_of, test_app,
+    };
     use crate::vrm::detach::VrmDetachPlugin;
     use crate::vrma::VrmAnimationGraphState;
     use bevy::animation::AnimationPlayer;
@@ -1002,42 +1004,9 @@ mod tests {
         WorldAsset::new(world)
     }
 
-    /// A scene that is *not* a VRM: no [`VrmSceneRoot`] anywhere.
-    fn plain_scene() -> WorldAsset {
-        let mut world = World::new();
-        let root = world.spawn_empty().id();
-        world.spawn(ChildOf(root));
-        WorldAsset::new(world)
-    }
-
-    /// A `Gltf` asset exposing exactly one scene.
-    fn gltf_with_scene(scene: Handle<WorldAsset>) -> Gltf {
-        gltf_with_scenes(vec![scene])
-    }
-
     /// A `Gltf` asset exposing no scene at all: a definitive failure to resolve.
     fn gltf_without_scene() -> Gltf {
         gltf_with_scenes(Vec::new())
-    }
-
-    /// A `Gltf` asset exposing the given scenes.
-    fn gltf_with_scenes(scenes: Vec<Handle<WorldAsset>>) -> Gltf {
-        Gltf {
-            scenes,
-            named_scenes: Default::default(),
-            meshes: Vec::new(),
-            named_meshes: Default::default(),
-            materials: Vec::new(),
-            named_materials: Default::default(),
-            nodes: Vec::new(),
-            named_nodes: Default::default(),
-            skins: Vec::new(),
-            named_skins: Default::default(),
-            default_scene: None,
-            animations: Vec::new(),
-            named_animations: Default::default(),
-            source: None,
-        }
     }
 
     /// Adds a scene and a `Gltf` that points at it, returning the handle.
@@ -1129,16 +1098,6 @@ mod tests {
             app.update();
         }
         entity
-    }
-
-    fn scene_root_of(
-        app: &App,
-        entity: Entity,
-    ) -> Entity {
-        app.world()
-            .get::<VrmInstanceState>(entity)
-            .expect("the owner records its attached scene root")
-            .scene_root
     }
 
     /// The spawned entity keeps its id and its application components, and gains

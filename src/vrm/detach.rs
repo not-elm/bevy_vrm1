@@ -270,19 +270,17 @@ fn despawn_children(
 mod tests {
     use super::*;
     use crate::success;
-    use crate::tests::TestResult;
+    use crate::tests::{TestResult, rotation, rotation_is, run_constraints, set_rotation};
     use crate::vrm::components::{ConstraintExecutionOrder, VrmConstraintKind};
     use crate::vrm::expressions::{ExpressionCategory, ExpressionOverrideType};
     use crate::vrm::gltf::extensions::vrmc_vrm::LookAtProperties;
     use crate::vrm::humanoid_bone::prelude::HipsBoneEntity;
-    use crate::vrm::runtime::apply_node_constraints;
     use crate::vrm::spring_bone::{SpringCenterNode, SpringColliders, SpringJoints};
     use crate::vrm::{RestWorldTransform, VrmPath};
     use crate::vrma::animation::prelude::{
         EffectiveExpressionWeights, ExpressionMorphBinds, ExpressionSetting, ExpressionSettings,
         MorphBindTable, VrmExpressionWeights,
     };
-    use bevy::ecs::system::RunSystemOnce;
     use bevy::platform::collections::HashMap;
     use std::f32::consts::FRAC_PI_2;
 
@@ -314,40 +312,6 @@ mod tests {
             .entity(entity)
             .trigger(RequestDetachVrm);
         app.update();
-    }
-
-    fn run_constraints(app: &mut App) {
-        app.world_mut()
-            .run_system_once(apply_node_constraints)
-            .expect("Failed to run apply_node_constraints");
-        app.world_mut().flush();
-    }
-
-    fn set_rotation(
-        app: &mut App,
-        entity: Entity,
-        rotation: Quat,
-    ) {
-        app.world_mut()
-            .entity_mut(entity)
-            .get_mut::<Transform>()
-            .expect("the entity has a Transform")
-            .rotation = rotation;
-    }
-
-    fn rotation(
-        app: &App,
-        entity: Entity,
-    ) -> Quat {
-        app.world().get::<Transform>(entity).unwrap().rotation
-    }
-
-    /// `q` and `-q` are the same rotation, so compare up to sign.
-    fn rotation_is(
-        actual: Quat,
-        expected: Quat,
-    ) -> bool {
-        actual.abs_diff_eq(expected, 1e-5) || actual.abs_diff_eq(-expected, 1e-5)
     }
 
     #[test]

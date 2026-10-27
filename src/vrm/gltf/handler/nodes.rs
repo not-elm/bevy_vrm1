@@ -10,12 +10,12 @@
 
 use bevy::ecs::world::EntityWorldMut;
 use bevy::math::Dir3;
-use serde::Deserialize;
 
 use super::VrmLoadState;
 use super::root::EXT_NODE_CONSTRAINT;
 use crate::error::vrm_warn;
 use crate::prelude::{PendingNodeConstraint, VrmBone, VrmConstraintKind, VrmNodeIndex};
+use crate::vrm::gltf::extensions::vrmc_node_constraint::VrmcNodeConstraint;
 
 pub(crate) fn process_node(
     state: &mut VrmLoadState,
@@ -42,9 +42,9 @@ pub(crate) fn process_node(
     let Some(extension) = extensions.get(EXT_NODE_CONSTRAINT) else {
         return;
     };
-    match serde_json::from_value::<NodeConstraintExt>(extension.clone()) {
+    match serde_json::from_value::<VrmcNodeConstraint>(extension.clone()) {
         Ok(parsed) => {
-            let Some((kind, source, weight)) = parsed.into_pending(index) else {
+            let Some((kind, source, weight)) = into_pending(parsed, index) else {
                 return;
             };
             entity.insert(PendingNodeConstraint {
@@ -59,54 +59,6 @@ pub(crate) fn process_node(
             ));
         }
     }
-}
-
-#[derive(Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-struct NodeConstraintExt {
-    constraint: ConstraintSpec,
-}
-
-/// Per the specification, exactly one of the three fields is set.
-#[derive(Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
-struct ConstraintSpec {
-    rotation: Option<RotationConstraint>,
-    roll: Option<RollConstraint>,
-    aim: Option<AimConstraint>,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-struct RotationConstraint {
-    source: usize,
-    #[serde(default = "default_weight")]
-    weight: f32,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-struct RollConstraint {
-    source: usize,
-    /// `X` | `Y` | `Z`
-    roll_axis: String,
-    #[serde(default = "default_weight")]
-    weight: f32,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-struct AimConstraint {
-    source: usize,
-    /// `PositiveX` | `NegativeX` | …
-    aim_axis: String,
-    #[serde(default = "default_weight")]
-    weight: f32,
-}
-
-/// `VRMC_node_constraint.*.weight` defaults to `1.0`.
-fn default_weight() -> f32 {
-    1.0
 }
 
 /// Parses a constraint axis into a typed [`Dir3`]; an invalid axis drops the
@@ -132,50 +84,48 @@ fn parse_aim_axis(axis: &str) -> Option<Dir3> {
     }
 }
 
-impl NodeConstraintExt {
-    fn into_pending(
-        self,
-        node_index: usize,
-    ) -> Option<(VrmConstraintKind, usize, f32)> {
-        let constraint = self.constraint;
-        if let Some(rotation) = constraint.rotation {
-            return Some((
-                VrmConstraintKind::Rotation,
-                rotation.source,
-                rotation.weight,
-            ));
-        }
-        if let Some(roll) = constraint.roll {
-            let Some(roll_axis) = parse_roll_axis(&roll.roll_axis) else {
-                vrm_warn!(format!(
-                    "VRM node_constraint: invalid `rollAxis` `{}` on node {node_index}, \
-                     skipping the constraint",
-                    roll.roll_axis
-                ));
-                return None;
-            };
-            return Some((
-                VrmConstraintKind::Roll { roll_axis },
-                roll.source,
-                roll.weight,
-            ));
-        }
-        if let Some(aim) = constraint.aim {
-            let Some(aim_axis) = parse_aim_axis(&aim.aim_axis) else {
-                vrm_warn!(format!(
-                    "VRM node_constraint: invalid `aimAxis` `{}` on node {node_index}, \
-                     skipping the constraint",
-                    aim.aim_axis
-                ));
-                return None;
-            };
-            return Some((VrmConstraintKind::Aim { aim_axis }, aim.source, aim.weight));
-        }
-        vrm_warn!(format!(
-            "VRM: empty `{EXT_NODE_CONSTRAINT}` on node {node_index}, skipping it"
+fn into_pending(
+    extension: VrmcNodeConstraint,
+    node_index: usize,
+) -> Option<(VrmConstraintKind, usize, f32)> {
+    let constraint = extension.constraint;
+    if let Some(rotation) = constraint.rotation {
+        return Some((
+            VrmConstraintKind::Rotation,
+            rotation.source,
+            rotation.weight,
         ));
-        None
     }
+    if let Some(roll) = constraint.roll {
+        let Some(roll_axis) = parse_roll_axis(&roll.roll_axis) else {
+            vrm_warn!(format!(
+                "VRM node_constraint: invalid `rollAxis` `{}` on node {node_index}, \
+                 skipping the constraint",
+                roll.roll_axis
+            ));
+            return None;
+        };
+        return Some((
+            VrmConstraintKind::Roll { roll_axis },
+            roll.source,
+            roll.weight,
+        ));
+    }
+    if let Some(aim) = constraint.aim {
+        let Some(aim_axis) = parse_aim_axis(&aim.aim_axis) else {
+            vrm_warn!(format!(
+                "VRM node_constraint: invalid `aimAxis` `{}` on node {node_index}, \
+                 skipping the constraint",
+                aim.aim_axis
+            ));
+            return None;
+        };
+        return Some((VrmConstraintKind::Aim { aim_axis }, aim.source, aim.weight));
+    }
+    vrm_warn!(format!(
+        "VRM: empty `{EXT_NODE_CONSTRAINT}` on node {node_index}, skipping it"
+    ));
+    None
 }
 
 #[cfg(test)]
@@ -231,18 +181,19 @@ mod tests {
     /// constraint parsing is exercised through its own entry point.
     #[test]
     fn constraint_axes_are_parsed_and_weight_defaults_to_one() -> TestResult {
-        let extension: NodeConstraintExt =
-            serde_json::from_str(r#"{"constraint":{"roll":{"source":2,"rollAxis":"Z"}}}"#)?;
+        let extension: VrmcNodeConstraint = serde_json::from_str(
+            r#"{"specVersion":"1.0","constraint":{"roll":{"source":2,"rollAxis":"Z"}}}"#,
+        )?;
         assert_eq!(
-            extension.into_pending(7),
+            into_pending(extension, 7),
             Some((VrmConstraintKind::Roll { roll_axis: Dir3::Z }, 2, 1.0))
         );
 
-        let extension: NodeConstraintExt = serde_json::from_str(
-            r#"{"constraint":{"aim":{"source":2,"aimAxis":"NegativeY","weight":0.25}}}"#,
+        let extension: VrmcNodeConstraint = serde_json::from_str(
+            r#"{"specVersion":"1.0","constraint":{"aim":{"source":2,"aimAxis":"NegativeY","weight":0.25}}}"#,
         )?;
         assert_eq!(
-            extension.into_pending(7),
+            into_pending(extension, 7),
             Some((
                 VrmConstraintKind::Aim {
                     aim_axis: Dir3::NEG_Y
@@ -252,10 +203,11 @@ mod tests {
             ))
         );
 
-        let extension: NodeConstraintExt =
-            serde_json::from_str(r#"{"constraint":{"rotation":{"source":9}}}"#)?;
+        let extension: VrmcNodeConstraint = serde_json::from_str(
+            r#"{"specVersion":"1.0","constraint":{"rotation":{"source":9}}}"#,
+        )?;
         assert_eq!(
-            extension.into_pending(7),
+            into_pending(extension, 7),
             Some((VrmConstraintKind::Rotation, 9, 1.0))
         );
 
@@ -264,16 +216,19 @@ mod tests {
 
     #[test]
     fn an_invalid_axis_drops_only_that_constraint() -> TestResult {
-        let extension: NodeConstraintExt =
-            serde_json::from_str(r#"{"constraint":{"aim":{"source":2,"aimAxis":"Sideways"}}}"#)?;
-        assert_eq!(extension.into_pending(7), None);
+        let extension: VrmcNodeConstraint = serde_json::from_str(
+            r#"{"specVersion":"1.0","constraint":{"aim":{"source":2,"aimAxis":"Sideways"}}}"#,
+        )?;
+        assert_eq!(into_pending(extension, 7), None);
 
-        let extension: NodeConstraintExt =
-            serde_json::from_str(r#"{"constraint":{"roll":{"source":2,"rollAxis":"W"}}}"#)?;
-        assert_eq!(extension.into_pending(7), None);
+        let extension: VrmcNodeConstraint = serde_json::from_str(
+            r#"{"specVersion":"1.0","constraint":{"roll":{"source":2,"rollAxis":"W"}}}"#,
+        )?;
+        assert_eq!(into_pending(extension, 7), None);
 
-        let extension: NodeConstraintExt = serde_json::from_str(r#"{"constraint":{}}"#)?;
-        assert_eq!(extension.into_pending(7), None);
+        let extension: VrmcNodeConstraint =
+            serde_json::from_str(r#"{"specVersion":"1.0","constraint":{}}"#)?;
+        assert_eq!(into_pending(extension, 7), None);
 
         success!()
     }

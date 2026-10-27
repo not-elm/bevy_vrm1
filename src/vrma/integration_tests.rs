@@ -35,11 +35,13 @@
 
 use crate::prelude::*;
 use crate::success;
-use crate::tests::{TestResult, test_app};
+use crate::tests::{
+    TestResult, gltf_with_scene, plain_scene, play_vrma, run_frames, scene_root_of, test_app,
+};
 use crate::vrm::detach::{RequestDetachVrm, VrmDetachPlugin};
 use crate::vrm::gltf::handler::bone_target_id;
 use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
-use crate::vrm::instance::{VrmGeneration, VrmInstancePlugin, VrmInstanceState, VrmSceneRoot};
+use crate::vrm::instance::{VrmGeneration, VrmInstancePlugin, VrmSceneRoot};
 use crate::vrma::animation::VrmaAnimationPlayersPlugin;
 use crate::vrma::animation::animation_graph::NeedsBake;
 use crate::vrma::initialize::VrmaInitializePlugin;
@@ -284,34 +286,6 @@ fn vrm_scene(
     (WorldAsset::new(world), spine)
 }
 
-/// A `Gltf` exposing exactly one scene.
-fn gltf_with_scene(scene: Handle<WorldAsset>) -> Gltf {
-    Gltf {
-        scenes: vec![scene],
-        named_scenes: Default::default(),
-        meshes: Vec::new(),
-        named_meshes: Default::default(),
-        materials: Vec::new(),
-        named_materials: Default::default(),
-        nodes: Vec::new(),
-        named_nodes: Default::default(),
-        skins: Vec::new(),
-        named_skins: Default::default(),
-        default_scene: None,
-        animations: Vec::new(),
-        named_animations: Default::default(),
-        source: None,
-    }
-}
-
-/// A scene that is not a VRM at all: no [`VrmSceneRoot`] anywhere.
-fn plain_scene() -> WorldAsset {
-    let mut world = World::new();
-    let root = world.spawn_empty().id();
-    world.spawn(ChildOf(root));
-    WorldAsset::new(world)
-}
-
 /// Registers a VRM scene and the `Gltf` that points at it.
 fn add_vrm(
     app: &mut App,
@@ -445,27 +419,6 @@ fn wait_ready(
         app.update();
     }
     panic!("the managed avatar never became ready");
-}
-
-/// Runs `count` frames with no assertions.
-fn run_frames(
-    app: &mut App,
-    count: usize,
-) {
-    for _ in 0..count {
-        app.update();
-    }
-}
-
-/// The internal scene root the owner currently records.
-fn scene_root_of(
-    app: &App,
-    owner: Entity,
-) -> Entity {
-    app.world()
-        .get::<VrmInstanceState>(owner)
-        .expect("the owner records a live rig")
-        .scene_root
 }
 
 /// The attach generation the owner currently records.
@@ -661,23 +614,6 @@ fn set_asset_spine_rest(
         RestTransform(local),
         RestGlobalTransform(prefix.mul_transform(local)),
     ));
-}
-
-/// Plays a `.vrma` through the production event, with a controllable fade.
-fn play_vrma(
-    app: &mut App,
-    vrma: Entity,
-    transition_duration: Duration,
-) {
-    app.world_mut()
-        .commands()
-        .entity(vrma)
-        .trigger(move |entity| PlayVrma {
-            vrma: entity,
-            repeat: RepeatAnimation::Never,
-            transition_duration,
-            reset_spring_bones: false,
-        });
 }
 
 /// The probe frame recorded for the update that just ran.

@@ -178,16 +178,14 @@ mod tests {
         ClearExpressions, Initialized, PlayVrma, SetExpressions, StopVrma, VrmSystemSets,
     };
     use crate::success;
-    use crate::tests::{TestResult, test_app};
+    use crate::tests::{TestResult, request_graph, run_frames, test_app};
     use crate::vrm::Vrm;
     use crate::vrm::expressions::{
         ExpressionCategory, ExpressionOverrideType, VrmExpressionPlugin,
     };
     use crate::vrm::instance::VrmGeneration;
     use crate::vrma::VrmAnimationNodeIndex;
-    use crate::vrma::animation::animation_graph::{
-        RequestUpdateAnimationGraph, VrmaAnimationGraphPlugin,
-    };
+    use crate::vrma::animation::animation_graph::VrmaAnimationGraphPlugin;
     use crate::vrma::animation::play::VrmaAnimationPlayPlugin;
     use crate::vrma::animation::properties::{
         ExpressionMorphBinds, ExpressionSetting, ExpressionSettings, MorphBind, MorphBindTable,
@@ -376,22 +374,6 @@ mod tests {
             .unwrap_or(0.0)
     }
 
-    fn request_graph(
-        app: &mut App,
-        vrm: Entity,
-    ) {
-        app.world_mut().trigger(RequestUpdateAnimationGraph { vrm });
-        app.world_mut().flush();
-        app.update();
-    }
-
-    /// Three frames, so the evaluation is guaranteed to see the new graph.
-    fn run_frames(app: &mut App) {
-        for _ in 0..3 {
-            app.update();
-        }
-    }
-
     fn retargeted_curves(
         app: &App,
         clip: &Handle<AnimationClip>,
@@ -464,7 +446,7 @@ mod tests {
         request_graph(&mut app, vrm);
 
         play(&mut app, root_bone, vrma);
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
 
         assert_eq!(weight_of(&app, vrm, "happy"), 1.0);
         assert_eq!(
@@ -489,7 +471,7 @@ mod tests {
 
         play(&mut app, root_a, vrma_a);
         play(&mut app, root_b, vrma_b);
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
 
         assert_eq!(weight_of(&app, a, "happy"), 1.0);
         assert_eq!(weight_of(&app, b, "happy"), 0.25);
@@ -621,7 +603,7 @@ mod tests {
             spawn_expression_vrma(app.world_mut(), vrm, "happy", &[(0.0, raw), (1.0, raw)])?;
         request_graph(&mut app, vrm);
         play(&mut app, root_bone, vrma);
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
         Ok(app.world().get::<MorphWeights>(mesh).unwrap().weights()[0])
     }
 
@@ -697,7 +679,7 @@ mod tests {
             spawn_expression_vrma(app.world_mut(), vrm, "happy", &[(0.0, 1.0), (1.0, 1.0)])?;
         request_graph(&mut app, vrm);
         play(&mut app, root_bone, vrma);
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
         assert_eq!(weight_of(&app, vrm, "happy"), 1.0);
 
         app.world_mut()
@@ -762,7 +744,7 @@ mod tests {
         app.update();
 
         play_vrma(&mut app, vrma);
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
         assert_eq!(
             app.world().get::<MorphWeights>(mesh).unwrap().weights(),
             &[0.4, 0.3],
@@ -772,7 +754,7 @@ mod tests {
         app.world_mut()
             .commands()
             .trigger(StopVrma { entity: vrma });
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
         assert_eq!(
             app.world().get::<MorphWeights>(mesh).unwrap().weights(),
             &[0.4, 0.3],
@@ -792,11 +774,11 @@ mod tests {
         request_graph(&mut app, vrm);
 
         play_vrma(&mut app, outgoing);
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
         assert_eq!(weight_of(&app, vrm, "aa"), 1.0);
 
         play_vrma(&mut app, incoming);
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
         assert_eq!(weight_of(&app, vrm, "happy"), 1.0);
         assert_eq!(
             weight_of(&app, vrm, "aa"),
@@ -805,7 +787,7 @@ mod tests {
         );
 
         app.world_mut().entity_mut(incoming).despawn();
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
         assert_eq!(
             weight_of(&app, vrm, "happy"),
             0.0,

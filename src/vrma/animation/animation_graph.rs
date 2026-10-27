@@ -655,11 +655,9 @@ fn find_entity_by_name(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::{
-        Initialized, LoadedVrma, PlayVrma, VrmBone, Vrma, vrm_root_animation_target,
-    };
+    use crate::prelude::{Initialized, LoadedVrma, VrmBone, Vrma, vrm_root_animation_target};
     use crate::success;
-    use crate::tests::TestResult;
+    use crate::tests::{TestResult, play_vrma, request_graph, run_frames};
     use crate::vrm::gltf::extensions::VrmNode;
     use crate::vrm::gltf::handler::bone_target_id;
     use crate::vrm::instance::VrmGeneration;
@@ -668,9 +666,7 @@ mod tests {
         RetargetSource, VrmAnimationGraphState, VrmaPlaybackState, VrmaRetargetPending,
     };
     use bevy::animation::graph::{AnimationMask, AnimationNodeType};
-    use bevy::animation::{
-        ActiveAnimation, AnimatedBy, AnimationEntityMut, AnimationPlugin, RepeatAnimation,
-    };
+    use bevy::animation::{ActiveAnimation, AnimatedBy, AnimationEntityMut, AnimationPlugin};
     use bevy::app::SpawnScene;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::gltf::GltfNode;
@@ -813,13 +809,6 @@ mod tests {
             .get_mut::<AnimationPlayer>()
             .expect("the root bone holds the player")
             .play(node);
-    }
-
-    /// Three frames, so the evaluation is guaranteed to see the updated graph.
-    fn run_frames(app: &mut App) {
-        for _ in 0..3 {
-            app.update();
-        }
     }
 
     fn spawn_clip(
@@ -966,15 +955,6 @@ mod tests {
             ChildOf(vrma),
         ));
         (vrma, source, working)
-    }
-
-    fn request_graph(
-        app: &mut App,
-        vrm: Entity,
-    ) {
-        app.world_mut().trigger(RequestUpdateAnimationGraph { vrm });
-        app.world_mut().flush();
-        app.update();
     }
 
     fn sample_rotation(
@@ -1696,8 +1676,8 @@ mod tests {
             node,
             "the readded clip reuses its node id"
         );
-        play_vrma(app.world_mut(), vrma, Duration::ZERO);
-        run_frames(&mut app);
+        play_vrma(&mut app, vrma, Duration::ZERO);
+        run_frames(&mut app, 3);
         let rotation = app.world().get::<Transform>(spine).unwrap().rotation;
         assert!(
             rotation.angle_between(Quat::from_rotation_x(0.5) * rest) < 0.01,
@@ -1812,14 +1792,14 @@ mod tests {
             .entity_mut(vrma)
             .insert(VrmaPlaybackState::default());
         request_graph(&mut app, a);
-        play_vrma(app.world_mut(), vrma, Duration::ZERO);
+        play_vrma(&mut app, vrma, Duration::ZERO);
         app.update();
         assert!(app.world().get::<VrmaPlaybackState>(vrma).unwrap().active);
 
         app.world_mut().entity_mut(vrma).insert(ChildOf(b));
         request_graph(&mut app, b);
         request_graph(&mut app, a);
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
 
         let node = app.world().get::<VrmAnimationNodeIndex>(vrma).unwrap().0;
         assert!(
@@ -1831,7 +1811,7 @@ mod tests {
             "the old owner's playback does not start next to the new owner's clip"
         );
 
-        play_vrma(app.world_mut(), vrma, Duration::ZERO);
+        play_vrma(&mut app, vrma, Duration::ZERO);
         app.update();
         assert!(
             app.world()
@@ -1869,11 +1849,11 @@ mod tests {
         }
         request_graph(&mut app, vrm);
         let node_b = app.world().get::<VrmAnimationNodeIndex>(vrma_b).unwrap().0;
-        play_vrma(app.world_mut(), vrma_a, Duration::ZERO);
+        play_vrma(&mut app, vrma_a, Duration::ZERO);
         app.update();
 
         app.world_mut().entity_mut(vrma_b).insert(NeedsBake);
-        play_vrma(app.world_mut(), vrma_b, Duration::ZERO);
+        play_vrma(&mut app, vrma_b, Duration::ZERO);
         app.world_mut().flush();
         app.world_mut()
             .entity_mut(old_root)
@@ -1882,7 +1862,7 @@ mod tests {
             reattach_rig(app.world_mut(), vrm, Quat::from_rotation_z(-0.6));
         app.world_mut().entity_mut(vrm).insert(VrmGeneration(2));
         request_graph(&mut app, vrm);
-        run_frames(&mut app);
+        run_frames(&mut app, 3);
 
         assert_eq!(
             app.world()
@@ -1937,23 +1917,6 @@ mod tests {
         (root_bone, spine)
     }
 
-    /// Plays a `.vrma` through the production event, with a controllable fade.
-    fn play_vrma(
-        world: &mut World,
-        vrma: Entity,
-        transition_duration: Duration,
-    ) {
-        world
-            .commands()
-            .entity(vrma)
-            .trigger(move |entity| PlayVrma {
-                vrma: entity,
-                repeat: RepeatAnimation::Never,
-                transition_duration,
-                reset_spring_bones: false,
-            });
-    }
-
     #[test]
     fn a_reattach_carries_the_transitions_and_the_next_play_fades_the_restored_clip() -> TestResult
     {
@@ -1977,7 +1940,7 @@ mod tests {
         let node_a = app.world().get::<VrmAnimationNodeIndex>(vrma_a).unwrap().0;
         let node_b = app.world().get::<VrmAnimationNodeIndex>(vrma_b).unwrap().0;
 
-        play_vrma(app.world_mut(), vrma_a, Duration::ZERO);
+        play_vrma(&mut app, vrma_a, Duration::ZERO);
         app.update();
 
         assert_eq!(
@@ -2012,7 +1975,7 @@ mod tests {
             "the restored clip is playing on the new player"
         );
 
-        play_vrma(app.world_mut(), vrma_b, Duration::from_millis(300));
+        play_vrma(&mut app, vrma_b, Duration::from_millis(300));
         app.update();
         assert_eq!(
             app.world()

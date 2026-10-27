@@ -82,17 +82,21 @@ fn detach_managed(
 
     remove_root_data(world, entity);
     remove_model_name(world, entity);
-    world.entity_mut(entity).remove::<WorldAssetRoot>();
-    world
-        .entity_mut(entity)
-        .remove::<Vrm>()
-        .remove::<Initialized>()
-        .remove::<VrmGeneration>()
-        .remove::<VrmInstanceState>()
-        .remove::<PendingVrmScene>()
-        .remove::<VrmHandle>()
-        .remove::<WorldInstance>()
-        .remove::<VrmAnimationGraphState>();
+    if let Ok(mut owner) = world.get_entity_mut(entity) {
+        owner.remove::<WorldAssetRoot>();
+    }
+    if let Ok(mut owner) = world.get_entity_mut(entity) {
+        owner.remove::<(
+            Vrm,
+            Initialized,
+            VrmGeneration,
+            VrmInstanceState,
+            PendingVrmScene,
+            VrmHandle,
+            WorldInstance,
+            VrmAnimationGraphState,
+        )>();
+    }
     despawn_children(world, entity);
     for tracked_entity in tracked {
         if tracked_entity == entity {
@@ -228,27 +232,33 @@ fn strip_raw_root(
     root: Entity,
 ) {
     remove_root_data(world, root);
-    world
-        .entity_mut(root)
-        .remove::<Vrm>()
-        .remove::<Initialized>()
-        .remove::<VrmSceneRoot>()
-        .remove::<Name>()
-        .remove::<WorldAssetRoot>()
-        .remove::<RestTransform>()
-        .remove::<RestGlobalTransform>()
-        .remove::<LookAt>()
-        .remove::<BodyTracking>()
-        .remove::<SmoothedGaze>()
-        .remove::<VrmNodeIndex>()
-        .remove::<VrmBone>()
-        .remove::<PendingNodeConstraint>()
-        .remove::<VrmNodeConstraint>()
-        .remove::<SpringRoot>()
-        .remove::<SpringJointProps>()
-        .remove::<SpringJointState>()
-        .remove::<VrmHeadOnly>()
-        .remove::<VrmAnimationGraphState>();
+    if let Ok(mut root) = world.get_entity_mut(root) {
+        root.remove::<(
+            (
+                Vrm,
+                Initialized,
+                VrmSceneRoot,
+                Name,
+                WorldAssetRoot,
+                RestTransform,
+                RestGlobalTransform,
+                LookAt,
+                BodyTracking,
+                SmoothedGaze,
+            ),
+            (
+                VrmNodeIndex,
+                VrmBone,
+                PendingNodeConstraint,
+                VrmNodeConstraint,
+                SpringRoot,
+                SpringJointProps,
+                SpringJointState,
+                VrmHeadOnly,
+                VrmAnimationGraphState,
+            ),
+        )>();
+    }
     despawn_children(world, root);
 }
 
@@ -635,6 +645,69 @@ mod tests {
             app.world().get::<Name>(vrm).map(Name::as_str),
             Some("avatar")
         );
+        success!()
+    }
+
+    /// An application observer that despawns the entity losing `C`, which runs
+    /// in the middle of a detach.
+    fn despawn_on_remove<C: Component>(app: &mut App) {
+        app.add_observer(|trigger: On<Remove, C>, mut commands: Commands| {
+            commands.entity(trigger.event_target()).try_despawn();
+        });
+    }
+
+    const DESPAWNING_OBSERVERS: [fn(&mut App); 2] = [
+        despawn_on_remove::<VrmExpressionWeights>,
+        despawn_on_remove::<Vrm>,
+    ];
+
+    #[test]
+    fn a_managed_detach_survives_an_observer_despawning_the_avatar() -> TestResult {
+        for add_observer in DESPAWNING_OBSERVERS {
+            let mut app = setup_app();
+            add_observer(&mut app);
+            let scene_root = app.world_mut().spawn_empty().id();
+            let vrm = app
+                .world_mut()
+                .spawn((
+                    VrmHandle(Handle::default()),
+                    Vrm,
+                    Initialized,
+                    VrmInstanceState { scene_root },
+                    VrmExpressionWeights::default(),
+                ))
+                .add_child(scene_root)
+                .id();
+
+            trigger_detach(&mut app, vrm);
+
+            assert!(app.world().get_entity(vrm).is_err());
+            assert!(app.world().get_entity(scene_root).is_err());
+        }
+        success!()
+    }
+
+    #[test]
+    fn a_raw_detach_survives_an_observer_despawning_the_root() -> TestResult {
+        for add_observer in DESPAWNING_OBSERVERS {
+            let mut app = setup_app();
+            add_observer(&mut app);
+            let scene_root = app
+                .world_mut()
+                .spawn((Vrm, VrmExpressionWeights::default()))
+                .id();
+            let owner = app
+                .world_mut()
+                .spawn(WorldAssetRoot(Handle::default()))
+                .add_child(scene_root)
+                .id();
+            app.update();
+
+            trigger_detach(&mut app, scene_root);
+
+            assert!(app.world().get_entity(scene_root).is_err());
+            assert!(app.world().get::<WorldAssetRoot>(owner).is_none());
+        }
         success!()
     }
 

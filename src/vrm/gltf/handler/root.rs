@@ -21,8 +21,6 @@
 //! loaded through [`VrmaLoaderPlugin`](crate::vrma::loader::VrmaLoaderPlugin)
 //! into a VRM scene with no expressions. Only `VRMC_vrm` marks a file as a VRM.
 
-use bevy::animation::AnimationTargetId;
-use bevy::math::{Mat4, Quat, Vec3};
 use bevy::platform::collections::hash_map::Entry;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
@@ -42,89 +40,6 @@ pub const EXT_NODE_CONSTRAINT: &str = "VRMC_node_constraint";
 
 /// The VRM humanoid bone whose subtree defines `firstPerson: auto`.
 const HEAD_BONE: &str = "head";
-
-/// The rest pose of one glTF node, captured from the document.
-///
-/// Every field is in the glTF file's own space — *without* bevy's scene
-/// conversion, which `bevy_gltf` applies to the scene root entity rather than
-/// to any node. For transforms that already exist on an entity prefer the
-/// components written by [`insert_rest_transforms`](super::scene); this map
-/// exists for the measurements that must happen while the document is still in
-/// hand.
-#[allow(
-    dead_code,
-    reason = "the hips-scaling and .vrma commits are the readers; the fields are pinned by the tests below"
-)]
-#[derive(Clone, Debug, PartialEq)]
-pub struct NodeRest {
-    /// The node's **local** rest transform, identical to the `Transform` bevy
-    /// puts on the node entity (see [`node_transform`], a mirror of bevy's).
-    ///
-    /// Node constraints measure the source's rotation *relative to its rest*, so
-    /// this is the reference of that delta.
-    pub rest: Transform,
-    /// The node's **world** rest transform, composed down from its topmost
-    /// ancestor. Identical to `RestGlobalTransform` in a file whose scene root
-    /// carries no conversion transform.
-    pub world: GlobalTransform,
-    /// The **parent's** world rotation at rest.
-    ///
-    /// `VRMC_node_constraint`'s `roll` and `aim` variants both state their axis
-    /// in the *source node's* rest space and then express it through the
-    /// destination's parent frame, so a constraint needs the parent rotation of
-    /// the source before any runtime transform has been sampled.
-    pub parent_world_rotation: Quat,
-    /// The node's path of [`Name`]s, built exactly the way `bevy_gltf` builds the
-    /// path of its own animation target ids.
-    ///
-    /// `bevy_gltf` collects it in
-    /// `loader/gltf_ext/scene.rs::collect_path`, which pushes the animation
-    /// root's own name first and then every descendant's, and hashes it with
-    /// `AnimationTargetId::from_names`. A clip that was authored against the
-    /// `.vrm`'s own glTF animations addresses its bones by that id, so the
-    /// matching id has to be reconstructible — see [`Self::path_target_id`].
-    pub path: Vec<Name>,
-}
-
-impl NodeRest {
-    /// The path-based `AnimationTargetId` `bevy_gltf` would put on this node.
-    ///
-    /// **This is not** the id used for retargeting: see
-    /// [`bone_target_id`](super::bone_target_id) for the bone-name id that
-    /// `.vrma` curves use.
-    #[allow(
-        dead_code,
-        reason = "the .vrma commit reads a clip authored against the .vrm's own animations"
-    )]
-    #[must_use]
-    pub fn path_target_id(&self) -> AnimationTargetId {
-        AnimationTargetId::from_names(self.path.iter())
-    }
-
-    /// The rest world translation with the file's uniform root scale divided out.
-    ///
-    /// VRM 1.0 requires the scene root's scale to be uniform and uses the
-    /// avatar's own units, so a hips-height comparison has to happen in a
-    /// metric space where one unit is one metre. Every rest pose stored on an
-    /// entity stays in file space (that is what a later
-    /// [`RestGlobalTransform`](crate::vrm::RestGlobalTransform) is), which is why
-    /// the removal is an explicit step here rather than baked into
-    /// [`Self::world`].
-    #[allow(
-        dead_code,
-        reason = "the hips-scaling commit compares against the target height in this space"
-    )]
-    #[must_use]
-    pub fn world_translation_without_root_scale(
-        &self,
-        root_scale: f32,
-    ) -> Vec3 {
-        if root_scale == 0.0 || !root_scale.is_finite() {
-            return self.world.translation();
-        }
-        self.world.translation() / root_scale
-    }
-}
 
 /// Parses the root extensions of one file into `state`.
 ///
@@ -152,10 +67,6 @@ pub(crate) fn parse_root_extensions(
 
     state.mesh_skins = collect_mesh_skins(gltf);
     state.texture_count = gltf.textures().len();
-
-    let rest = collect_rest_poses(gltf);
-    state.root_scale = rest.root_scale;
-    state.node_rest = rest.nodes;
 }
 
 fn parse_ext<T: serde::de::DeserializeOwned>(
@@ -244,169 +155,6 @@ fn collect_mesh_skins(gltf: &gltf::Gltf) -> HashMap<usize, Option<usize>> {
     skins
 }
 
-/// The rest pose of every node, plus the scene's uniform root scale.
-struct RestPoses {
-    nodes: HashMap<usize, NodeRest>,
-    root_scale: f32,
-}
-
-fn collect_rest_poses(gltf: &gltf::Gltf) -> RestPoses {
-    let nodes: Vec<_> = gltf.document.nodes().collect();
-
-    let parents: HashMap<usize, usize> = nodes
-        .iter()
-        .flat_map(|node| node.children().map(|child| (child.index(), node.index())))
-        .collect();
-
-    let mut order: Vec<usize> = (0..nodes.len()).collect();
-    order.sort_by_key(|index| depth_of(*index, &parents, nodes.len()));
-
-    let mut worlds: HashMap<usize, GlobalTransform> = HashMap::default();
-    let mut rests: HashMap<usize, NodeRest> = HashMap::default();
-    for index in order {
-        let Some(node) = nodes.get(index) else {
-            continue;
-        };
-        let rest = node_transform(node);
-        let parent = parents
-            .get(&index)
-            .and_then(|parent| worlds.get(parent))
-            .copied();
-        let world = match parent {
-            Some(parent) => parent.mul_transform(rest),
-            None => GlobalTransform::from(rest),
-        };
-        let parent_world_rotation = parent.map_or(Quat::IDENTITY, |parent| {
-            parent.to_scale_rotation_translation().1
-        });
-        rests.insert(
-            index,
-            NodeRest {
-                rest,
-                world,
-                parent_world_rotation,
-                path: node_path(index, &parents, &nodes),
-            },
-        );
-        worlds.insert(index, world);
-    }
-
-    RestPoses {
-        nodes: rests,
-        root_scale: uniform_root_scale(gltf),
-    }
-}
-
-/// How many ancestors `index` has, bounded by `limit`.
-fn depth_of(
-    index: usize,
-    parents: &HashMap<usize, usize>,
-    limit: usize,
-) -> usize {
-    let mut depth = 0;
-    let mut cursor = index;
-    while let Some(parent) = parents.get(&cursor).copied() {
-        if depth >= limit {
-            return depth;
-        }
-        cursor = parent;
-        depth += 1;
-    }
-    depth
-}
-
-/// The node's own name followed by its ancestors', i.e. the path
-/// `bevy_gltf`'s `collect_path` would build for it.
-fn node_path(
-    index: usize,
-    parents: &HashMap<usize, usize>,
-    nodes: &[gltf::Node<'_>],
-) -> Vec<Name> {
-    let mut path = vec![node_name(index, nodes)];
-    let mut cursor = index;
-    let mut walked = 0;
-    while let Some(parent) = parents.get(&cursor).copied() {
-        if walked > nodes.len() {
-            break;
-        }
-        path.push(node_name(parent, nodes));
-        cursor = parent;
-        walked += 1;
-    }
-    path.reverse();
-    path
-}
-
-fn node_name(
-    index: usize,
-    nodes: &[gltf::Node<'_>],
-) -> Name {
-    nodes
-        .get(index)
-        .map_or_else(|| Name::new(format!("GltfNode{index}")), node_name_of)
-}
-
-/// Mirrors `bevy_gltf`'s `loader/gltf_ext/scene.rs::node_name`, so a path built
-/// here hashes to the same `AnimationTargetId` as the one bevy builds.
-fn node_name_of(node: &gltf::Node<'_>) -> Name {
-    Name::new(
-        node.name()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| format!("GltfNode{}", node.index())),
-    )
-}
-
-/// Mirrors `bevy_gltf`'s `loader/gltf_ext/scene.rs::node_transform`, so the rest
-/// pose captured here is bit-for-bit the `Transform` bevy puts on the entity.
-fn node_transform(node: &gltf::Node<'_>) -> Transform {
-    match node.transform() {
-        gltf::scene::Transform::Matrix { matrix } => {
-            Transform::from_matrix(Mat4::from_cols_array_2d(&matrix))
-        }
-        gltf::scene::Transform::Decomposed {
-            translation,
-            rotation,
-            scale,
-        } => Transform {
-            translation: Vec3::from(translation),
-            rotation: Quat::from_array(rotation),
-            scale: Vec3::from(scale),
-        },
-    }
-}
-
-/// The uniform scale of the first node of the first scene.
-///
-/// `1.0` when the file has no scene, when the root node has no uniform scale, or
-/// when that scale is zero — in each case the rest poses are already in the
-/// space the caller asked for.
-fn uniform_root_scale(gltf: &gltf::Gltf) -> f32 {
-    let Some(node) = gltf
-        .document
-        .scenes()
-        .next()
-        .and_then(|scene| scene.nodes().next())
-    else {
-        return 1.0;
-    };
-    let (_, _, scale) = node.transform().decomposed();
-    let scale = Vec3::from(scale);
-    if (scale - Vec3::splat(scale.x)).length() > 1e-5 {
-        vrm_warn!(format!(
-            "VRM: the scene root node declares a non-uniform scale {scale:?}; the specification \
-             requires a uniform one, so it is left in place"
-        ));
-        return 1.0;
-    }
-    if scale.x == 0.0 || !scale.x.is_finite() {
-        vrm_warn!(format!(
-            "VRM: the scene root node declares a zero scale {scale:?}; ignoring it"
-        ));
-        return 1.0;
-    }
-    scale.x
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,16 +208,6 @@ mod tests {
             .filter(|skin| skin.is_some())
             .count();
         assert_eq!(skinned, 3, "all three of Elmer's meshes are skinned");
-
-        assert_eq!(state.node_rest.len(), gltf.document.nodes().len());
-        for (index, rest) in &state.node_rest {
-            assert!(!rest.path.is_empty(), "node {index} has no name path");
-            assert!(
-                rest.path.last().map(Name::as_str).is_some(),
-                "a path always ends in a name"
-            );
-        }
-        assert_eq!(state.root_scale, 1.0);
 
         let vrm = state.vrm.as_ref().expect("VRMC_vrm is present");
         let expressions = vrm
@@ -535,99 +273,9 @@ mod tests {
         success!()
     }
 
-    /// The smallest glTF document that exercises the rest-pose walk: an unnamed
-    /// root node with a uniform scale, one named child, and a deeper grandchild.
-    fn two_level_scene() -> String {
-        r#"{
-            "asset": {"version": "2.0"},
-            "scene": 0,
-            "scenes": [{"nodes": [0]}],
-            "nodes": [
-                {"name": "Armature", "scale": [2.0, 2.0, 2.0], "children": [1]},
-                {"name": "Hips", "translation": [0.0, 1.0, 0.0], "children": [2]},
-                {"rotation": [0.0, 0.0, 0.0, 1.0]}
-            ]
-        }"#
-        .to_string()
-    }
-
     fn document(json: &str) -> gltf::Gltf {
         gltf::Gltf::from_slice_without_validation(json.as_bytes())
             .expect("the test document should parse")
-    }
-
-    #[test]
-    fn rest_poses_cover_every_node_and_compose_top_down() -> TestResult {
-        let gltf = document(&two_level_scene());
-        let rests = collect_rest_poses(&gltf);
-
-        assert_eq!(rests.nodes.len(), 3, "every node, not just bones");
-
-        let hips = &rests.nodes[&1];
-        assert_eq!(hips.rest, Transform::from_xyz(0.0, 1.0, 0.0));
-        assert_eq!(hips.world.translation(), Vec3::new(0.0, 2.0, 0.0));
-        assert_eq!(hips.parent_world_rotation, Quat::IDENTITY);
-        assert_eq!(
-            hips.world_translation_without_root_scale(rests.root_scale),
-            Vec3::new(0.0, 1.0, 0.0),
-            "the file's uniform root scale is divided out on request"
-        );
-
-        let leaf = &rests.nodes[&2];
-        assert_eq!(leaf.world.translation(), Vec3::new(0.0, 2.0, 0.0));
-        assert_eq!(leaf.parent_world_rotation, Quat::IDENTITY);
-
-        success!()
-    }
-
-    #[test]
-    fn rest_pose_paths_match_bevy_gltf_animation_target_ids() -> TestResult {
-        let gltf = document(&two_level_scene());
-        let rests = collect_rest_poses(&gltf);
-
-        assert_eq!(
-            rests.nodes[&1].path,
-            vec![Name::new("Armature"), Name::new("Hips")]
-        );
-        assert_eq!(
-            rests.nodes[&1].path_target_id(),
-            AnimationTargetId::from_iter(["Armature", "Hips"])
-        );
-        assert_ne!(
-            rests.nodes[&1].path_target_id(),
-            super::super::bone_target_id("hips"),
-            "the path id and the bone id address the same node differently"
-        );
-
-        success!()
-    }
-
-    #[test]
-    fn unnamed_nodes_are_named_the_way_bevy_gltf_names_them() -> TestResult {
-        let gltf = document(
-            r#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
-                "nodes":[{"children":[1]},{"name":"Hips"}]}"#,
-        );
-        let rests = collect_rest_poses(&gltf);
-
-        assert_eq!(
-            rests.nodes[&1].path,
-            vec![Name::new("GltfNode0"), Name::new("Hips")],
-            "bevy falls back to `GltfNode{{index}}`, so the hashed id must match"
-        );
-
-        success!()
-    }
-
-    #[test]
-    fn a_non_uniform_root_scale_is_reported_and_left_alone() -> TestResult {
-        let gltf = document(
-            r#"{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
-                "nodes":[{"name":"Armature","scale":[2.0,1.0,1.0]}]}"#,
-        );
-
-        assert_eq!(collect_rest_poses(&gltf).root_scale, 1.0);
-        success!()
     }
 
     #[test]

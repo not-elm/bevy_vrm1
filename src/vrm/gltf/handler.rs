@@ -51,8 +51,6 @@ use crate::prelude::MToonMaterial;
 use crate::prelude::*;
 use crate::vrm::gltf::extensions::{vrmc_spring_bone, vrmc_vrm};
 
-use self::root::NodeRest;
-
 /// Registered once by `VrmGltfPlugin`, which [`VrmPlugin`](crate::prelude::VrmPlugin) adds.
 #[derive(Clone, Default)]
 pub struct VrmExtensionHandler {
@@ -102,19 +100,6 @@ pub(crate) struct VrmLoadState {
     /// `GltfLoaderSettings::load_meshes`, which the `firstPerson: auto` split
     /// creates both of its halves with, like every mesh `bevy_gltf` builds.
     pub load_meshes: RenderAssetUsages,
-    /// Rest pose of **every** glTF node, keyed by node index.
-    #[allow(
-        dead_code,
-        reason = "captured for the hips-scaling and .vrma commits, which measure against it"
-    )]
-    pub node_rest: HashMap<usize, NodeRest>,
-    /// The uniform scale declared by the scene's root node. See
-    /// [`NodeRest::world_translation_without_root_scale`].
-    #[allow(
-        dead_code,
-        reason = "read together with `node_rest`, which the hips-scaling commit consumes"
-    )]
-    pub root_scale: f32,
     /// glTF material label -> the `MToonMaterial` built for it.
     pub mtoon: HashMap<String, Handle<MToonMaterial>>,
     /// The number of glTF textures, which bounds the `MToon` texture indices.
@@ -153,28 +138,6 @@ impl VrmLoadState {
     pub(crate) fn end_scene(&mut self) {
         self.node_entities.clear();
         self.primitive_entities.clear();
-    }
-
-    /// `(humanoid bone name, AnimationTargetId)` pairs for graph mask groups.
-    ///
-    /// The id is derived from the **bone name**, not from the glTF node path.
-    /// That is what makes one baked `.vrma` clip retargetable to any avatar:
-    /// the clip's curves are keyed by `bones.hips` etc. and the avatar's bones
-    /// are keyed by the same string. The path-based id that `bevy_gltf` uses for
-    /// a file's own animations is a different id for the same entity and is
-    /// left alone by [`scene::setup_animation`]; see
-    /// [`NodeRest::path`] for how that one is built.
-    ///
-    /// Sorted by bone name so the graph a file produces does not depend on
-    /// `HashMap` iteration order.
-    #[allow(
-        dead_code,
-        reason = "the graph builder of the .vrma commit is the consumer"
-    )]
-    pub fn bone_targets(&self) -> impl Iterator<Item = (&str, AnimationTargetId)> + '_ {
-        let mut bones: Vec<&str> = self.bone_nodes.keys().map(String::as_str).collect();
-        bones.sort_unstable();
-        bones.into_iter().map(|bone| (bone, bone_target_id(bone)))
     }
 }
 

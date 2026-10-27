@@ -89,43 +89,52 @@ fn into_pending(
     node_index: usize,
 ) -> Option<(VrmConstraintKind, usize, f32)> {
     let constraint = extension.constraint;
-    if let Some(rotation) = constraint.rotation {
-        return Some((
+    match (constraint.rotation, constraint.roll, constraint.aim) {
+        (Some(rotation), None, None) => Some((
             VrmConstraintKind::Rotation,
             rotation.source,
             rotation.weight,
-        ));
-    }
-    if let Some(roll) = constraint.roll {
-        let Some(roll_axis) = parse_roll_axis(&roll.roll_axis) else {
+        )),
+        (None, Some(roll), None) => {
+            let Some(roll_axis) = parse_roll_axis(&roll.roll_axis) else {
+                vrm_warn!(format!(
+                    "VRM node_constraint: invalid `rollAxis` `{}` on node {node_index}, \
+                     skipping the constraint",
+                    roll.roll_axis
+                ));
+                return None;
+            };
+            Some((
+                VrmConstraintKind::Roll { roll_axis },
+                roll.source,
+                roll.weight,
+            ))
+        }
+        (None, None, Some(aim)) => {
+            let Some(aim_axis) = parse_aim_axis(&aim.aim_axis) else {
+                vrm_warn!(format!(
+                    "VRM node_constraint: invalid `aimAxis` `{}` on node {node_index}, \
+                     skipping the constraint",
+                    aim.aim_axis
+                ));
+                return None;
+            };
+            Some((VrmConstraintKind::Aim { aim_axis }, aim.source, aim.weight))
+        }
+        (None, None, None) => {
             vrm_warn!(format!(
-                "VRM node_constraint: invalid `rollAxis` `{}` on node {node_index}, \
-                 skipping the constraint",
-                roll.roll_axis
+                "VRM: empty `{EXT_NODE_CONSTRAINT}` on node {node_index}, skipping it"
             ));
-            return None;
-        };
-        return Some((
-            VrmConstraintKind::Roll { roll_axis },
-            roll.source,
-            roll.weight,
-        ));
-    }
-    if let Some(aim) = constraint.aim {
-        let Some(aim_axis) = parse_aim_axis(&aim.aim_axis) else {
+            None
+        }
+        _ => {
             vrm_warn!(format!(
-                "VRM node_constraint: invalid `aimAxis` `{}` on node {node_index}, \
-                 skipping the constraint",
-                aim.aim_axis
+                "VRM: `{EXT_NODE_CONSTRAINT}` on node {node_index} sets more than one \
+                 constraint, skipping it"
             ));
-            return None;
-        };
-        return Some((VrmConstraintKind::Aim { aim_axis }, aim.source, aim.weight));
+            None
+        }
     }
-    vrm_warn!(format!(
-        "VRM: empty `{EXT_NODE_CONSTRAINT}` on node {node_index}, skipping it"
-    ));
-    None
 }
 
 #[cfg(test)]
@@ -229,6 +238,24 @@ mod tests {
         let extension: VrmcNodeConstraint =
             serde_json::from_str(r#"{"specVersion":"1.0","constraint":{}}"#)?;
         assert_eq!(into_pending(extension, 7), None);
+
+        success!()
+    }
+
+    #[test]
+    fn a_node_with_more_than_one_constraint_is_skipped() -> TestResult {
+        for json in [
+            r#"{"specVersion":"1.0","constraint":{"rotation":{"source":1},"roll":{"source":2,"rollAxis":"X"}}}"#,
+            r#"{"specVersion":"1.0","constraint":{"roll":{"source":2,"rollAxis":"X"},"aim":{"source":3,"aimAxis":"PositiveY"}}}"#,
+            r#"{"specVersion":"1.0","constraint":{"rotation":{"source":1},"aim":{"source":3,"aimAxis":"PositiveY"}}}"#,
+        ] {
+            let extension: VrmcNodeConstraint = serde_json::from_str(json)?;
+            assert_eq!(
+                into_pending(extension, 7),
+                None,
+                "`{json}` should be skipped"
+            );
+        }
 
         success!()
     }

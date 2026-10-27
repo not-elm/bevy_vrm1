@@ -717,11 +717,7 @@ fn record_first_person_views(
     let Some(first_person) = state.vrm.as_ref().and_then(|vrm| vrm.first_person.as_ref()) else {
         return;
     };
-    let annotated: HashSet<Entity> = first_person
-        .mesh_annotations
-        .iter()
-        .filter_map(|annotation| state.node_entities.get(&annotation.node).copied())
-        .collect();
+    let annotated: HashSet<Entity> = annotation_flags(state).into_keys().collect();
     for annotation in &first_person.mesh_annotations {
         let view = match annotation.first_person_flag {
             FirstPersonFlag::FirstPersonOnly => Some(FirstPersonView::FirstPersonOnly),
@@ -744,12 +740,13 @@ fn record_first_person_views(
 ///
 /// The copy inherits everything that makes the body half render: the transform,
 /// the skin, the material, the morph-weight reference and the bounds. Only the
-/// recorded view differs.
+/// recorded view differs, see [`head_copy_view`].
 fn spawn_head_copies(
     state: &VrmLoadState,
     head_meshes: &HashMap<(usize, usize), Handle<Mesh>>,
     world: &mut World,
 ) {
+    let flags = annotation_flags(state);
     let copies = head_meshes.iter().flat_map(|(key, head_mesh)| {
         let sources = state.primitive_entities.get(key);
         if sources.is_none() {
@@ -788,6 +785,7 @@ fn spawn_head_copies(
         let fallback_material = world
             .get::<MeshMaterial3d<StandardMaterial>>(source)
             .cloned();
+        let view = head_copy_view(world, source, &flags);
 
         let mut head = world.spawn((
             Name::new(name),
@@ -796,8 +794,10 @@ fn spawn_head_copies(
             visibility,
             ChildOf(parent),
             VrmHeadOnly,
-            FirstPersonView::ThirdPersonOnly,
         ));
+        if let Some(view) = view {
+            head.insert(view);
+        }
         if let Some(morph_weights) = morph_weights {
             head.insert(morph_weights);
         }
@@ -818,6 +818,46 @@ fn spawn_head_copies(
         if no_frustum_culling {
             head.insert(NoFrustumCulling);
         }
+    }
+}
+
+/// The `meshAnnotations` flag of each annotated node entity.
+fn annotation_flags(state: &VrmLoadState) -> HashMap<Entity, FirstPersonFlag> {
+    state
+        .vrm
+        .as_ref()
+        .and_then(|vrm| vrm.first_person.as_ref())
+        .into_iter()
+        .flat_map(|first_person| &first_person.mesh_annotations)
+        .filter_map(|annotation| {
+            let entity = state.node_entities.get(&annotation.node)?;
+            Some((*entity, annotation.first_person_flag))
+        })
+        .collect()
+}
+
+/// The view of a head copy, from the nearest annotation above its source.
+///
+/// A primitive is split when any node instancing it is `auto`, so the body
+/// half is shared by every instance and each head copy must restore what its
+/// own node shows: hidden from a first-person camera only when that node is
+/// `auto` (or unannotated).
+fn head_copy_view(
+    world: &World,
+    source: Entity,
+    flags: &HashMap<Entity, FirstPersonFlag>,
+) -> Option<FirstPersonView> {
+    let flag = std::iter::successors(Some(source), |entity| {
+        world.get::<ChildOf>(*entity).map(ChildOf::parent)
+    })
+    .find_map(|entity| flags.get(&entity).copied())
+    .unwrap_or(FirstPersonFlag::Auto);
+    match flag {
+        FirstPersonFlag::Auto | FirstPersonFlag::ThirdPersonOnly => {
+            Some(FirstPersonView::ThirdPersonOnly)
+        }
+        FirstPersonFlag::FirstPersonOnly => Some(FirstPersonView::FirstPersonOnly),
+        FirstPersonFlag::Both => None,
     }
 }
 
@@ -1485,6 +1525,66 @@ mod tests {
             .map(ChildOf::parent)
             .collect();
         assert_eq!(parents, HashSet::from_iter([left_node, right_node]));
+        success!()
+    }
+
+    /// A primitive shared by an `auto` node and annotated nodes is split for all
+    /// of them, so each head copy takes the view of its own node: only the
+    /// `auto` instance hides its head from a first-person camera.
+    #[test]
+    fn a_head_copy_takes_the_view_of_its_own_node() -> TestResult {
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut instance = || {
+            let node = world.spawn(ChildOf(root)).id();
+            let mesh = world.spawn((Mesh3d(Handle::default()), ChildOf(node))).id();
+            (node, mesh)
+        };
+        let (auto_node, auto_mesh) = instance();
+        let (both_node, both_mesh) = instance();
+        let (first_node, first_mesh) = instance();
+        let (third_node, third_mesh) = instance();
+        let mut state = state_with(vrm(r#"{
+                "specVersion": "1.0",
+                "humanoid": {"humanBones": {}},
+                "firstPerson": {"meshAnnotations": [
+                    {"node": 1, "firstPersonFlag": "auto"},
+                    {"node": 2, "firstPersonFlag": "both"},
+                    {"node": 3, "firstPersonFlag": "firstPersonOnly"},
+                    {"node": 4, "firstPersonFlag": "thirdPersonOnly"}
+                ]}
+            }"#));
+        state.node_entities = [
+            (1, auto_node),
+            (2, both_node),
+            (3, first_node),
+            (4, third_node),
+        ]
+        .into_iter()
+        .collect();
+        state.primitive_entities = [((0, 0), vec![auto_mesh, both_mesh, first_mesh, third_mesh])]
+            .into_iter()
+            .collect();
+        state.first_person.classes = [((0, 0), AutoClass::Split)].into_iter().collect();
+        let head_meshes = [((0, 0), Handle::default())].into_iter().collect();
+
+        record_first_person_views(&state, &mut world);
+        spawn_head_copies(&state, &head_meshes, &mut world);
+
+        let copy_views: HashMap<Entity, Option<FirstPersonView>> = world
+            .query_filtered::<(&ChildOf, Option<&FirstPersonView>), With<VrmHeadOnly>>()
+            .iter(&world)
+            .map(|(parent, view)| (parent.parent(), view.copied()))
+            .collect();
+        assert_eq!(
+            copy_views,
+            HashMap::from_iter([
+                (auto_node, Some(FirstPersonView::ThirdPersonOnly)),
+                (both_node, None),
+                (first_node, Some(FirstPersonView::FirstPersonOnly)),
+                (third_node, Some(FirstPersonView::ThirdPersonOnly)),
+            ])
+        );
         success!()
     }
 

@@ -18,7 +18,7 @@
 //!
 //! `#[derive(Component)]` turns every `#[entities]` field into a
 //! `Component::map_entities`
-//! implementation, and that is the hook bevy 0.19 calls when it instantiates a
+//! implementation, and that is the hook bevy calls when it instantiates a
 //! `WorldAsset`:
 //! `ReflectComponent::apply_or_insert_mapped` runs
 //! `C::map_entities(&mut component, &mut mapper)` for every copied component

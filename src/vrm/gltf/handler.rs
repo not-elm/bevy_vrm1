@@ -39,7 +39,7 @@ use bevy::ecs::world::{EntityWorldMut, World};
 use bevy::gltf::convert_coordinates::GltfConvertCoordinates;
 use bevy::gltf::extensions::{ErasedGltfExtensionHandler, GltfExtensionHandler};
 use bevy::gltf::{GltfLoaderSettings, GltfMaterial};
-use bevy::mesh::{Mesh, MeshVertexAttribute};
+use bevy::mesh::{Mesh, MeshCompressionArgs, MeshVertexAttribute};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::tasks::ConditionalSendFuture;
@@ -52,12 +52,25 @@ use crate::prelude::*;
 use crate::vrm::gltf::extensions::{vrmc_spring_bone, vrmc_vrm};
 
 /// Registered once by `VrmGltfPlugin`, which [`VrmPlugin`](crate::prelude::VrmPlugin) adds.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct VrmExtensionHandler {
     pub(crate) state: VrmLoadState,
     /// `GltfPlugin::convert_coordinates`: the conversion a load uses when its
     /// settings name none, i.e. what the stock `GltfLoader` applies to a `.glb`.
     pub(crate) default_convert_coordinates: GltfConvertCoordinates,
+    /// `GltfPlugin::mesh_compression`: the compression a load uses when its
+    /// settings name none.
+    pub(crate) default_mesh_compression: MeshCompressionArgs,
+}
+
+impl Default for VrmExtensionHandler {
+    fn default() -> Self {
+        Self {
+            state: VrmLoadState::default(),
+            default_convert_coordinates: GltfConvertCoordinates::default(),
+            default_mesh_compression: MeshCompressionArgs::none(),
+        }
+    }
 }
 
 /// The state of one file load.
@@ -100,6 +113,10 @@ pub(crate) struct VrmLoadState {
     /// `GltfLoaderSettings::load_meshes`, which the `firstPerson: auto` split
     /// creates both of its halves with, like every mesh `bevy_gltf` builds.
     pub load_meshes: RenderAssetUsages,
+    /// The compression `bevy_gltf` applies to this load's meshes, which the
+    /// `firstPerson: auto` split applies to the head half it adds itself.
+    /// `None` (before `on_root`) compresses nothing.
+    pub mesh_compression: Option<MeshCompressionArgs>,
     /// glTF material label -> the `MToonMaterial` built for it.
     pub mtoon: HashMap<String, Handle<MToonMaterial>>,
     /// The number of glTF textures, which bounds the `MToon` texture indices.
@@ -176,6 +193,12 @@ impl GltfExtensionHandler for VrmExtensionHandler {
         root::parse_root_extensions(&mut self.state, gltf);
         self.state.rotate_meshes = rotates_meshes(settings, self.default_convert_coordinates);
         self.state.load_meshes = settings.load_meshes;
+        self.state.mesh_compression = Some(
+            settings
+                .mesh_compression
+                .clone()
+                .unwrap_or_else(|| self.default_mesh_compression.clone()),
+        );
         if self.state.is_vrm() && self.state.rotate_meshes {
             vrm_warn!(
                 "VRM: this file is loaded with `rotate_meshes` coordinate conversion, which the \

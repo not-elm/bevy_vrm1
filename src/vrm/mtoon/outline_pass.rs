@@ -11,9 +11,8 @@ use crate::vrm::mtoon::{MToonMaterial, MToonMaterialKey};
 use bevy::core_pipeline::core_3d::main_transparent_pass_3d;
 use bevy::core_pipeline::{Core3d, Core3dSystems};
 use bevy::pbr::{
-    MaterialBindGroupAllocators, MaterialPipeline, MaterialPipelineKey, PreparedMaterial,
-    RenderMeshInstanceFlags, ViewKeyCache, alpha_mode_pipeline_key, init_material_pipeline,
-    queue_material_meshes,
+    MaterialPipeline, MaterialPipelineKey, PreparedMaterial, RenderMeshInstanceFlags, ViewKeyCache,
+    alpha_mode_pipeline_key, init_material_pipeline, queue_material_meshes,
 };
 use bevy::render::sync_world::MainEntityHashMap;
 use bevy::render::view::RenderVisibilityRanges;
@@ -120,7 +119,6 @@ fn queue_outlines(
     mut pipelines: ResMut<SpecializedMeshPipelines<MToonOutlinePipeline>>,
     mut outline_phases: ResMut<ViewSortedRenderPhases<OutlinePhaseItem>>,
     mut views: Query<(&ExtractedView, &RenderVisibleEntities)>,
-    material_bind_group_allocators: Res<MaterialBindGroupAllocators>,
     view_key_cache: Res<ViewKeyCache>,
     render_visibility_ranges: Res<RenderVisibilityRanges>,
     instances: Res<MToonMaterialInstances>,

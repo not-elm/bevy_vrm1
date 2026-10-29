@@ -8,6 +8,7 @@ use bevy::gltf::{
     extensions::GltfExtensionHandlers,
 };
 use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats, ImageSamplerDescriptor};
+use bevy::mesh::MeshCompressionArgs;
 use bevy::prelude::*;
 use bevy::utils::default;
 
@@ -57,6 +58,7 @@ impl Plugin for VrmaLoaderPlugin {
             default_convert_coordinates: Default::default(),
             extensions,
             default_skinned_mesh_bounds_policy: Default::default(),
+            default_mesh_compression: MeshCompressionArgs::none(),
         }));
     }
 }

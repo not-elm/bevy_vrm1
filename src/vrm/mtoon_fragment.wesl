@@ -1,4 +1,4 @@
-#import bevy_pbr::{
+import bevy_pbr::render::{
     forward_io::{
         VertexOutput,
         FragmentOutput,
@@ -7,14 +7,14 @@
     pbr_types::PbrInput,
     mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
     shadows::fetch_directional_shadow,
-    ambient::ambient_light,
+    pbr_ambient::ambient_light,
     mesh_view_bindings::{
         view,
         lights,
         globals,
     },
-}
-#import mtoon::types::{
+};
+import package::vrm::mtoon_types::{
     MToonInput,
     MToonMaterialUniform,
     material,
@@ -44,43 +44,51 @@
     ALPHA_MODE_BLEND,
     ALPHA_MODE_ALPHA_TO_COVERAGE,
     OUTLINE_WORLD_COORDINATES,
-}
+};
 
 @fragment
 fn fragment(
     in: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
-#ifdef OUTLINE_PASS
-    // Currently, txhe outline only supports world coordinates.
+    // Currently, the outline only supports world coordinates.
+    @if(OUTLINE_PASS)
     if((material.outline_flags & OUTLINE_WORLD_COORDINATES) == 0u) {
         discard;
     }
-#endif
 
-    var vertex_input = in;
-    vertex_input.uv = calc_animated_uv((material.uv_transform * vec3(in.uv, 1.0)).xy);
+    let uv = calc_animated_uv((material.uv_transform * vec3(mesh_uv(in), 1.0)).xy);
 
     var out: FragmentOutput;
-    var pbr_input = make_pbr_input(vertex_input, is_front);
-    let mtoon_input = make_mtoon_input(vertex_input, pbr_input);
+    var pbr_input = make_pbr_input(in, is_front, uv);
+    let mtoon_input = make_mtoon_input(in, pbr_input, uv);
     out.color = apply_mtoon_lighting(mtoon_input);
 
-#ifdef OUTLINE_PASS
+@if(OUTLINE_PASS) {
     let outline_color = material.outline_color.rgb * mix(vec3(1.), out.color.rgb, material.outline_lighting_mix_factor);
     out.color = vec4(outline_color, mtoon_input.lit_color.a);
-#endif
+}
 
     return out;
+}
+
+// The mesh's first UV set. `VertexOutput.uv` only exists when the mesh has one;
+// a mesh without one samples every texture at the origin.
+fn mesh_uv(in: VertexOutput) -> vec2<f32> {
+@if(VERTEX_UVS_A)
+    return in.uv;
+@else
+    return vec2<f32>(0.0);
 }
 
 fn make_pbr_input(
     vertex_input: VertexOutput,
     is_front: bool,
+    uv: vec2<f32>,
 ) -> PbrInput{
     let double_sided = (material.flags & DOUBLE_SIDED) != 0;
     var pbr_input = pbr_input_from_vertex_output(vertex_input, is_front, double_sided);
-    pbr_input.material.base_color = lit_color(vertex_input.uv);
+    pbr_input.material.base_color = lit_color(uv);
     pbr_input.material.metallic = 0.0;
     pbr_input.material.emissive = material.emissive_color;
     return pbr_input;
@@ -108,16 +116,14 @@ fn lit_color(uv: vec2<f32>) -> vec4<f32> {
             base_color.a = 1.0;
         }
     }
-#ifdef OUTLINE_PASS
+@if(OUTLINE_PASS)
     if((material.flags & ALPHA_MODE_BLEND) != 0u) {
         base_color.a = 1.0;
     }
-#endif
     return base_color;
 }
 
-fn make_mtoon_input(in: VertexOutput, pbr_input: PbrInput) -> MToonInput{
-    let uv = in.uv;
+fn make_mtoon_input(in: VertexOutput, pbr_input: PbrInput, uv: vec2<f32>) -> MToonInput{
     return MToonInput(
         pbr_input,
         uv,

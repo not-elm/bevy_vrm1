@@ -188,6 +188,7 @@ When modifying update order or system timing, always reference:
 
 | bevy_vrm1 | bevy |
 |-----------|------|
+| 0.11.0 ~  | 0.20 |
 | 0.8.0 ~   | 0.19 |
 | 0.5.0 ~   | 0.18 |
 | 0.4.0 ~   | 0.17 |

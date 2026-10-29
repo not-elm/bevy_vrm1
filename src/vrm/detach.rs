@@ -651,7 +651,7 @@ mod tests {
     /// An application observer that despawns the entity losing `C`, which runs
     /// in the middle of a detach.
     fn despawn_on_remove<C: Component>(app: &mut App) {
-        app.add_observer(|trigger: On<Remove, C>, mut commands: Commands| {
+        app.add_observer(|trigger: On<Remove<C>>, mut commands: Commands| {
             commands.entity(trigger.event_target()).try_despawn();
         });
     }

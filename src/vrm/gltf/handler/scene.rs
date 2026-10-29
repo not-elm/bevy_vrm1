@@ -95,7 +95,7 @@ fn name_and_animate(
 ///
 /// The public [`Vrm`] + [`Initialized`](crate::vrm::Initialized) pair is
 /// deliberately **not** written here. Moving root components onto the entity the
-/// application spawned fires `On<Add, Vrm>` / `Added<Initialized>` on the target;
+/// application spawned fires `On<Add<Vrm>>` / `Added<Initialized>` on the target;
 /// if the asset already carried them, those events would fire twice (once on the
 /// child at instantiation, once on the user's entity after the move). Baking a
 /// private marker and letting the attach observer

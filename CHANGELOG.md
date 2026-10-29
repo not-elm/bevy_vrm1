@@ -2,12 +2,14 @@
 
 [Release Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.11.0)
 
-A `.vrm` is now initialised **while it loads**, through bevy 0.19's `GltfExtensionHandler` pipeline, instead of by spawning a plain glTF scene and patching it over several frames. `VrmPlugin` claims the `vrm` file extension and writes every VRM component into the scene `WorldAsset`; the handler's computations stay at load time, and a thin scene-ready step binds that root data onto the entity the app spawned. `VrmPlugin` registers that handler itself, so the plugin setup is the same as before, and `VrmaPlugin` is unchanged.
+A `.vrm` is now initialised **while it loads**, through bevy's `GltfExtensionHandler` pipeline, instead of by spawning a plain glTF scene and patching it over several frames. `VrmPlugin` claims the `vrm` file extension and writes every VRM component into the scene `WorldAsset`; the handler's computations stay at load time, and a thin scene-ready step binds that root data onto the entity the app spawned. `VrmPlugin` registers that handler itself, so the plugin setup is the same as before, and `VrmaPlugin` is unchanged.
 
 The runtime path was removed rather than deprecated, so several public items are gone. See **Breaking Changes** below for the migration.
 
 ### Breaking Changes
 
+- Migrates bevy_vrm1 from Bevy 0.19 to Bevy 0.20.
+- The MToon shaders are WESL modules now, so a custom shader that imported `mtoon::types` imports `bevy_vrm1::vrm::mtoon_types` instead (`import bevy_vrm1::vrm::mtoon_types::{MToonInput, material};`)
 - **`VrmHandle` wraps `Handle<Gltf>` and is retained after load.** Spawn `commands.spawn((VrmHandle(asset_server.load("vrm/Elmer.vrm")), ..))`; the entity you spawn **is** the VRM root. It receives `Vrm`, `Initialized` and every root component once the scene is bound, and it keeps its id — plus the components and children on it — across a hot reload or a changed handle. `VrmHandle` requires a `Transform` and `Visibility` and stays on the entity afterwards, where it marks the VRM as crate-managed
 - **Removed `VrmAsset`** and its loader. A raw `WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path)))` spawn still loads a `.vrm`, with the VRM root as its child
 - **Removed the `VrmInitializePlugin` step and the `RequestInitialize*` flow** behind it (humanoid bones, spring bones, node constraints, expressions), together with `VrmLoaderPlugin`. The `HumanoidBoneRegistry` name lookup no longer runs for a `.vrm`: references between glTF nodes (`VRMC_node_constraint`, `VRMC_springBone`, `VRMC_vrm.firstPerson`, `morphTargetBinds`) are resolved inside the loader, where every referenced entity already exists. `HumanoidBoneRegistry` still exists, but only for the **VRMA source rig**, which carries node references rather than names
@@ -53,9 +55,11 @@ The runtime path was removed rather than deprecated, so several public items are
 - Fixed the last joint of a spring chain, and anything parented under a joint, rendering one frame behind the strand: the pose is propagated once more after the spring step
 - Fixed MToon textures stored as separate image files never loading: the material now uses the handles bevy creates for them instead of `Texture{index}` labels, which only embedded images get
 - Fixed `.vrm` loads ignoring `GltfPlugin`'s custom vertex attributes and skinned-mesh bounds policy
+- Fixed an MToon primitive without a `TEXCOORD_0` failing to build its pipelines, which left it unrendered; it now samples its textures at the origin
 
 ### Maintenance
 
+- Ported the MToon shaders to WESL (`mtoon_*.wesl`), since Bevy 0.20 drops the naga_oil preprocessor. The vertex shader now goes through Bevy's `decompress_vertex`, so a `.vrm` honours `GltfPlugin::mesh_compression` / `GltfLoaderSettings::mesh_compression` like any other glTF, the head halves of the `firstPerson: auto` split included
 - A loaded `.vrm` keeps its glTF JSON for `VrmExtensions::from_gltf` but releases the GLB binary chunk, which the retained `VrmHandle` would otherwise keep in memory for the avatar's whole lifetime
 - Depends on the `gltf` crate directly instead of reaching the VRM extension handler's types through `bevy_gltf`. `default-features = false` with the `extensions`, `extras`, `names` and `utils` features only, which adds no crate and leaves `Cargo.lock` untouched
 

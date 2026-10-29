@@ -89,14 +89,11 @@ impl Plugin for VrmGltfPlugin {
             .register_type::<AnimatedBy>()
             .register_type::<AnimationTargetId>();
 
-        let handler = VrmExtensionHandler {
-            default_convert_coordinates: app
-                .get_added_plugins::<GltfPlugin>()
-                .first()
-                .map(|plugin| plugin.convert_coordinates)
-                .unwrap_or_default(),
+        let handler = with_gltf_plugin(app, |plugin| VrmExtensionHandler {
+            default_convert_coordinates: plugin.convert_coordinates,
+            default_mesh_compression: plugin.mesh_compression.clone(),
             ..Default::default()
-        };
+        });
 
         #[cfg(target_family = "wasm")]
         bevy::tasks::block_on(async {
@@ -141,30 +138,28 @@ impl Plugin for VrmGltfPlugin {
             .map(|handlers| handlers.0.clone())
             .unwrap_or_default();
 
-        let (
-            custom_vertex_attributes,
-            default_convert_coordinates,
-            default_skinned_mesh_bounds_policy,
-        ) = app
-            .get_added_plugins::<GltfPlugin>()
-            .first()
-            .map(|plugin| {
-                (
-                    plugin.custom_vertex_attributes.clone(),
-                    plugin.convert_coordinates,
-                    plugin.skinned_mesh_bounds_policy,
-                )
-            })
-            .unwrap_or_default();
-
-        app.register_asset_loader(VrmLoader(GltfLoader {
+        let loader = with_gltf_plugin(app, |plugin| GltfLoader {
             supported_compressed_formats,
-            custom_vertex_attributes,
+            custom_vertex_attributes: plugin.custom_vertex_attributes.clone(),
             default_sampler,
-            default_convert_coordinates,
+            default_convert_coordinates: plugin.convert_coordinates,
             extensions,
-            default_skinned_mesh_bounds_policy,
-        }));
+            default_skinned_mesh_bounds_policy: plugin.skinned_mesh_bounds_policy,
+            default_mesh_compression: plugin.mesh_compression.clone(),
+        });
+        app.register_asset_loader(VrmLoader(loader));
+    }
+}
+
+/// Reads the app's [`GltfPlugin`], or its defaults when none was added: the
+/// settings the stock `GltfLoader` is built from.
+fn with_gltf_plugin<R>(
+    app: &App,
+    read: impl FnOnce(&GltfPlugin) -> R,
+) -> R {
+    match app.get_added_plugins::<GltfPlugin>().first() {
+        Some(plugin) => read(plugin),
+        None => read(&GltfPlugin::default()),
     }
 }
 
@@ -253,6 +248,7 @@ fn vrm_load_settings(settings: &GltfLoaderSettings) -> GltfLoaderSettings {
         validate: settings.validate,
         convert_coordinates: Some(GltfConvertCoordinates::default()),
         skinned_mesh_bounds_policy: settings.skinned_mesh_bounds_policy,
+        mesh_compression: settings.mesh_compression.clone(),
     }
 }
 
@@ -269,6 +265,7 @@ mod tests {
     use bevy::gltf::convert_coordinates::GltfConvertCoordinates;
     use bevy::gltf::{GltfLoader, GltfLoaderSettings};
     use bevy::image::{CompressedImageFormats, ImageSamplerDescriptor};
+    use bevy::mesh::MeshCompressionArgs;
     use bevy::mesh::morph::MorphWeights;
     use bevy::platform::collections::HashMap;
     use bevy::prelude::*;
@@ -286,6 +283,7 @@ mod tests {
             default_convert_coordinates: Default::default(),
             extensions: Default::default(),
             default_skinned_mesh_bounds_policy: Default::default(),
+            default_mesh_compression: MeshCompressionArgs::none(),
         })
     }
 
@@ -306,6 +304,7 @@ mod tests {
                 rotate_meshes: true,
             }),
             load_lights: false,
+            mesh_compression: Some(MeshCompressionArgs::regular()),
             ..Default::default()
         };
 
@@ -318,6 +317,12 @@ mod tests {
         assert!(!convert.rotate_scene_entity);
         assert!(!convert.rotate_meshes);
         assert!(!settings.load_lights, "the other settings pass through");
+        assert!(
+            settings
+                .mesh_compression
+                .is_some_and(|compression| compression.compress_indices),
+            "the requested mesh compression passes through"
+        );
         success!()
     }
 

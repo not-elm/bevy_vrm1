@@ -5,7 +5,7 @@ use bevy::render::camera::ExtractedCamera;
 use bevy::render::render_phase::ViewSortedRenderPhases;
 use bevy::render::render_resource::{RenderPassDescriptor, StoreOp};
 use bevy::render::renderer::{RenderContext, ViewQuery};
-use bevy::render::view::{ExtractedView, ViewDepthTexture, ViewTarget};
+use bevy::render::view::{ExtractedView, ViewDepthStencilTexture, ViewTarget};
 
 pub(super) fn outline_draw_pass(
     world: &World,
@@ -13,7 +13,7 @@ pub(super) fn outline_draw_pass(
         &ExtractedCamera,
         &ExtractedView,
         &ViewTarget,
-        &ViewDepthTexture,
+        &ViewDepthStencilTexture,
     )>,
     outline_phases: Res<ViewSortedRenderPhases<OutlinePhaseItem>>,
     mut render_context: RenderContext,

@@ -352,7 +352,7 @@ fn apply_clear_expressions(
 /// The user-set weights leave with the expressions they override: on detach,
 /// and when a new rig is attached.
 fn remove_overrides_with_weights(
-    trigger: On<Remove, VrmExpressionWeights>,
+    trigger: On<Remove<VrmExpressionWeights>>,
     mut commands: Commands,
     vrms: Query<(), With<ExpressionOverrides>>,
 ) {

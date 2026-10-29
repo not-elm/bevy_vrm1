@@ -34,7 +34,7 @@ impl Plugin for VrmaInitializePlugin {
 
 /// Rebuilds the animation graph whenever a VRM (re)attaches its rig.
 fn on_vrm_initialized(
-    trigger: On<Insert, Initialized>,
+    trigger: On<Insert<Initialized>>,
     vrms: Query<(), With<Vrm>>,
     mut commands: Commands,
 ) {

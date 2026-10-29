@@ -8,7 +8,7 @@
 use crate::vrma::animation::bone_rotation::Transformation as RotationTransformation;
 use crate::vrma::animation::bone_translation::Transformation as TranslationTransformation;
 use bevy::animation::{AnimationEntityMut, animated_field};
-use bevy::math::curve::{ConstantCurve, Interval};
+use bevy::curve::{ConstantCurve, Interval};
 use bevy::prelude::*;
 
 /// Samples per second when baking curves.

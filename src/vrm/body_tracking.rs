@@ -132,7 +132,7 @@ impl Plugin for BodyTrackingPlugin {
 
 /// Automatically insert [`SmoothedGaze`] when [`BodyTracking`] is added.
 fn auto_insert_smoothed_gaze(
-    trigger: On<Insert, BodyTracking>,
+    trigger: On<Insert<BodyTracking>>,
     mut commands: Commands,
 ) {
     commands

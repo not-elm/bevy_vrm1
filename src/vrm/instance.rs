@@ -35,14 +35,14 @@
 //! Everything else the handler wrote on the root is moved with a controlled
 //! `take`/`insert` (never `move_components`, which would remap the self-scoped
 //! `AnimatedBy` of a no-`hips` rig into the user root), preserving every entity
-//! reference. [`Initialized`] is inserted last, so `On<Insert, Initialized>`
+//! reference. [`Initialized`] is inserted last, so `On<Insert<Initialized>>`
 //! observers see a fully populated root.
 //!
 //! # The handler bakes a private marker
 //!
 //! [`scene::mark_initialized`](crate::vrm::gltf::handler::scene) writes
 //! [`VrmSceneRoot`] instead of the public markers, so moving components does not
-//! fire `On<Add, Vrm>` / `Added<Initialized>` twice. The attach observer inserts
+//! fire `On<Add<Vrm>>` / `Added<Initialized>` twice. The attach observer inserts
 //! the public markers exactly once per successful attach, on the user's entity
 //! for a managed spawn and on the child scene root for a raw
 //! `WorldAssetRoot(..)` spawn (which keeps the documented "the VRM is the child"
@@ -450,7 +450,7 @@ fn attach_vrm_instance(
 /// attach.
 ///
 /// All of it happens synchronously inside one command, and [`Initialized`] is
-/// inserted last, so an `On<Insert, Initialized>` observer always sees a fully
+/// inserted last, so an `On<Insert<Initialized>>` observer always sees a fully
 /// populated root. The command revalidates the live world, so a duplicate ready
 /// is a no-op, a ready whose instance was superseded cannot move data onto a
 /// newer rig, and an owner that was detached or had its `WorldAssetRoot`
@@ -1069,7 +1069,7 @@ mod tests {
             )
             .add_observer(attach_vrm_instance)
             .add_observer(
-                |insert: On<Insert, Initialized>,
+                |insert: On<Insert<Initialized>>,
                  vrms: Query<(), With<Vrm>>,
                  mut readiness: ResMut<Readiness>| {
                     let entity = insert.event_target();
@@ -1772,7 +1772,7 @@ mod tests {
         let handle = add_vrm(&mut app, vrm_scene(false).0);
         let detached = app.world_mut().spawn(VrmHandle(handle.clone())).id();
         let despawned = app.world_mut().spawn(VrmHandle(handle)).id();
-        app.add_observer(move |add: On<Add, Vrm>, mut commands: Commands| {
+        app.add_observer(move |add: On<Add<Vrm>>, mut commands: Commands| {
             let entity = add.event_target();
             if entity == detached {
                 commands.entity(entity).trigger(RequestDetachVrm);

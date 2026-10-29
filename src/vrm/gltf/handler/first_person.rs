@@ -41,7 +41,7 @@ use bevy::gltf::MorphTargetNames;
 use bevy::gltf::gltf_ext::mesh::primitive_topology;
 use bevy::math::Vec3;
 use bevy::mesh::morph::MorphAttributes;
-use bevy::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues};
+use bevy::mesh::{Indices, Mesh, MeshCompressionArgs, PrimitiveTopology, VertexAttributeValues};
 use bevy::platform::collections::{HashMap, HashSet};
 
 use super::VrmLoadState;
@@ -127,8 +127,25 @@ pub(crate) fn process_primitive(
     *user_mesh = Some(body);
 
     let label = format!("Mesh{}/Primitive{}/VrmHeadOnly", key.0, key.1);
+    let head = compressed(head, state.mesh_compression.as_ref());
     load_context.add_labeled_asset::<Mesh>(label.clone(), head);
     state.first_person.head_mesh_labels.insert(key, label);
+}
+
+/// Compresses the head half the way `bevy_gltf` compresses every mesh it adds,
+/// the body half included (it goes back through `bevy_gltf` as `user_mesh`), so
+/// both halves of a primitive get the same vertex layout. Like `bevy_gltf`, a
+/// failed compression keeps the mesh as it is.
+fn compressed(
+    mesh: Mesh,
+    compression: Option<&MeshCompressionArgs>,
+) -> Mesh {
+    match compression {
+        Some(compression) => mesh
+            .compressed_mesh(compression)
+            .unwrap_or_else(|(mesh, _)| mesh),
+        None => mesh,
+    }
 }
 
 /// Whether a node instancing this mesh is `auto`.
@@ -950,6 +967,22 @@ mod tests {
         assert_eq!(body.morph_target_names(), Some(names.as_slice()));
         assert_eq!(head.morph_target_names(), Some(names.as_slice()));
         assert!(head.skinned_mesh_bounds().is_some());
+        success!()
+    }
+
+    /// The head half bypasses `bevy_gltf`, so it is compressed with the load's
+    /// arguments here, the way `bevy_gltf` compresses the body half.
+    #[test]
+    fn the_head_half_takes_the_load_compression() -> TestResult {
+        let fixture = Fixture::new();
+        let head = build_submesh(&fixture.primitive(), true).expect("the head half splits");
+        assert!(matches!(head.indices(), Some(Indices::U32(_))));
+
+        let uncompressed = compressed(head.clone(), None);
+        assert!(matches!(uncompressed.indices(), Some(Indices::U32(_))));
+
+        let compressed = compressed(head, Some(&MeshCompressionArgs::regular()));
+        assert!(matches!(compressed.indices(), Some(Indices::U16(_))));
         success!()
     }
 

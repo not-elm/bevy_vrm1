@@ -5,6 +5,8 @@ use crate::prelude::*;
 use crate::vrm::mtoon::outline_pass::MToonOutlinePlugin;
 use bevy::asset::{load_internal_asset, uuid_handle};
 use bevy::prelude::*;
+use std::borrow::Cow;
+use std::path::Path;
 
 pub mod prelude {
     pub use crate::vrm::mtoon::{MtoonMaterialPlugin, material::prelude::*};
@@ -34,20 +36,36 @@ impl Plugin for MtoonMaterialPlugin {
         load_internal_asset!(
             app,
             MTOON_FRAGMENT_SHADER_HANDLE,
-            "mtoon_fragment.wgsl",
-            Shader::from_wgsl
+            "mtoon_fragment.wesl",
+            mtoon_shader
         );
         load_internal_asset!(
             app,
             MTOON_TYPES_SHADER_HANDLE,
-            "mtoon_types.wgsl",
-            Shader::from_wgsl
+            "mtoon_types.wesl",
+            mtoon_shader
         );
         load_internal_asset!(
             app,
             MTOON_VERTEX_SHADER_HANDLE,
-            "mtoon_vertex.wgsl",
-            Shader::from_wgsl
+            "mtoon_vertex.wesl",
+            mtoon_shader
         );
     }
+}
+
+/// Builds an `MToon` shader as the WESL module `bevy_vrm1::vrm::<file stem>`, the
+/// path the shaders import each other by (`package::vrm::mtoon_types`).
+///
+/// `Shader::from_wesl` derives the module path from an `embedded://` asset path;
+/// the file-system `path` `load_internal_asset!` passes would not give one.
+fn mtoon_shader(
+    source: &'static str,
+    path: Cow<'_, str>,
+) -> Shader {
+    let file_name = Path::new(path.as_ref())
+        .file_name()
+        .expect("`load_internal_asset!` passes the path of a file")
+        .to_string_lossy();
+    Shader::from_wesl(source, format!("embedded://bevy_vrm1/vrm/{file_name}"))
 }

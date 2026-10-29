@@ -1,16 +1,13 @@
-#import bevy_pbr::{
+import bevy_pbr::render::{
     mesh_bindings::mesh,
     mesh_functions,
-    mesh_functions::{
-        mesh_normal_local_to_world,
-    },
     skinning,
     morph::{morph_position, morph_normal, morph_tangent},
-    forward_io::{Vertex, VertexOutput},
+    forward_io::{Vertex, UncompressedVertex, VertexOutput, decompress_vertex},
     view_transformations::position_world_to_clip,
     mesh_view_bindings::globals,
-}
-#import mtoon::types::{
+};
+import package::vrm::mtoon_types::{
     MToonMaterialUniform,
     material,
     outline_width_multiply_texture,
@@ -19,81 +16,80 @@
     uv_animation_mask_texture,
     uv_animation_mask_sampler,
     UV_ANIMATION_MASK_TEXTURE,
-}
+};
 
 @vertex
 fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     var out: VertexOutput;
+    let uncompressed_vertex_no_morph = decompress_vertex(vertex_no_morph, vertex_no_morph.instance_index);
 
-#ifdef MORPH_TARGETS
-    var vertex = morph_vertex(vertex_no_morph, vertex_no_morph.instance_index);
-#else
-    var vertex = vertex_no_morph;
-#endif
+@if(MORPH_TARGETS)
+    var vertex = morph_vertex(uncompressed_vertex_no_morph, vertex_no_morph.instance_index);
+@else
+    var vertex = uncompressed_vertex_no_morph;
 
     let mesh_world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
 
-#ifdef SKINNED
+@if(SKINNED)
     var world_from_local = skinning::skin_model(
         vertex.joint_indices,
         vertex.joint_weights,
         vertex_no_morph.instance_index
     );
-#else
+@else
     var world_from_local = mesh_world_from_local;
-#endif
 
-#ifdef VERTEX_NORMALS
-#ifdef SKINNED
+@if(VERTEX_NORMALS && SKINNED)
     out.world_normal = skinning::skin_normals(world_from_local, vertex.normal);
-#else
+@if(VERTEX_NORMALS && !SKINNED)
     out.world_normal = mesh_functions::mesh_normal_local_to_world(
         vertex.normal,
         vertex_no_morph.instance_index
     );
-#endif
-#endif
 
-#ifdef VERTEX_POSITIONS
+@if(VERTEX_POSITIONS) {
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
-#ifdef OUTLINE_PASS
-    let animated_uv = calc_animated_uv((material.uv_transform * vec3(vertex.uv, 1.0)).xy);
-    let outline_width = outline_width(animated_uv);
-    let outline_normal = normalize(out.world_normal.xyz);
-    out.world_position = vec4(out.world_position.xyz + outline_normal * outline_width, 1.0);
-#endif
+    @if(OUTLINE_PASS) {
+        let animated_uv = calc_animated_uv((material.uv_transform * vec3(mesh_uv(vertex), 1.0)).xy);
+        let width = outline_width(animated_uv);
+        let outline_normal = normalize(out.world_normal.xyz);
+        out.world_position = vec4(out.world_position.xyz + outline_normal * width, 1.0);
+    }
     out.position = position_world_to_clip(out.world_position.xyz);
-#endif
+}
 
-#ifdef VERTEX_UVS_A
+@if(VERTEX_UVS_A)
     out.uv = vertex.uv;
-#endif
-#ifdef VERTEX_UVS_B
+@if(VERTEX_UVS_B)
     out.uv_b = vertex.uv_b;
-#endif
 
-#ifdef VERTEX_TANGENTS
+@if(VERTEX_TANGENTS)
     out.world_tangent = mesh_functions::mesh_tangent_local_to_world(
         world_from_local,
         vertex.tangent,
         vertex_no_morph.instance_index
     );
-#endif
 
-#ifdef VERTEX_COLORS
+@if(VERTEX_COLORS)
     out.color = vertex.color;
-#endif
 
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+@if(VERTEX_OUTPUT_INSTANCE_INDEX)
     out.instance_index = vertex_no_morph.instance_index;
-#endif
 
-#ifdef VISIBILITY_RANGE_DITHER
+@if(VISIBILITY_RANGE_DITHER)
     out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
         vertex_no_morph.instance_index, mesh_world_from_local[3]);
-#endif
 
     return out;
+}
+
+// The mesh's first UV set. `UncompressedVertex.uv` only exists when the mesh has
+// one; a mesh without one samples the outline textures at the origin.
+fn mesh_uv(vertex: UncompressedVertex) -> vec2<f32> {
+@if(VERTEX_UVS_A)
+    return vertex.uv;
+@else
+    return vec2<f32>(0.0);
 }
 
 fn outline_width(uv: vec2<f32>) -> f32{
@@ -125,26 +121,24 @@ fn calc_uv_time(uv: vec2<f32>) -> f32{
     }
 }
 
-#ifdef MORPH_TARGETS
-fn morph_vertex(vertex_in: Vertex, instance_index: u32) -> Vertex {
+@if(MORPH_TARGETS)
+fn morph_vertex(vertex_in: UncompressedVertex, instance_index: u32) -> UncompressedVertex {
     var vertex = vertex_in;
     let first_vertex = mesh[instance_index].first_vertex_index;
     let vertex_index = vertex.index - first_vertex;
+    let morph_descriptor_index = mesh[instance_index].morph_descriptor_index;
 
-    let weight_count = bevy_pbr::morph::layer_count(instance_index);
+    let weight_count = bevy_pbr::render::morph::layer_count(morph_descriptor_index);
     for (var i: u32 = 0u; i < weight_count; i ++) {
-        let weight = bevy_pbr::morph::weight_at(i, instance_index);
+        let weight = bevy_pbr::render::morph::weight_at(i, morph_descriptor_index);
         if weight == 0.0 {
             continue;
         }
-        vertex.position += weight * morph_position(vertex_index, i, instance_index);
-#ifdef VERTEX_NORMALS
-        vertex.normal += weight * morph_normal(vertex_index, i, instance_index);
-#endif
-#ifdef VERTEX_TANGENTS
-        vertex.tangent += vec4(weight * morph_tangent(vertex_index, i, instance_index), 0.0);
-#endif
+        vertex.position += weight * morph_position(vertex_index, i, morph_descriptor_index);
+        @if(VERTEX_NORMALS)
+        vertex.normal += weight * morph_normal(vertex_index, i, morph_descriptor_index);
+        @if(VERTEX_TANGENTS)
+        vertex.tangent += vec4(weight * morph_tangent(vertex_index, i, morph_descriptor_index), 0.0);
     }
     return vertex;
 }
-#endif

@@ -35,10 +35,18 @@ fn update_spring_bones(
             .and_then(|center| transforms.get(center).ok())
             .map(|(_, gtf)| gtf)
             .copied();
-        for joint in spring_root.joints.iter().copied() {
+        for (index, joint) in spring_root.joints.iter().copied().enumerate() {
             let Ok((child_of, mut state, props)) = joints.get_mut(joint) else {
                 continue;
             };
+            if state.is_added()
+                && let Some((_, tail_gtf)) = spring_root
+                    .joints
+                    .get(index + 1)
+                    .and_then(|tail| transforms.get(*tail).ok())
+            {
+                state.seed_tail(global_to_center_local(tail_gtf.translation(), &center_gtf));
+            }
             let parent_gtf = transforms
                 .get(child_of.parent())
                 .map(|(_, gtf)| *gtf)
@@ -161,6 +169,65 @@ fn apply_collision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::test_app;
+    use crate::vrm::spring_bone::{SpringCenterNode, SpringColliders, SpringJoints};
+
+    /// The load-time rest pose knows nothing about where the application put the
+    /// avatar, so the tails are seeded from the live pose: a strand at rest stays
+    /// at rest on the first frame of an avatar placed away from the origin.
+    #[test]
+    fn a_strand_at_rest_stays_at_rest_on_a_placed_avatar() {
+        for with_center in [false, true] {
+            let mut app = test_app();
+            app.add_plugins(SpringBoneUpdatePlugin);
+            let world = app.world_mut();
+            let root = world
+                .spawn((
+                    Transform::default(),
+                    GlobalTransform::from_xyz(0.0, 0.0, 1.0),
+                ))
+                .id();
+            let head = world
+                .spawn((
+                    Transform::from_xyz(0.0, 1.0, 0.0),
+                    GlobalTransform::from_xyz(0.0, 1.0, 1.0),
+                    ChildOf(root),
+                ))
+                .id();
+            let tail = world
+                .spawn((
+                    Transform::from_xyz(0.0, -0.1, 0.0),
+                    GlobalTransform::from_xyz(0.0, 0.9, 1.0),
+                    ChildOf(head),
+                ))
+                .id();
+            let props = SpringJointProps {
+                drag_force: 0.5,
+                gravity_dir: Vec3::NEG_Y,
+                gravity_power: 0.0,
+                hit_radius: 0.0,
+                stiffness: 1.0,
+            };
+            world.entity_mut(head).insert((
+                props,
+                SpringJointState::from_rest(Vec3::NEG_Y, 0.1, Transform::from_xyz(0.0, 1.0, 0.0)),
+                SpringRoot {
+                    joints: SpringJoints(vec![head, tail]),
+                    colliders: SpringColliders::default(),
+                    center_node: SpringCenterNode(with_center.then_some(root)),
+                },
+            ));
+            world.entity_mut(tail).insert(props);
+
+            app.update();
+
+            let rotation = app.world().get::<Transform>(head).unwrap().rotation;
+            assert!(
+                rotation.angle_between(Quat::IDENTITY) < 1e-3,
+                "with_center: {with_center}, rotation: {rotation}"
+            );
+        }
+    }
 
     #[test]
     fn tail_rotation_matches_previous_behavior_for_finite_direction() {

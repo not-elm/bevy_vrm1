@@ -1,20 +1,15 @@
 use crate::vrm::body_tracking::{BodyTracking, SmoothedGaze};
-use crate::vrm::expressions::{ExpressionEntityMap, VrmExpressionRegistry};
-use crate::vrm::first_person::FirstPersonRegistry;
-use crate::vrm::gltf::extensions::vrmc_vrm::LookAtProperties;
-use crate::vrm::humanoid_bone::HumanoidBoneRegistry;
-use crate::vrm::loader::VrmHandle;
+use crate::vrm::components::{PendingNodeConstraint, VrmHeadOnly, VrmNodeConstraint, VrmNodeIndex};
+use crate::vrm::instance::{
+    PendingVrmScene, VrmGeneration, VrmHandle, VrmInstanceState, VrmSceneRoot, instance_entities,
+    remove_model_name, remove_root_data,
+};
 use crate::vrm::look_at::LookAt;
-use crate::vrm::mtoon::VrmcMaterialRegistry;
-use crate::vrm::node_constraint::registry::NodeConstraintRegistry;
-use crate::vrm::spring_bone::registry::{
-    SpringColliderRegistry, SpringJointPropsRegistry, SpringNodeRegistry,
-};
-use crate::vrm::{
-    Initialized, RestGlobalTransform, RestTransform, RestWorldTransform, Vrm, VrmPath,
-};
+use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
+use crate::vrm::{Initialized, RestGlobalTransform, RestTransform, Vrm, VrmBone};
+use crate::vrma::{VrmAnimationGraphState, Vrma, VrmaHandle};
 use bevy::prelude::*;
-use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
+use bevy::world_serialization::{WorldAssetRoot, WorldInstance, WorldInstanceSpawner};
 
 /// Triggers VRM detachment on the target entity.
 ///
@@ -46,153 +41,270 @@ impl Plugin for VrmDetachPlugin {
 
 fn apply_detach_vrm(
     trigger: On<RequestDetachVrm>,
+    managed: Query<(), With<VrmHandle>>,
+    vrm_root: Query<(), With<Vrm>>,
+    raw_owner: Query<
+        (),
+        (
+            With<WorldAssetRoot>,
+            Without<VrmHandle>,
+            Without<Vrma>,
+            Without<VrmaHandle>,
+        ),
+    >,
     mut commands: Commands,
-    children_query: Query<&Children>,
-    vrm_check: Query<(), Or<(With<Vrm>, With<VrmHandle>)>>,
 ) {
     let entity = trigger.event_target();
+    if managed.contains(entity) {
+        commands.queue(move |world: &mut World| detach_managed(world, entity));
+    } else if vrm_root.contains(entity) || raw_owner.contains(entity) {
+        commands.queue(move |world: &mut World| detach_raw(world, entity));
+    }
+}
 
-    if vrm_check.get(entity).is_err() {
+/// Detaches a [`VrmHandle`]-managed avatar, keeping the entity and the
+/// application's own components.
+fn detach_managed(
+    world: &mut World,
+    entity: Entity,
+) {
+    if world.get_entity(entity).is_err() {
+        return;
+    }
+    if world.get::<VrmHandle>(entity).is_none() {
+        return;
+    }
+    let tracked = world
+        .get::<WorldInstance>(entity)
+        .map(|instance| **instance)
+        .map(|instance_id| instance_entities(world, instance_id))
+        .unwrap_or_default();
+
+    remove_root_data(world, entity);
+    remove_model_name(world, entity);
+    if let Ok(mut owner) = world.get_entity_mut(entity) {
+        owner.remove::<WorldAssetRoot>();
+    }
+    if let Ok(mut owner) = world.get_entity_mut(entity) {
+        owner.remove::<(
+            Vrm,
+            Initialized,
+            VrmGeneration,
+            VrmInstanceState,
+            PendingVrmScene,
+            VrmHandle,
+            WorldInstance,
+            VrmAnimationGraphState,
+        )>();
+    }
+    despawn_children(world, entity);
+    for tracked_entity in tracked {
+        if tracked_entity == entity {
+            continue;
+        }
+        if world.get_entity(tracked_entity).is_ok() {
+            world.entity_mut(tracked_entity).despawn();
+        }
+    }
+}
+
+/// Detaches a raw `WorldAssetRoot` spawn, whether the request named the child
+/// VRM root or the owner.
+fn detach_raw(
+    world: &mut World,
+    entity: Entity,
+) {
+    if world.get_entity(entity).is_err() {
+        return;
+    }
+    if world.get::<VrmHandle>(entity).is_some()
+        || world.get::<Vrma>(entity).is_some()
+        || world.get::<VrmaHandle>(entity).is_some()
+    {
+        return;
+    }
+    let entity_is_root = world.get::<Vrm>(entity).is_some();
+    let entity_is_owner = world.get::<WorldAssetRoot>(entity).is_some();
+    if !entity_is_root && !entity_is_owner {
+        return;
+    }
+    let (owner, root) = if entity_is_root {
+        let owner = if entity_is_owner {
+            Some(entity)
+        } else {
+            find_raw_owner(world, entity)
+        };
+        (owner, Some(entity))
+    } else {
+        (Some(entity), find_raw_instance_root(world, entity))
+    };
+
+    let tracked = owner
+        .and_then(|owner| world.get::<WorldInstance>(owner).map(|instance| **instance))
+        .map(|instance_id| instance_entities(world, instance_id))
+        .unwrap_or_default();
+    let spawned = !tracked.is_empty();
+    if root.is_none()
+        && spawned
+        && tracked
+            .iter()
+            .all(|&entity| world.get::<VrmSceneRoot>(entity).is_none())
+    {
         return;
     }
 
-    remove_vrm_components(&mut commands, entity);
-    despawn_children(&mut commands, entity, &children_query);
-}
-
-/// Removes all VRM-related components from the entity.
-fn remove_vrm_components(
-    commands: &mut Commands,
-    entity: Entity,
-) {
-    commands
-        .entity(entity)
-        // Core
-        .try_remove::<Vrm>()
-        .try_remove::<VrmPath>()
-        .try_remove::<Initialized>()
-        .try_remove::<VrmHandle>()
-        .try_remove::<Name>()
-        .try_remove::<WorldAssetRoot>()
-        // Rest transforms
-        .try_remove::<RestTransform>()
-        .try_remove::<RestGlobalTransform>()
-        .try_remove::<RestWorldTransform>()
-        // Registries (pub)
-        .try_remove::<VrmcMaterialRegistry>()
-        .try_remove::<NodeConstraintRegistry>()
-        .try_remove::<ExpressionEntityMap>()
-        // Registries (pub(crate))
-        .try_remove::<VrmExpressionRegistry>()
-        .try_remove::<HumanoidBoneRegistry>()
-        .try_remove::<SpringJointPropsRegistry>()
-        .try_remove::<SpringColliderRegistry>()
-        .try_remove::<SpringNodeRegistry>()
-        .try_remove::<FirstPersonRegistry>()
-        // Gaze/Body
-        .try_remove::<LookAtProperties>()
-        .try_remove::<LookAt>()
-        .try_remove::<BodyTracking>()
-        .try_remove::<SmoothedGaze>();
-
-    remove_bone_entities(commands, entity);
-}
-
-macro_rules! remove_bone_entities {
-    ($cmd:expr, $entity:expr, $($bone:ident),+ $(,)?) => {
-        paste::paste! {
-            $cmd.entity($entity)
-                $(.try_remove::<crate::vrm::humanoid_bone::prelude::[<$bone BoneEntity>]>())+;
+    if let Some(owner) = owner
+        && world.get_entity(owner).is_ok()
+    {
+        world.entity_mut(owner).remove::<WorldAssetRoot>();
+    }
+    if let Some(root) = root
+        && world.get_entity(root).is_ok()
+    {
+        strip_raw_root(world, root);
+    }
+    let kept_root = root.filter(|_| entity_is_root);
+    for tracked_entity in tracked {
+        if Some(tracked_entity) == kept_root {
+            continue;
         }
-    };
+        if world.get_entity(tracked_entity).is_ok() {
+            world.entity_mut(tracked_entity).despawn();
+        }
+    }
+    if spawned
+        && let Some(owner) = owner
+        && world.get_entity(owner).is_ok()
+    {
+        world.entity_mut(owner).remove::<WorldInstance>();
+    }
 }
 
-/// Removes all 55 bone entity holder components.
-fn remove_bone_entities(
-    commands: &mut Commands,
-    entity: Entity,
+/// Finds the [`WorldAssetRoot`] owner of the raw instance that `root` belongs to.
+fn find_raw_owner(
+    world: &World,
+    root: Entity,
+) -> Option<Entity> {
+    let spawner = world.get_resource::<WorldInstanceSpawner>();
+    let mut current = root;
+    while let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) {
+        if world.get::<WorldAssetRoot>(parent).is_some() {
+            match (
+                spawner,
+                world
+                    .get::<WorldInstance>(parent)
+                    .map(|instance| **instance),
+            ) {
+                (Some(spawner), Some(instance_id)) => {
+                    if spawner
+                        .iter_instance_entities(instance_id)
+                        .any(|entity| entity == root)
+                    {
+                        return Some(parent);
+                    }
+                }
+                (None, _) => return Some(parent),
+                (Some(_), None) => {}
+            }
+        }
+        current = parent;
+    }
+    None
+}
+
+/// Finds the [`Vrm`] root of `owner`'s live instance, if it has spawned.
+fn find_raw_instance_root(
+    world: &World,
+    owner: Entity,
+) -> Option<Entity> {
+    let spawner = world.get_resource::<WorldInstanceSpawner>()?;
+    let instance_id = world
+        .get::<WorldInstance>(owner)
+        .map(|instance| **instance)?;
+    spawner
+        .iter_instance_entities(instance_id)
+        .find(|entity| world.get::<Vrm>(*entity).is_some())
+}
+
+/// Strips the VRM rig off a raw instance's scene root and despawns its children.
+fn strip_raw_root(
+    world: &mut World,
+    root: Entity,
 ) {
-    remove_bone_entities!(
-        commands,
-        entity,
-        Hips,
-        RightRingProximal,
-        RightThumbDistal,
-        RightRingIntermediate,
-        RightUpperArm,
-        LeftIndexProximal,
-        LeftUpperLeg,
-        LeftFoot,
-        LeftIndexDistal,
-        LeftThumbMetacarpal,
-        RightLowerArm,
-        LeftMiddleDistal,
-        RightUpperLeg,
-        LeftToes,
-        LeftThumbDistal,
-        RightShoulder,
-        RightThumbMetacarpal,
-        Spine,
-        LeftLowerLeg,
-        LeftShoulder,
-        LeftUpperArm,
-        UpperChest,
-        RightToes,
-        RightIndexDistal,
-        LeftMiddleProximal,
-        LeftRingProximal,
-        LeftRingDistal,
-        LeftThumbProximal,
-        LeftIndexIntermediate,
-        LeftLittleProximal,
-        LeftLittleDistal,
-        RightHand,
-        RightLittleProximal,
-        LeftRingIntermediate,
-        RightIndexIntermediate,
-        Chest,
-        LeftHand,
-        RightLittleIntermediate,
-        RightFoot,
-        RightLowerLeg,
-        LeftLittleIntermediate,
-        LeftLowerArm,
-        RightLittleDistal,
-        RightMiddleIntermediate,
-        RightMiddleProximal,
-        RightThumbProximal,
-        Neck,
-        Jaw,
-        Head,
-        LeftEye,
-        RightEye,
-        LeftMiddleIntermediate,
-        RightRingDistal,
-        RightIndexProximal,
-        RightMiddleDistal,
-    );
+    remove_root_data(world, root);
+    if let Ok(mut root) = world.get_entity_mut(root) {
+        root.remove::<(
+            (
+                Vrm,
+                Initialized,
+                VrmSceneRoot,
+                Name,
+                WorldAssetRoot,
+                RestTransform,
+                RestGlobalTransform,
+                LookAt,
+                BodyTracking,
+                SmoothedGaze,
+            ),
+            (
+                VrmNodeIndex,
+                VrmBone,
+                PendingNodeConstraint,
+                VrmNodeConstraint,
+                SpringRoot,
+                SpringJointProps,
+                SpringJointState,
+                VrmHeadOnly,
+                VrmAnimationGraphState,
+            ),
+        )>();
+    }
+    despawn_children(world, root);
 }
 
-/// Despawns all direct children of the entity.
+/// Despawns all descendants of the entity.
 ///
-/// Bevy 0.18's `despawn()` is recursive, so this also despawns all descendants.
+/// `EntityWorldMut::despawn_children` skips a child that something else (an
+/// application observer reacting to an earlier despawn) already removed, where
+/// despawning each child through `World::entity_mut` would panic.
 fn despawn_children(
-    commands: &mut Commands,
+    world: &mut World,
     entity: Entity,
-    children_query: &Query<&Children>,
 ) {
-    let Ok(children) = children_query.get(entity) else {
-        return;
-    };
-    for child in children.iter() {
-        commands.entity(child).despawn();
+    if let Ok(mut entity) = world.get_entity_mut(entity) {
+        entity.despawn_children();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::success;
+    use crate::tests::{TestResult, rotation, rotation_is, run_constraints, set_rotation};
+    use crate::vrm::components::{ConstraintExecutionOrder, VrmConstraintKind};
+    use crate::vrm::expressions::{ExpressionCategory, ExpressionOverrideType};
+    use crate::vrm::gltf::extensions::vrmc_vrm::LookAtProperties;
+    use crate::vrm::humanoid_bone::prelude::HipsBoneEntity;
+    use crate::vrm::spring_bone::{SpringCenterNode, SpringColliders, SpringJoints};
+    use crate::vrm::{RestWorldTransform, VrmPath};
+    use crate::vrma::animation::prelude::{
+        EffectiveExpressionWeights, ExpressionMorphBinds, ExpressionSetting, ExpressionSettings,
+        MorphBindTable, VrmExpressionWeights,
+    };
     use bevy::platform::collections::HashMap;
+    use std::f32::consts::FRAC_PI_2;
+
+    macro_rules! assert_all_removed {
+        ($entity:expr, $($component:ty),+ $(,)?) => {
+            $(
+                assert!(
+                    !$entity.contains::<$component>(),
+                    "`{}` survived the detach",
+                    stringify!($component)
+                );
+            )+
+        };
+    }
 
     fn setup_app() -> App {
         let mut app = App::new();
@@ -201,18 +313,24 @@ mod tests {
         app
     }
 
+    fn trigger_detach(
+        app: &mut App,
+        entity: Entity,
+    ) {
+        app.world_mut()
+            .commands()
+            .entity(entity)
+            .trigger(RequestDetachVrm);
+        app.update();
+    }
+
     #[test]
     fn test_detach_removes_vrm_components() {
         let mut app = setup_app();
 
         let vrm_entity = app
             .world_mut()
-            .spawn((
-                Vrm,
-                Initialized,
-                ExpressionEntityMap(HashMap::default()),
-                RestWorldTransform::default(),
-            ))
+            .spawn((Vrm, Initialized, RestWorldTransform::default()))
             .id();
 
         app.world_mut()
@@ -224,7 +342,6 @@ mod tests {
         let world = app.world();
         assert!(!world.entity(vrm_entity).contains::<Vrm>());
         assert!(!world.entity(vrm_entity).contains::<Initialized>());
-        assert!(!world.entity(vrm_entity).contains::<ExpressionEntityMap>());
         assert!(!world.entity(vrm_entity).contains::<RestWorldTransform>());
         // Entity itself survives
         assert!(world.get_entity(vrm_entity).is_ok());
@@ -295,5 +412,468 @@ mod tests {
         app.update();
 
         assert!(app.world().get_entity(vrm_entity).is_ok());
+    }
+
+    #[test]
+    fn the_load_time_component_set_is_removed() -> TestResult {
+        let mut app = setup_app();
+        let source = app.world_mut().spawn_empty().id();
+        let root = app.world_mut().spawn_empty().id();
+
+        app.world_mut().entity_mut(root).insert((
+            Vrm,
+            Initialized,
+            Name::new("Scene0"),
+            RestTransform(Transform::IDENTITY),
+            RestGlobalTransform(GlobalTransform::IDENTITY),
+            RestWorldTransform(GlobalTransform::IDENTITY),
+            ConstraintExecutionOrder(vec![source]),
+            VrmNodeConstraint {
+                source,
+                weight: 1.0,
+                kind: VrmConstraintKind::Rotation,
+            },
+            VrmExpressionWeights(HashMap::from([("happy".to_owned(), 0.5)])),
+            ExpressionMorphBinds(MorphBindTable(HashMap::from([(
+                "happy".to_owned(),
+                Vec::new(),
+            )]))),
+            LookAtProperties::default(),
+        ));
+        app.world_mut().entity_mut(root).insert((
+            VrmNodeIndex(7),
+            VrmBone::from("hips"),
+            PendingNodeConstraint {
+                source_node: 7,
+                weight: 1.0,
+                kind: VrmConstraintKind::Rotation,
+            },
+            SpringJointProps::default(),
+            SpringJointState::default(),
+            VrmHeadOnly,
+        ));
+        app.world_mut().entity_mut(root).insert(SpringRoot {
+            joints: SpringJoints(vec![source]),
+            colliders: SpringColliders(Vec::new()),
+            center_node: SpringCenterNode(Some(source)),
+        });
+        app.world_mut()
+            .entity_mut(root)
+            .insert(ExpressionSettings(HashMap::from([(
+                "happy".to_owned(),
+                ExpressionSetting {
+                    is_binary: false,
+                    category: ExpressionCategory::Other,
+                    override_blink: ExpressionOverrideType::None,
+                    override_look_at: ExpressionOverrideType::None,
+                    override_mouth: ExpressionOverrideType::None,
+                },
+            )])));
+        app.world_mut()
+            .entity_mut(root)
+            .insert(EffectiveExpressionWeights::default());
+
+        trigger_detach(&mut app, root);
+
+        let world = app.world();
+        let entity = world.entity(root);
+        assert_all_removed!(
+            entity,
+            Vrm,
+            Initialized,
+            Name,
+            ConstraintExecutionOrder,
+            VrmNodeConstraint,
+            VrmNodeIndex,
+            VrmBone,
+            PendingNodeConstraint,
+            VrmExpressionWeights,
+            EffectiveExpressionWeights,
+            ExpressionMorphBinds,
+            ExpressionSettings,
+            SpringRoot,
+            SpringJointProps,
+            SpringJointState,
+            VrmHeadOnly,
+            LookAtProperties,
+            RestTransform,
+            RestGlobalTransform,
+            RestWorldTransform,
+        );
+        assert!(world.get_entity(root).is_ok());
+        success!()
+    }
+
+    #[test]
+    fn the_root_side_component_set_is_removed() -> TestResult {
+        let mut app = setup_app();
+        let hips = app.world_mut().spawn_empty().id();
+        let root = app.world_mut().spawn_empty().id();
+
+        app.world_mut().entity_mut(root).insert((
+            Vrm,
+            Initialized,
+            Name::new("Elmer"),
+            WorldAssetRoot(Handle::default()),
+            VrmPath::new("vrm/Elmer.vrm"),
+            RestWorldTransform::default(),
+            LookAtProperties::default(),
+            LookAt::Cursor,
+            BodyTracking::default(),
+            SmoothedGaze::default(),
+            HipsBoneEntity(hips),
+        ));
+
+        trigger_detach(&mut app, root);
+
+        let world = app.world();
+        let entity = world.entity(root);
+        assert_all_removed!(
+            entity,
+            Vrm,
+            Initialized,
+            Name,
+            WorldAssetRoot,
+            VrmPath,
+            RestWorldTransform,
+            LookAtProperties,
+            LookAt,
+            BodyTracking,
+            SmoothedGaze,
+            HipsBoneEntity,
+        );
+        assert!(world.get_entity(hips).is_ok());
+        success!()
+    }
+
+    #[test]
+    fn a_managed_detach_keeps_the_user_root_and_clears_the_rig() -> TestResult {
+        let mut app = setup_app();
+        let scene_root = app.world_mut().spawn_empty().id();
+        let vrma_child = app.world_mut().spawn_empty().id();
+        let bones = app.world_mut().spawn_empty().id();
+        let hips = app.world_mut().spawn_empty().id();
+
+        let vrm = app
+            .world_mut()
+            .spawn((
+                VrmHandle(Handle::default()),
+                Name::new("avatar"),
+                Transform::from_xyz(1.0, 2.0, 3.0),
+                LookAt::Cursor,
+            ))
+            .id();
+        app.world_mut().entity_mut(vrm).insert((
+            Vrm,
+            Initialized,
+            PendingVrmScene,
+            VrmGeneration(2),
+            VrmInstanceState { scene_root },
+            WorldAssetRoot(Handle::default()),
+            VrmPath::new("vrm/Elmer.vrm"),
+            RestWorldTransform::default(),
+            LookAtProperties::default(),
+            ConstraintExecutionOrder(Vec::new()),
+            HipsBoneEntity(hips),
+        ));
+        app.world_mut()
+            .commands()
+            .entity(vrm)
+            .add_children(&[scene_root, vrma_child, bones]);
+        app.update();
+
+        trigger_detach(&mut app, vrm);
+
+        let world = app.world();
+        assert!(world.get_entity(vrm).is_ok(), "the root entity survives");
+        assert_eq!(
+            world.get::<Name>(vrm).map(Name::as_str),
+            Some("avatar"),
+            "the user's `Name` is kept"
+        );
+        assert!(world.get::<Transform>(vrm).is_some(), "placement is kept");
+        assert!(world.get::<LookAt>(vrm).is_some(), "`LookAt` is kept");
+        assert_all_removed!(
+            world.entity(vrm),
+            Vrm,
+            Initialized,
+            VrmHandle,
+            PendingVrmScene,
+            VrmGeneration,
+            VrmInstanceState,
+            WorldAssetRoot,
+            VrmPath,
+            RestWorldTransform,
+            LookAtProperties,
+            ConstraintExecutionOrder,
+            HipsBoneEntity,
+        );
+        for child in [scene_root, vrma_child, bones] {
+            assert!(
+                world.get_entity(child).is_err(),
+                "child {child:?} despawned"
+            );
+        }
+        success!()
+    }
+
+    #[test]
+    fn a_managed_detach_then_reattach_keeps_the_entity() -> TestResult {
+        let mut app = setup_app();
+        let scene_root = app.world_mut().spawn_empty().id();
+        let vrm = app
+            .world_mut()
+            .spawn((VrmHandle(Handle::default()), Name::new("avatar")))
+            .id();
+        app.world_mut().entity_mut(vrm).insert((
+            Vrm,
+            Initialized,
+            VrmGeneration(1),
+            VrmInstanceState { scene_root },
+        ));
+
+        trigger_detach(&mut app, vrm);
+        assert!(app.world().get::<VrmHandle>(vrm).is_none());
+
+        app.world_mut()
+            .entity_mut(vrm)
+            .insert(VrmHandle(Handle::default()));
+        app.update();
+
+        assert!(app.world().get_entity(vrm).is_ok());
+        assert_eq!(
+            app.world().get::<Name>(vrm).map(Name::as_str),
+            Some("avatar")
+        );
+        success!()
+    }
+
+    /// An application observer that despawns the entity losing `C`, which runs
+    /// in the middle of a detach.
+    fn despawn_on_remove<C: Component>(app: &mut App) {
+        app.add_observer(|trigger: On<Remove, C>, mut commands: Commands| {
+            commands.entity(trigger.event_target()).try_despawn();
+        });
+    }
+
+    const DESPAWNING_OBSERVERS: [fn(&mut App); 2] = [
+        despawn_on_remove::<VrmExpressionWeights>,
+        despawn_on_remove::<Vrm>,
+    ];
+
+    #[test]
+    fn a_managed_detach_survives_an_observer_despawning_the_avatar() -> TestResult {
+        for add_observer in DESPAWNING_OBSERVERS {
+            let mut app = setup_app();
+            add_observer(&mut app);
+            let scene_root = app.world_mut().spawn_empty().id();
+            let vrm = app
+                .world_mut()
+                .spawn((
+                    VrmHandle(Handle::default()),
+                    Vrm,
+                    Initialized,
+                    VrmInstanceState { scene_root },
+                    VrmExpressionWeights::default(),
+                ))
+                .add_child(scene_root)
+                .id();
+
+            trigger_detach(&mut app, vrm);
+
+            assert!(app.world().get_entity(vrm).is_err());
+            assert!(app.world().get_entity(scene_root).is_err());
+        }
+        success!()
+    }
+
+    #[test]
+    fn a_raw_detach_survives_an_observer_despawning_the_root() -> TestResult {
+        for add_observer in DESPAWNING_OBSERVERS {
+            let mut app = setup_app();
+            add_observer(&mut app);
+            let scene_root = app
+                .world_mut()
+                .spawn((Vrm, VrmExpressionWeights::default()))
+                .id();
+            let owner = app
+                .world_mut()
+                .spawn(WorldAssetRoot(Handle::default()))
+                .add_child(scene_root)
+                .id();
+            app.update();
+
+            trigger_detach(&mut app, scene_root);
+
+            assert!(app.world().get_entity(scene_root).is_err());
+            assert!(app.world().get::<WorldAssetRoot>(owner).is_none());
+        }
+        success!()
+    }
+
+    #[test]
+    fn a_raw_ready_detach_clears_the_owners_world_asset_root() -> TestResult {
+        let mut app = setup_app();
+        let scene_root = app.world_mut().spawn(Vrm).id();
+        let owner = app
+            .world_mut()
+            .spawn(WorldAssetRoot(Handle::default()))
+            .id();
+        app.world_mut()
+            .commands()
+            .entity(owner)
+            .add_child(scene_root);
+        app.update();
+
+        trigger_detach(&mut app, scene_root);
+
+        assert!(
+            app.world().get::<WorldAssetRoot>(owner).is_none(),
+            "the owner's registration is cleared"
+        );
+        assert!(app.world().get::<Vrm>(scene_root).is_none());
+        assert!(app.world().get_entity(owner).is_ok());
+        assert!(app.world().get_entity(scene_root).is_ok());
+        success!()
+    }
+
+    #[test]
+    fn a_raw_pending_detach_cancels_the_spawn() -> TestResult {
+        let mut app = setup_app();
+        let owner = app
+            .world_mut()
+            .spawn(WorldAssetRoot(Handle::default()))
+            .id();
+
+        trigger_detach(&mut app, owner);
+
+        assert!(app.world().get::<WorldAssetRoot>(owner).is_none());
+        assert!(app.world().get_entity(owner).is_ok());
+        success!()
+    }
+
+    #[test]
+    fn a_vrma_root_is_not_detached() -> TestResult {
+        let mut app = setup_app();
+        let vrma = app
+            .world_mut()
+            .spawn((Vrma, WorldAssetRoot(Handle::default())))
+            .id();
+
+        trigger_detach(&mut app, vrma);
+
+        assert!(
+            app.world().get::<WorldAssetRoot>(vrma).is_some(),
+            "a `.vrma` is not a VRM and must keep its registration"
+        );
+        success!()
+    }
+
+    #[test]
+    fn a_detached_pipeline_scene_stops_running_node_constraints() -> TestResult {
+        let mut app = setup_app();
+        let source = app
+            .world_mut()
+            .spawn((Transform::IDENTITY, RestTransform(Transform::IDENTITY)))
+            .id();
+        let destination = app
+            .world_mut()
+            .spawn((
+                Transform::IDENTITY,
+                RestTransform(Transform::IDENTITY),
+                VrmNodeConstraint {
+                    source,
+                    weight: 1.0,
+                    kind: VrmConstraintKind::Rotation,
+                },
+            ))
+            .id();
+        let root = app
+            .world_mut()
+            .spawn((
+                Vrm,
+                Initialized,
+                ConstraintExecutionOrder(vec![destination]),
+            ))
+            .id();
+
+        let driven = Quat::from_rotation_x(FRAC_PI_2);
+        set_rotation(&mut app, source, driven);
+        run_constraints(&mut app);
+        assert!(
+            rotation_is(rotation(&app, destination), driven),
+            "before the detach the pipeline constraint pass drives the destination: got {:?}",
+            rotation(&app, destination)
+        );
+
+        trigger_detach(&mut app, root);
+
+        assert!(
+            app.world().get::<ConstraintExecutionOrder>(root).is_none(),
+            "the execution order is what kept the root in the pass's query"
+        );
+        set_rotation(&mut app, destination, Quat::IDENTITY);
+        set_rotation(&mut app, source, driven);
+        run_constraints(&mut app);
+        assert_eq!(
+            rotation(&app, destination),
+            Quat::IDENTITY,
+            "a detached scene must not keep writing node constraints"
+        );
+        success!()
+    }
+
+    #[test]
+    fn detaching_a_scene_without_a_vrm_path_is_fine() -> TestResult {
+        let mut app = setup_app();
+        let root = app
+            .world_mut()
+            .spawn((Vrm, Initialized, ConstraintExecutionOrder(Vec::new())))
+            .id();
+
+        trigger_detach(&mut app, root);
+
+        assert!(app.world().get_entity(root).is_ok());
+        success!()
+    }
+
+    #[test]
+    fn detaching_an_entity_without_vrm_is_a_no_op() -> TestResult {
+        let mut app = setup_app();
+        let node = app
+            .world_mut()
+            .spawn((
+                VrmNodeIndex(3),
+                VrmBone::from("hips"),
+                RestTransform::default(),
+            ))
+            .id();
+
+        trigger_detach(&mut app, node);
+
+        assert!(
+            app.world().get::<VrmBone>(node).is_some(),
+            "a node without `Vrm` is not a VRM root and must not be stripped"
+        );
+        success!()
+    }
+
+    #[test]
+    fn a_same_entity_raw_owner_is_removed() -> TestResult {
+        let mut app = setup_app();
+        let entity = app
+            .world_mut()
+            .spawn((Vrm, Initialized, WorldAssetRoot(Handle::default())))
+            .id();
+
+        trigger_detach(&mut app, entity);
+
+        assert!(app.world().get::<Vrm>(entity).is_none());
+        assert!(
+            app.world().get::<WorldAssetRoot>(entity).is_none(),
+            "the same-entity root registration is removed too"
+        );
+        assert!(app.world().get_entity(entity).is_ok());
+        success!()
     }
 }

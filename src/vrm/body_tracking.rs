@@ -269,14 +269,12 @@ fn track_body_tracking(
     cameras: Cameras,
     time: Res<Time>,
     mut bone_states: Local<HashMap<Entity, BoneState>>,
-    mut root_rest_rots: Local<HashMap<Entity, Quat>>,
 ) {
     let dt = time.delta_secs();
 
     for (root_entity, look_at, properties, tracking, head, neck, chest, spine, mut smoothed) in
         vrms.iter_mut()
     {
-        // 1. Build stable LookAt space using rest-pose orientation + root delta.
         let Ok((&head_tf, &head_gtf)) = transforms.get(head.0) else {
             continue;
         };
@@ -287,12 +285,12 @@ fn track_body_tracking(
             continue;
         };
 
-        let root_rest_rot = *root_rest_rots
-            .entry(root_entity)
-            .or_insert(root_gtf.rotation());
+        let root_rest_rot = rests
+            .get(root_entity)
+            .map_or(Quat::IDENTITY, |(_, rest)| rest.rotation());
+        let owner_rot = root_gtf.rotation() * root_rest_rot.inverse();
         let rest_parent_rot = rest_gtf.rotation() * rest_tf.rotation.inverse();
-        let relative_to_root = root_rest_rot.inverse() * rest_parent_rot;
-        let stable_rotation = root_gtf.rotation() * relative_to_root;
+        let stable_rotation = owner_rot * rest_parent_rot;
 
         let offset = stable_rotation * Vec3::from(properties.offset_from_head_bone);
         let look_at_space = GlobalTransform::from(Transform {
@@ -450,6 +448,105 @@ fn track_body_tracking(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::test_app;
+    use bevy::ecs::system::RunSystemOnce;
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    /// In world space; `(-0.5, 0, 2)` from the head in the frame of an avatar
+    /// turned by `PI` about `Y`.
+    const TARGET: Vec3 = Vec3::new(0.5, 1.5, -2.0);
+
+    /// Runs one tracking pass at [`TARGET`] for an owner turned by `owner`
+    /// whose internal scene root carries `scene_root`, and returns the yaw.
+    /// `raw` puts `Vrm` on the scene root, as a raw `WorldAssetRoot` spawn
+    /// does, instead of on the owner.
+    fn tracked_yaw(
+        owner: Quat,
+        scene_root: Quat,
+        raw: bool,
+    ) -> f32 {
+        let mut app = test_app();
+        let owner_tf = Transform::from_rotation(owner);
+        let scene_tf = Transform::from_rotation(scene_root);
+        let head_tf = Transform::from_xyz(0.0, 1.5, 0.0);
+        let owner_gtf = GlobalTransform::from(owner_tf);
+        let scene_gtf = owner_gtf.mul_transform(scene_tf);
+
+        let target = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(TARGET),
+                GlobalTransform::from_translation(TARGET),
+            ))
+            .id();
+        let owner_entity = app.world_mut().spawn((owner_tf, owner_gtf)).id();
+        let scene = app
+            .world_mut()
+            .spawn((
+                scene_tf,
+                scene_gtf,
+                ChildOf(owner_entity),
+                RestTransform(scene_tf),
+                RestGlobalTransform(GlobalTransform::from(scene_tf)),
+            ))
+            .id();
+        let head = app
+            .world_mut()
+            .spawn((
+                head_tf,
+                scene_gtf.mul_transform(head_tf),
+                ChildOf(scene),
+                RestTransform(head_tf),
+                RestGlobalTransform(GlobalTransform::from(scene_tf).mul_transform(head_tf)),
+            ))
+            .id();
+        let root = if raw { scene } else { owner_entity };
+        app.world_mut().entity_mut(root).insert((
+            Vrm,
+            LookAt::Target(target),
+            LookAtProperties::default(),
+            BodyTracking {
+                smoothing: 0.0,
+                output_smoothing: 0.0,
+                ..default()
+            },
+            SmoothedGaze::default(),
+            HeadBoneEntity(head),
+        ));
+
+        app.world_mut()
+            .run_system_once(track_body_tracking)
+            .expect("Failed to run track_body_tracking");
+        app.world().get::<SmoothedGaze>(root).unwrap().yaw
+    }
+
+    fn expected_yaw() -> f32 {
+        (-0.5_f32).atan2(2.0).to_degrees()
+    }
+
+    #[test]
+    fn a_turned_avatar_measures_the_gaze_in_its_own_frame() {
+        let yaw = tracked_yaw(Quat::from_rotation_y(PI), Quat::IDENTITY, false);
+        assert!(
+            (yaw - expected_yaw()).abs() < 0.01,
+            "yaw {yaw}, expected {}",
+            expected_yaw()
+        );
+    }
+
+    #[test]
+    fn a_raw_spawn_measures_the_gaze_in_its_owners_frame() {
+        let yaw = tracked_yaw(
+            Quat::from_rotation_y(FRAC_PI_2),
+            Quat::from_rotation_y(FRAC_PI_2),
+            true,
+        );
+        assert!(
+            (yaw - expected_yaw()).abs() < 0.01,
+            "yaw {yaw}, expected {}",
+            expected_yaw()
+        );
+    }
 
     #[test]
     fn test_smooth_angle_converges() {

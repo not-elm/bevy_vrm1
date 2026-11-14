@@ -41,7 +41,9 @@ gltf = { version = "1.4.0", default-features = false, features = [
 windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
 ] }
+raw-window-handle = "0.6"
 
 [dev-dependencies]
 bevy = { version = "0.20" }

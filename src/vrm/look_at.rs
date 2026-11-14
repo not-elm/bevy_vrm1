@@ -8,6 +8,8 @@ use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 use bevy::window::Window;
 
+pub(crate) mod cursor;
+
 /// Controls what the VRM model looks at.
 /// This component should be inserted into the root entity of the VRM.
 ///

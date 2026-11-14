@@ -7,6 +7,13 @@ use bevy::prelude::*;
 /// How far in front of the face, toward the camera, `LookAt::Cursor` places the cursor (metres).
 /// Larger values make the eyes and body move less.
 /// Defaults to `1.0`; non-finite or non-positive values fall back to `1.0`.
+///
+/// Insert it on the entity that carries `LookAt` (the VRM root). It is only used for
+/// `LookAt::Cursor`.
+///
+/// `BodyTracking` never measures a forward depth below its `reference_depth`, so a smaller
+/// `CursorGazeDepth` makes only the eyes more sensitive. To make the body follow the cursor
+/// more strongly, lower `BodyTracking::reference_depth` together with `CursorGazeDepth`.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Reflect)]
 #[reflect(Component)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -21,7 +28,10 @@ impl Default for CursorGazeDepth {
 
 const DEFAULT_CURSOR_DEPTH: f32 = 1.0;
 
-/// The world-space point the avatar looks at this frame, resolved by `bevy_vrm1` from `LookAt`.
+/// The world-space point the avatar looks at, resolved by `bevy_vrm1` from `LookAt`.
+///
+/// It is absent until the first frame a target is resolved, keeps the last point on frames
+/// that cannot be resolved, and is removed when `LookAt` is removed and on detach.
 /// Do not insert it yourself.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Reflect)]
 #[reflect(Component)]

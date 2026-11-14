@@ -63,6 +63,9 @@ pub struct BodyTracking {
 
     /// Minimum forward depth used as a safety clamp when a real target is behind or
     /// very close to the model. Cursor sensitivity is controlled by [`CursorGazeDepth`].
+    /// Body tracking never measures a forward depth below this value, so to make the body
+    /// follow the cursor more strongly, lower `reference_depth` together with
+    /// [`CursorGazeDepth`].
     /// Default: 1.0.
     #[cfg_attr(feature = "serde", serde(default = "default_reference_depth"))]
     pub reference_depth: f32,
@@ -253,7 +256,8 @@ struct BoneEntry {
 ///
 /// Its axes follow the avatar root, so the gaze is measured in the avatar's own
 /// frame, and its origin is the rest-pose eye position carried by the head.
-/// Unlike the eye look-at space it does not follow the head bone's rest tilt.
+/// Unlike the eye look-at space it ignores the head's current rotation, which body
+/// tracking itself drives, so it is a stable frame.
 pub(crate) fn body_look_at_space(
     head_translation: Vec3,
     root_gtf: &GlobalTransform,
@@ -342,10 +346,10 @@ fn track_body_tracking(
     for (root_entity, gaze, properties, tracking, head, neck, chest, spine, mut smoothed) in
         vrms.iter_mut()
     {
-        let Ok((&head_tf, &head_gtf)) = transforms.get(head.0) else {
+        let Ok((_, &head_gtf)) = transforms.get(head.0) else {
             continue;
         };
-        let Ok((rest_tf, rest_gtf)) = rests.get(head.0) else {
+        let Ok((_, rest_gtf)) = rests.get(head.0) else {
             continue;
         };
         let Ok(root_gtf) = root_gtfs.get(root_entity) else {
@@ -1000,11 +1004,19 @@ mod tests {
                 .chain(),
         );
         let (root, head) = spawn_rig(&mut app, (LookAt::Cursor, SmoothedGaze::default()));
-        set_gaze_target(&mut app, root, RIG_HEAD_WORLD + Vec3::new(0.0, 0.0, 2.0));
+        set_gaze_target(&mut app, root, RIG_HEAD_WORLD + Vec3::new(0.5, 0.0, 2.0));
+        let anim = |k: u32| Quat::from_rotation_x((k as f32 * 0.5).to_radians());
 
-        for k in 1..=10 {
+        app.update();
+        let delta = anim(1).inverse() * rotation(&app, head);
+        assert!(
+            delta.angle_between(Quat::IDENTITY) > 1.0_f32.to_radians(),
+            "the gaze delta {delta} must be non-identity for this test to discriminate"
+        );
+
+        for k in 2..=10 {
             app.update();
-            let expected = Quat::from_rotation_x((k as f32 * 0.5).to_radians());
+            let expected = anim(k) * delta;
             let actual = rotation(&app, head);
             assert!(
                 rotation_is(actual, expected),

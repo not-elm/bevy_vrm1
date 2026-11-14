@@ -7,7 +7,7 @@ Fixes `LookAt::Cursor` so the eyes no longer pin to their range limits and jump 
 ### Features
 
 - Added `CursorGazeDepth`, a component that sets how far in front of the face (toward the camera) `LookAt::Cursor` places the cursor target. The default is 1.0 m; a non-finite or non-positive value is treated as 1.0
-- Added `GazeTarget`, a read-only component (`position()`) holding the gaze point resolved this frame. The crate inserts, updates and removes it; do not insert it yourself. Both components are in the prelude
+- Added `GazeTarget`, a read-only component (`position()`) holding the resolved gaze point. It appears once a target is first resolved, keeps the last point on frames that cannot be resolved, and is removed when `LookAt` is removed or on detach; do not insert it yourself. Both components are in the prelude
 
 ### Bug Fixes
 

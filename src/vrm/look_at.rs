@@ -70,7 +70,10 @@ impl Plugin for LookAtPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (update_cursor_ray, resolve_gaze_target)
+                (
+                    update_cursor_ray.run_if(any_with_component::<LookAt>),
+                    resolve_gaze_target,
+                )
                     .chain()
                     .in_set(GazeResolveSet),
             )
@@ -558,8 +561,8 @@ mod tests {
             &mut app,
             Quat::IDENTITY,
             None,
-            Quat::IDENTITY,
-            Quat::IDENTITY,
+            Quat::from_rotation_x(6.85_f32.to_radians()),
+            Quat::from_rotation_x(-6.23_f32.to_radians()),
             turn,
         );
         app.world_mut()

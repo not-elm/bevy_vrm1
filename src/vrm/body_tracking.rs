@@ -265,11 +265,13 @@ pub(crate) fn body_look_at_space(
     head_rest_rot: Quat,
     offset: Vec3,
 ) -> GlobalTransform {
-    let root_rot = root_gtf.rotation();
     let head_in_root = root_rest_rot.inverse() * head_rest_rot;
+    // The root's linear part scales along the root's axes, after the offset has
+    // been rotated out of the head's rest frame.
+    let offset_world = root_gtf.affine().transform_vector3(head_in_root * offset);
     GlobalTransform::from(Transform {
-        translation: head_translation + root_rot * head_in_root * (root_gtf.scale() * offset),
-        rotation: root_rot,
+        translation: head_translation + offset_world,
+        rotation: root_gtf.rotation(),
         scale: Vec3::ONE,
     })
 }

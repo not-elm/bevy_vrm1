@@ -661,4 +661,43 @@ mod tests {
                 .abs_diff_eq(Vec3::new(0.0, 1.4, 0.12), 1e-5)
         );
     }
+
+    /// A non-uniform root scale must be applied along the root's axes, after the
+    /// offset is rotated out of the head's rest frame, as the eyes do.
+    #[test]
+    fn a_non_uniform_root_scale_keeps_the_body_origin_on_the_eye_origin() {
+        let root_gtf = GlobalTransform::from_scale(Vec3::new(1.0, 2.0, 1.0));
+        let head_rest = RestGlobalTransform(GlobalTransform::from(
+            Transform::from_xyz(0.0, 1.4, 0.0)
+                .with_rotation(Quat::from_rotation_z(90_f32.to_radians())),
+        ));
+        let head_gtf = root_gtf.mul_transform(head_rest.0.compute_transform());
+        let offset = Vec3::new(0.0, 0.06, 0.0);
+
+        let eye = eye_look_at_space(&head_gtf, &head_rest, Quat::IDENTITY, offset);
+        let body = body_look_at_space(
+            head_gtf.translation(),
+            &root_gtf,
+            Quat::IDENTITY,
+            head_rest.rotation(),
+            offset,
+        );
+
+        assert!(
+            eye.translation()
+                .abs_diff_eq(Vec3::new(-0.06, 2.8, 0.0), 1e-5),
+            "eye origin {}",
+            eye.translation()
+        );
+        assert!(
+            body.translation().abs_diff_eq(eye.translation(), 1e-5),
+            "body origin {} != eye origin {}",
+            body.translation(),
+            eye.translation()
+        );
+        let ahead = eye.translation() + Vec3::Z * 2.0;
+        let (yaw, pitch) = calc_yaw_pitch(&body, ahead);
+        assert!(yaw.abs() < 1e-3, "yaw {yaw}");
+        assert!(pitch.abs() < 1e-3, "pitch {pitch}");
+    }
 }

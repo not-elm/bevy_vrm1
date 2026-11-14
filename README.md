@@ -153,6 +153,10 @@ The meshes are then assigned `RenderLayers` according to the model's `meshAnnota
 | 0.4.0 ~   | 0.17 |
 | 0.1.0 ~   | 0.16 |
 
+## Change Logs
+
+Please see [Release Notes](https://github.com/not-elm/bevy_vrm1/releases)
+
 ## Credits
 
 Using [bevy_game_template](https://github.com/NiklasEi/bevy_game_template) to CI.

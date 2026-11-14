@@ -85,51 +85,67 @@ impl Plugin for LookAtPlugin {
     }
 }
 
+/// The rotation of the model root's rest pose, or identity when it has none.
+///
+/// [`RestGlobalTransform`] is relative to the entity that owns the scene, so
+/// the rest rotation of the root (for example the rotation of a raw-spawned
+/// scene root) has to be re-applied when measuring in world space.
+pub(crate) fn root_rest_rotation(
+    rests: &Query<(&RestTransform, &RestGlobalTransform)>,
+    root: Entity,
+) -> Quat {
+    rests
+        .get(root)
+        .map_or(Quat::IDENTITY, |(_, rest_gtf)| rest_gtf.rotation())
+}
+
+/// The VRM 1.0 look-at space: it follows the head, but its axes stay aligned
+/// with the model's rest frame, so an unrotated model looks along `+Z`.
+pub(crate) fn eye_look_at_space(
+    head_gtf: &GlobalTransform,
+    head_rest: &RestGlobalTransform,
+    root_rest_rot: Quat,
+    offset: Vec3,
+) -> GlobalTransform {
+    GlobalTransform::from(Transform {
+        translation: head_gtf.transform_point(offset),
+        rotation: head_gtf.rotation() * head_rest.rotation().inverse() * root_rest_rot,
+        scale: Vec3::ONE,
+    })
+}
+
 pub(crate) fn track_looking_target(
     mut commands: Commands,
-    vrms: Query<(
-        &LookAt,
-        &LookAtProperties,
-        &HeadBoneEntity,
-        &LeftEyeBoneEntity,
-        &RightEyeBoneEntity,
-    )>,
+    vrms: Query<
+        (
+            Entity,
+            &GazeTarget,
+            &LookAtProperties,
+            &HeadBoneEntity,
+            &LeftEyeBoneEntity,
+            &RightEyeBoneEntity,
+        ),
+        With<LookAt>,
+    >,
     transforms: Query<&Transform>,
     global_transforms: Query<&GlobalTransform>,
     rests: Query<(&RestTransform, &RestGlobalTransform)>,
-    windows: Query<(Entity, &Window)>,
-    cameras: Cameras,
 ) {
     vrms.iter()
-        .for_each(|(look_at, properties, head, left_eye, right_eye)| {
+        .for_each(|(root, gaze, properties, head, left_eye, right_eye)| {
             let Ok(head_gtf) = global_transforms.get(head.0) else {
                 return;
             };
-            let Ok(head_tf) = transforms.get(head.0) else {
+            let Ok((_, head_rest)) = rests.get(head.0) else {
                 return;
             };
-
-            let look_at_space = GlobalTransform::default();
-            let mut look_at_space_tf = look_at_space.reparented_to(head_gtf);
-            look_at_space_tf.translation = Vec3::from(properties.offset_from_head_bone);
-            look_at_space_tf.rotation = head_tf.rotation.inverse();
-            let look_at_space = head_gtf.mul_transform(look_at_space_tf);
-
-            let (yaw, pitch) = match look_at {
-                LookAt::Cursor => {
-                    let Some(target_pos) = find_cursor_world_position(&windows, &cameras, head_gtf)
-                    else {
-                        return;
-                    };
-                    calc_yaw_pitch(&look_at_space, target_pos)
-                }
-                LookAt::Target(target_entity) => {
-                    let Ok(target_gtf) = global_transforms.get(*target_entity) else {
-                        return;
-                    };
-                    calc_yaw_pitch(&look_at_space, target_gtf.translation())
-                }
-            };
+            let look_at_space = eye_look_at_space(
+                head_gtf,
+                head_rest,
+                root_rest_rotation(&rests, root),
+                Vec3::from(properties.offset_from_head_bone),
+            );
+            let (yaw, pitch) = calc_yaw_pitch(&look_at_space, gaze.position());
 
             match properties.r#type {
                 LookAtType::Bone => {
@@ -357,7 +373,7 @@ fn to_eye_rotation(
 mod tests {
     use super::*;
     use crate::success;
-    use crate::tests::{TestResult, test_app};
+    use crate::tests::{TestResult, rotation_is, test_app};
     use bevy::ecs::system::RunSystemOnce;
 
     fn expression_properties() -> LookAtProperties {
@@ -388,6 +404,8 @@ mod tests {
             .spawn((
                 Transform::default(),
                 GlobalTransform::from_xyz(0.0, 1.4, 0.0),
+                RestTransform(Transform::default()),
+                RestGlobalTransform(GlobalTransform::from_xyz(0.0, 1.4, 0.0)),
             ))
             .id();
         let eyes = app
@@ -396,6 +414,7 @@ mod tests {
             .id();
         app.world_mut().spawn((
             LookAt::Target(target),
+            GazeTarget::new(Vec3::new(0.0, 1.3, 1.0)),
             expression_properties(),
             HeadBoneEntity(head),
             LeftEyeBoneEntity(eyes),
@@ -412,5 +431,238 @@ mod tests {
             Transform::default()
         );
         success!()
+    }
+
+    const EYE_REST_DEGREES: f32 = 21.8;
+
+    struct EyeRig {
+        root: Entity,
+        left_eye: Entity,
+        right_eye: Entity,
+        gaze_origin: Vec3,
+    }
+
+    fn left_eye_rest() -> Quat {
+        Quat::from_rotation_y(EYE_REST_DEGREES.to_radians())
+    }
+
+    fn right_eye_rest() -> Quat {
+        Quat::from_rotation_y(-EYE_REST_DEGREES.to_radians())
+    }
+
+    fn bone_properties() -> LookAtProperties {
+        let range = |max, scale| RangeMap {
+            input_max_value: max,
+            output_scale: scale,
+        };
+        LookAtProperties {
+            offset_from_head_bone: [0.0, 0.06, 0.0],
+            range_map_horizontal_inner: range(90.0, 8.0),
+            range_map_horizontal_outer: range(90.0, 12.0),
+            range_map_vertical_down: range(90.0, 10.0),
+            range_map_vertical_up: range(90.0, 10.0),
+            r#type: LookAtType::Bone,
+        }
+    }
+
+    /// Builds a rig by hand because the test app has no transform propagation.
+    ///
+    /// `root_rot` is the root's current world rotation and `root_rest_rot` the
+    /// rotation of its rest pose (`None` means the root has no rest
+    /// components). `head_turn` is applied in model space on the left of the
+    /// head's current global rotation.
+    fn spawn_eye_rig(
+        app: &mut App,
+        root_rot: Quat,
+        root_rest_rot: Option<Quat>,
+        neck_rest: Quat,
+        head_rest_local: Quat,
+        head_turn: Quat,
+    ) -> EyeRig {
+        let neck_local = Transform::from_xyz(0.0, 1.3, 0.0).with_rotation(neck_rest);
+        let head_local = Transform::from_xyz(0.0, 0.07, 0.0).with_rotation(head_rest_local);
+        let left_local = Transform::from_xyz(0.016, 0.056, 0.019).with_rotation(left_eye_rest());
+        let right_local = Transform::from_xyz(-0.016, 0.056, 0.019).with_rotation(right_eye_rest());
+
+        let root_gtf = GlobalTransform::from(Transform::from_rotation(root_rot));
+        let head_gtf = root_gtf.mul_transform(neck_local).mul_transform(head_local);
+        let (_, head_rot, head_pos) = head_gtf.to_scale_rotation_translation();
+        let head_gtf = GlobalTransform::from(Transform {
+            translation: head_pos,
+            rotation: head_turn * head_rot,
+            scale: Vec3::ONE,
+        });
+
+        let rest_root = GlobalTransform::from(Transform::from_rotation(
+            root_rest_rot.unwrap_or(Quat::IDENTITY),
+        ));
+        let rest_head = rest_root
+            .mul_transform(neck_local)
+            .mul_transform(head_local);
+
+        let gaze_origin = head_gtf.transform_point(Vec3::new(0.0, 0.06, 0.0));
+
+        let mut root = app.world_mut().spawn((
+            LookAt::Cursor,
+            bone_properties(),
+            Transform::from_rotation(root_rot),
+            root_gtf,
+        ));
+        if let Some(rot) = root_rest_rot {
+            root.insert((
+                RestTransform(Transform::from_rotation(rot)),
+                RestGlobalTransform(rest_root),
+            ));
+        }
+        let root = root.id();
+
+        let head = app
+            .world_mut()
+            .spawn((
+                head_local,
+                head_gtf,
+                RestTransform(head_local),
+                RestGlobalTransform(rest_head),
+            ))
+            .id();
+        let mut spawn_eye = |local: Transform| {
+            app.world_mut()
+                .spawn((
+                    Transform::from_rotation(Quat::IDENTITY),
+                    GlobalTransform::IDENTITY,
+                    RestTransform(local),
+                    RestGlobalTransform(rest_head.mul_transform(local)),
+                ))
+                .id()
+        };
+        let left_eye = spawn_eye(left_local);
+        let right_eye = spawn_eye(right_local);
+        app.world_mut().entity_mut(root).insert((
+            HeadBoneEntity(head),
+            LeftEyeBoneEntity(left_eye),
+            RightEyeBoneEntity(right_eye),
+        ));
+        EyeRig {
+            root,
+            left_eye,
+            right_eye,
+            gaze_origin,
+        }
+    }
+
+    fn run_tracking(app: &mut App) {
+        app.world_mut()
+            .run_system_once(track_looking_target)
+            .expect("Failed to run system");
+        app.world_mut().flush();
+    }
+
+    fn assert_eyes_at_rest(
+        app: &App,
+        rig: &EyeRig,
+    ) {
+        let left = app.world().get::<Transform>(rig.left_eye).unwrap().rotation;
+        let right = app
+            .world()
+            .get::<Transform>(rig.right_eye)
+            .unwrap()
+            .rotation;
+        assert!(
+            rotation_is(left, left_eye_rest()),
+            "left eye {left:?} is not at rest"
+        );
+        assert!(
+            rotation_is(right, right_eye_rest()),
+            "right eye {right:?} is not at rest"
+        );
+    }
+
+    #[test]
+    fn eyes_stay_at_rest_for_a_target_straight_ahead_of_a_tilted_rest_head() {
+        let mut app = test_app();
+        let rig = spawn_eye_rig(
+            &mut app,
+            Quat::IDENTITY,
+            None,
+            Quat::from_rotation_x(6.85_f32.to_radians()),
+            Quat::from_rotation_x(-6.23_f32.to_radians()),
+            Quat::IDENTITY,
+        );
+        app.world_mut()
+            .entity_mut(rig.root)
+            .insert(GazeTarget::new(rig.gaze_origin + Vec3::Z));
+
+        run_tracking(&mut app);
+
+        assert_eyes_at_rest(&app, &rig);
+    }
+
+    #[test]
+    fn eyes_follow_a_head_turned_by_animation() {
+        let mut app = test_app();
+        let turn = Quat::from_rotation_y(20.0_f32.to_radians());
+        let rig = spawn_eye_rig(
+            &mut app,
+            Quat::IDENTITY,
+            None,
+            Quat::IDENTITY,
+            Quat::IDENTITY,
+            turn,
+        );
+        app.world_mut()
+            .entity_mut(rig.root)
+            .insert(GazeTarget::new(rig.gaze_origin + turn * Vec3::Z));
+
+        run_tracking(&mut app);
+
+        assert_eyes_at_rest(&app, &rig);
+    }
+
+    #[test]
+    fn a_raw_spawn_measures_eye_gaze_in_the_root_frame() {
+        let mut app = test_app();
+        let o_s = Quat::from_rotation_y(180.0_f32.to_radians());
+        let rig = spawn_eye_rig(
+            &mut app,
+            o_s,
+            Some(Quat::from_rotation_y(90.0_f32.to_radians())),
+            Quat::IDENTITY,
+            Quat::IDENTITY,
+            Quat::IDENTITY,
+        );
+        app.world_mut()
+            .entity_mut(rig.root)
+            .insert(GazeTarget::new(rig.gaze_origin + o_s * Vec3::Z));
+
+        run_tracking(&mut app);
+
+        assert_eyes_at_rest(&app, &rig);
+    }
+
+    #[test]
+    fn eyes_do_not_move_without_look_at() {
+        let mut app = test_app();
+        let rig = spawn_eye_rig(
+            &mut app,
+            Quat::IDENTITY,
+            None,
+            Quat::IDENTITY,
+            Quat::IDENTITY,
+            Quat::IDENTITY,
+        );
+        app.world_mut()
+            .entity_mut(rig.root)
+            .insert(GazeTarget::new(rig.gaze_origin + Vec3::X))
+            .remove::<LookAt>();
+
+        run_tracking(&mut app);
+
+        for eye in [rig.left_eye, rig.right_eye] {
+            let rot = app.world().get::<Transform>(eye).unwrap().rotation;
+            assert!(
+                rotation_is(rot, Quat::IDENTITY),
+                "eye was rewritten: {rot:?}"
+            );
+        }
     }
 }

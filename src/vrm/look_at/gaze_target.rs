@@ -20,13 +20,15 @@ use bevy::prelude::*;
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct CursorGazeDepth(pub f32);
 
-impl Default for CursorGazeDepth {
-    fn default() -> Self {
-        Self(DEFAULT_CURSOR_DEPTH)
-    }
+impl CursorGazeDepth {
+    const DEFAULT_DEPTH: f32 = 1.0;
 }
 
-const DEFAULT_CURSOR_DEPTH: f32 = 1.0;
+impl Default for CursorGazeDepth {
+    fn default() -> Self {
+        Self(Self::DEFAULT_DEPTH)
+    }
+}
 
 /// The world-space point the avatar looks at, resolved by `bevy_vrm1` from `LookAt`.
 ///
@@ -68,7 +70,7 @@ impl GazeTarget {
 pub(crate) fn effective_cursor_depth(depth: Option<&CursorGazeDepth>) -> f32 {
     match depth {
         Some(CursorGazeDepth(d)) if d.is_finite() && *d > 0.0 => *d,
-        _ => DEFAULT_CURSOR_DEPTH,
+        _ => CursorGazeDepth::DEFAULT_DEPTH,
     }
 }
 

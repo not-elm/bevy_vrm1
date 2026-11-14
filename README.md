@@ -69,6 +69,8 @@ This is a feature for expressing the sway of a character's hair and other parts.
 LookAt is a component for animating the line of sight into a VRM model.
 You can use the `LookAt` component to track a specific target or the mouse cursor.
 
+`LookAt::Cursor` treats the cursor as a point `CursorGazeDepth` (default 1.0 m) in front of the face, toward the camera. `BodyTracking` and the eyes use the same gaze point.
+
 #### examples
 
 - [look_at_cursor.rs](./examples/look_at_cursor.rs)

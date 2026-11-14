@@ -21,6 +21,11 @@ pub use gaze_target::{CursorGazeDepth, GazeTarget};
 /// [`LookAt::Cursor`] tracks the mouse cursor across all windows.
 /// [`LookAt::Target`] looks at a specified entity.
 ///
+/// For [`LookAt::Cursor`], the cursor is treated as a point [`CursorGazeDepth`]
+/// (default 1.0 m) in front of the face, toward the camera. The crate publishes the
+/// resolved point as [`GazeTarget`] on the VRM root; both the eyes and
+/// [`BodyTracking`] read that same point.
+///
 /// ```no_run
 /// use bevy::prelude::*;
 /// use bevy_vrm1::prelude::*;

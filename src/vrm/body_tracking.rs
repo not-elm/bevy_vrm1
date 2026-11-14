@@ -61,9 +61,9 @@ pub struct BodyTracking {
     #[cfg_attr(feature = "serde", serde(default = "default_output_smoothing"))]
     pub output_smoothing: f32,
 
-    /// Minimum forward depth (meters) for yaw/pitch calculation.
-    /// Prevents extreme yaw when the camera is directly in front of the model.
-    /// Higher values reduce sensitivity. Default: 1.0.
+    /// Minimum forward depth used as a safety clamp when a real target is behind or
+    /// very close to the model. Cursor sensitivity is controlled by [`CursorGazeDepth`].
+    /// Default: 1.0.
     #[cfg_attr(feature = "serde", serde(default = "default_reference_depth"))]
     pub reference_depth: f32,
 }

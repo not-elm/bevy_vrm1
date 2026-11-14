@@ -1,3 +1,28 @@
+## v0.11.1
+
+[Release Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.11.1)
+
+Fixes `LookAt::Cursor` so the eyes no longer pin to their range limits and jump across the face centre, and makes `BodyTracking` and the eyes follow one shared gaze point.
+
+### Features
+
+- Added `CursorGazeDepth`, a component that sets how far in front of the face (toward the camera) `LookAt::Cursor` places the cursor target. The default is 1.0 m; a non-finite or non-positive value is treated as 1.0
+- Added `GazeTarget`, a read-only component (`position()`) holding the gaze point resolved this frame. The crate inserts, updates and removes it; do not insert it yourself. Both components are in the prelude
+
+### Bug Fixes
+
+- `LookAt::Cursor` placed the cursor target at the face's own depth, so the eyes pinned to their range limits and jumped across the face centre. The target is now `CursorGazeDepth` in front of the face, toward the camera
+- The eye look-at space used the neck's world rotation. It now follows the VRM 1.0 specification (head current rotation × head rest rotation⁻¹)
+- `BodyTracking` and the eyes now share one gaze point per frame. `BodyTracking` measures in the VRM root's frame, with an origin matching the eyes' rest origin
+- Bones between tracked ones (for example `upperChest`) now carry this frame's torso turn
+- Output smoothing no longer drifts: animation writes are detected against the last written output
+- `LookAt::Target` pointing at a camera or another VRM now turns the body too
+- The Windows cursor fallback converts through `ScreenToClient`, which fixes the offset from DPI scaling and window decorations
+
+### Behavior Changes
+
+- When a gaze target cannot be resolved for a frame (the cursor is outside every window, or the target entity is gone), the avatar keeps following the last resolved point instead of the body snapping back to the animation pose
+
 ## v0.11.0
 
 [Release Notes](https://github.com/not-elm/bevy_vrm1/releases/tag/v0.11.0)

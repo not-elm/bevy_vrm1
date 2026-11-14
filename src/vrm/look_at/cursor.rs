@@ -1,9 +1,23 @@
 //! Resolves the mouse cursor into a world-space ray, once per frame.
 
-use crate::prelude::Cameras;
+use crate::prelude::{Cameras, LookAt};
+use crate::vrm::look_at::gaze_target::GazeResolveSet;
 use bevy::math::Vec2;
-use bevy::prelude::{Dir3, Entity, Query, Ray3d, ResMut, Resource};
+use bevy::prelude::{
+    App, Dir3, Entity, IntoScheduleConfigs, Plugin, PostUpdate, Query, Ray3d, ResMut, Resource,
+    any_with_component,
+};
 use bevy::window::{RawHandleWrapper, Window};
+#[cfg(target_os = "windows")]
+use raw_window_handle::RawWindowHandle;
+#[cfg(target_os = "windows")]
+use std::ffi::c_void;
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::{HWND, POINT};
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Gdi::ScreenToClient;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 /// Windows that may contain the cursor, with their native handles (if any).
 pub(crate) type CursorWindows<'w, 's> =
@@ -25,9 +39,10 @@ pub(crate) struct CursorRayThisFrame(pub Option<CursorRay>);
 impl CursorRay {
     /// Finds the window containing the cursor and casts a ray through it.
     ///
-    /// Windows reporting `cursor_position()` win; only when none does, the platform
-    /// fallback is tried, so that a window behind another one is not chosen wrongly.
-    pub(crate) fn find(
+    /// Windows reporting `cursor_position()` take precedence; the platform
+    /// fallback is tried only when none does. Returns `None` when no window
+    /// contains the cursor or no camera renders to that window.
+    pub fn find(
         windows: &CursorWindows,
         cameras: &Cameras,
     ) -> Option<Self> {
@@ -48,11 +63,27 @@ impl CursorRay {
     }
 }
 
+pub(super) struct CursorRayPlugin;
+
+impl Plugin for CursorRayPlugin {
+    fn build(
+        &self,
+        app: &mut App,
+    ) {
+        app.init_resource::<CursorRayThisFrame>().add_systems(
+            PostUpdate,
+            update_cursor_ray
+                .run_if(any_with_component::<LookAt>)
+                .in_set(GazeResolveSet),
+        );
+    }
+}
+
 /// Stores this frame's [`CursorRay`] into [`CursorRayThisFrame`].
 pub(crate) fn update_cursor_ray(
+    mut out: ResMut<CursorRayThisFrame>,
     windows: CursorWindows,
     cameras: Cameras,
-    mut out: ResMut<CursorRayThisFrame>,
 ) {
     out.0 = CursorRay::find(&windows, &cameras);
 }
@@ -95,12 +126,6 @@ pub(crate) fn client_to_window_logical(
 
 #[cfg(target_os = "windows")]
 fn client_cursor_physical(handle: &RawHandleWrapper) -> Option<Vec2> {
-    use raw_window_handle::RawWindowHandle;
-    use std::ffi::c_void;
-    use windows::Win32::Foundation::{HWND, POINT};
-    use windows::Win32::Graphics::Gdi::ScreenToClient;
-    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
     let RawWindowHandle::Win32(win32) = handle.get_window_handle() else {
         return None;
     };

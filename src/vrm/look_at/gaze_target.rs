@@ -1,7 +1,7 @@
 //! The world-space point the avatar looks at, and how the cursor produces it.
 
 use crate::prelude::*;
-use crate::vrm::look_at::cursor::{CursorRay, CursorRayThisFrame};
+use crate::vrm::look_at::cursor::{CursorRay, CursorRayThisFrame, update_cursor_ray};
 use bevy::prelude::*;
 
 /// How far in front of the face, toward the camera, `LookAt::Cursor` places the cursor (metres).
@@ -53,8 +53,10 @@ impl GazeTarget {
         Self { position }
     }
 
-    /// Intersects the cursor ray with the camera-facing plane through `gaze_origin`,
-    /// then pulls the point `depth` metres toward the camera.
+    /// The point where the cursor ray meets the camera-facing plane through
+    /// `gaze_origin`, moved `depth` metres toward the camera.
+    ///
+    /// Returns `None` when the ray does not meet that plane.
     pub(crate) fn from_cursor(
         cursor: &CursorRay,
         gaze_origin: Vec3,
@@ -78,11 +80,34 @@ pub(crate) fn effective_cursor_depth(depth: Option<&CursorGazeDepth>) -> f32 {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct GazeResolveSet;
 
+pub(super) struct GazeTargetPlugin;
+
+impl Plugin for GazeTargetPlugin {
+    fn build(
+        &self,
+        app: &mut App,
+    ) {
+        app.configure_sets(
+            PostUpdate,
+            GazeResolveSet
+                .in_set(VrmSystemSets::GazeControl)
+                .after(VrmSystemSets::PropagateAfterConstraints),
+        )
+        .add_systems(
+            PostUpdate,
+            resolve_gaze_target
+                .in_set(GazeResolveSet)
+                .after(update_cursor_ray),
+        )
+        .register_type::<CursorGazeDepth>()
+        .register_type::<GazeTarget>();
+    }
+}
+
 /// Writes each avatar's [`GazeTarget`] from its `LookAt`.
 /// When the point cannot be resolved this frame, the previous one is kept.
 pub(crate) fn resolve_gaze_target(
     mut commands: Commands,
-    cursor: Res<CursorRayThisFrame>,
     mut vrms: Query<(
         Entity,
         &LookAt,
@@ -91,6 +116,7 @@ pub(crate) fn resolve_gaze_target(
         Option<&CursorGazeDepth>,
         Option<&mut GazeTarget>,
     )>,
+    cursor: Res<CursorRayThisFrame>,
     stale: Query<Entity, (With<GazeTarget>, Without<LookAt>)>,
     global_transforms: Query<&GlobalTransform>,
 ) {

@@ -159,10 +159,10 @@ struct BoneEntry {
 
 /// The look-at space in which body tracking measures the gaze.
 ///
-/// Its axes follow the avatar root, so the gaze is measured in the avatar's own
-/// frame, and its origin is the rest-pose eye position carried by the head.
-/// Unlike the eye look-at space it ignores the head's current rotation, which body
-/// tracking itself drives, so it is a stable frame.
+/// Its axes follow the avatar root, and its origin is the rest-pose eye
+/// position carried by the head; the head's current rotation does not move it.
+/// `offset` is the look-at offset in the head's rest frame, and the root's
+/// scale applies to it along the root's axes.
 pub(crate) fn body_look_at_space(
     head_translation: Vec3,
     root_gtf: &GlobalTransform,
@@ -171,8 +171,6 @@ pub(crate) fn body_look_at_space(
     offset: Vec3,
 ) -> GlobalTransform {
     let head_in_root = root_rest_rot.inverse() * head_rest_rot;
-    // The root's linear part scales along the root's axes, after the offset has
-    // been rotated out of the head's rest frame.
     let offset_world = root_gtf.affine().transform_vector3(head_in_root * offset);
     GlobalTransform::from(Transform {
         translation: head_translation + offset_world,
@@ -278,13 +276,11 @@ fn compute_additive_rotation(
 
 /// Returns the world transform of `entity`'s parent as of this frame.
 ///
-/// Walks up the `ChildOf` chain to the first ancestor in `computed` (a bone
-/// already updated this frame) and composes the local transforms of the
-/// untracked bones between it and `entity` on top of its world transform, so
-/// bones such as `upperChest` between tracked ones carry this frame's torso
-/// turn. Without such an ancestor, falls back to the stored `GlobalTransform`
-/// of the direct parent, read from `root_gtfs` when that parent is the `Vrm`
-/// root.
+/// When an ancestor of `entity` is in `computed` (bones already updated this
+/// frame), the result carries that ancestor's updated world transform through
+/// the bones in between, such as `upperChest`. Otherwise it is the stored
+/// `GlobalTransform` of the direct parent, which may be the `Vrm` root. It is
+/// `None` when `entity` has no parent or the parent has no transform.
 fn parent_world_this_frame(
     entity: Entity,
     computed: &[(Entity, GlobalTransform)],
@@ -293,13 +289,12 @@ fn parent_world_this_frame(
     root_gtfs: &Query<&GlobalTransform, With<Vrm>>,
 ) -> Option<GlobalTransform> {
     let direct_parent = child_ofs.get(entity).ok()?.parent();
-    // Local transforms of the untracked bones, nearest to `entity` first.
-    let mut between: Vec<Transform> = Vec::new();
+    let mut untracked_locals: Vec<Transform> = Vec::new();
     let mut current = direct_parent;
     loop {
         if let Some((_, gtf)) = computed.iter().rev().find(|(e, _)| *e == current) {
             return Some(
-                between
+                untracked_locals
                     .iter()
                     .rev()
                     .fold(*gtf, |world, local| world.mul_transform(*local)),
@@ -308,7 +303,7 @@ fn parent_world_this_frame(
         let Ok((tf, _)) = transforms.get(current) else {
             break;
         };
-        between.push(*tf);
+        untracked_locals.push(*tf);
         let Ok(parent) = child_ofs.get(current) else {
             break;
         };
@@ -337,11 +332,11 @@ fn track_body_tracking(
         With<LookAt>,
     >,
     mut transforms: Query<(&mut Transform, &mut GlobalTransform), (Without<Camera>, Without<Vrm>)>,
+    mut bone_states: Local<HashMap<Entity, BoneState>>,
     root_gtfs: Query<&GlobalTransform, With<Vrm>>,
     child_ofs: Query<&ChildOf>,
     rests: Query<(&RestTransform, &RestGlobalTransform)>,
     time: Res<Time>,
-    mut bone_states: Local<HashMap<Entity, BoneState>>,
 ) {
     let dt = time.delta_secs();
 
@@ -367,16 +362,12 @@ fn track_body_tracking(
             Vec3::from(properties.offset_from_head_bone),
         );
 
-        // 2. Calculate raw yaw/pitch with z-depth clamping.
         let (raw_yaw, raw_pitch) =
             calc_yaw_pitch_clamped(&look_at_space, gaze.position(), tracking.reference_depth);
 
-        // 3. Smooth yaw/pitch.
         smoothed.yaw = smooth_angle(smoothed.yaw, raw_yaw, tracking.smoothing, dt);
         smoothed.pitch = smooth_angle(smoothed.pitch, raw_pitch, tracking.smoothing, dt);
 
-        // Normalize yaw to [-180, 180] to prevent unbounded growth
-        // during ±180° crossings when cursor passes over the head.
         while smoothed.yaw > 180.0 {
             smoothed.yaw -= 360.0;
         }
@@ -384,7 +375,6 @@ fn track_body_tracking(
             smoothed.yaw += 360.0;
         }
 
-        // 4. Build bone chain bottom-up: spine -> chest -> neck -> head.
         let mut chain: Vec<BoneEntry> = Vec::with_capacity(4);
         if let Some(spine) = spine {
             chain.push(BoneEntry {
@@ -417,9 +407,6 @@ fn track_body_tracking(
             pitch_max: tracking.head_pitch_max,
         });
 
-        // 5. Apply rotations bottom-up, propagating GlobalTransform along the chain.
-        //    We track which entities we've already computed so we can use local
-        //    cached values for parent lookups when the parent is also in the chain.
         let mut computed_gtfs: Vec<(Entity, GlobalTransform)> = Vec::with_capacity(4);
 
         for bone in &chain {
@@ -431,8 +418,6 @@ fn track_body_tracking(
             let bone_pitch = (smoothed.pitch * bone.weight).clamp(-bone.pitch_max, bone.pitch_max);
             let rotation = bone_rotation(bone_yaw, bone_pitch, rest_tf, rest_gtf);
 
-            // The parent's world transform as of this frame, including any
-            // untracked bones between this bone and the nearest chain ancestor.
             let Some(parent_gtf) = parent_world_this_frame(
                 bone.entity,
                 &computed_gtfs,
@@ -443,19 +428,16 @@ fn track_body_tracking(
                 continue;
             };
 
-            // Write Transform.rotation additively and propagate GlobalTransform.
             let Ok((mut tf, mut gtf)) = transforms.get_mut(bone.entity) else {
                 continue;
             };
 
             let state = bone_states.entry(bone.entity).or_default();
 
-            // Detect whether animation updated the rotation since last frame.
-            // We only ever leave `prev_output` in `Transform.rotation`, so any
-            // other value was written by the animation system (however small
-            // the change) and becomes the new base. Comparing against the
-            // unsmoothed `base * delta` would misread our own smoothed output
-            // as an animation write and drift.
+            // NOTE: This system leaves only `prev_output` in `Transform.rotation`,
+            // so any other value is an animation write and becomes the new base.
+            // Comparing against the unsmoothed `base * delta` instead mistakes the
+            // smoothed output for an animation write, and the pose drifts.
             let base = if !state.initialized || tf.rotation != state.prev_output {
                 tf.rotation
             } else {

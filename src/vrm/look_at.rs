@@ -7,12 +7,11 @@ use crate::system_set::VrmSystemSets;
 use crate::vrm::root_rest_rotation;
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
+use cursor::CursorRayPlugin;
+use gaze_target::{GazeResolveSet, GazeTargetPlugin};
 
 pub(crate) mod cursor;
 pub(crate) mod gaze_target;
-
-use cursor::{CursorRayThisFrame, update_cursor_ray};
-use gaze_target::{GazeResolveSet, resolve_gaze_target};
 
 pub use gaze_target::{CursorGazeDepth, GazeTarget};
 
@@ -62,25 +61,8 @@ impl Plugin for LookAtPlugin {
         &self,
         app: &mut App,
     ) {
-        app.init_resource::<CursorRayThisFrame>()
-            .configure_sets(
-                PostUpdate,
-                GazeResolveSet
-                    .in_set(VrmSystemSets::GazeControl)
-                    .after(VrmSystemSets::PropagateAfterConstraints),
-            )
-            .add_systems(
-                PostUpdate,
-                (
-                    update_cursor_ray.run_if(any_with_component::<LookAt>),
-                    resolve_gaze_target,
-                )
-                    .chain()
-                    .in_set(GazeResolveSet),
-            )
+        app.add_plugins((CursorRayPlugin, GazeTargetPlugin))
             .register_type::<LookAt>()
-            .register_type::<CursorGazeDepth>()
-            .register_type::<GazeTarget>()
             .register_type::<LookAtProperties>()
             .register_type::<LookAtType>()
             .add_systems(
@@ -686,5 +668,62 @@ mod tests {
         let (yaw, pitch) = calc_yaw_pitch(&body, ahead);
         assert!(yaw.abs() < 1e-3, "yaw {yaw}");
         assert!(pitch.abs() < 1e-3, "pitch {pitch}");
+    }
+
+    /// Asserts that, with `LookAtPlugin` installed, a single frame resolves a
+    /// `LookAt::Target` into the `GazeTarget` and turns the eyes toward it.
+    ///
+    /// Case: an app adds the plugin and points an avatar at another entity,
+    /// and the next rendered frame shows the avatar looking at it.
+    #[test]
+    fn the_plugin_resolves_the_target_and_moves_the_eyes_in_one_frame() {
+        let spawn = |app: &mut App| {
+            EyeRig::spawn(
+                app,
+                Quat::IDENTITY,
+                None,
+                Quat::IDENTITY,
+                Quat::IDENTITY,
+                Quat::IDENTITY,
+            )
+        };
+        let mut reference = test_app();
+        let reference_rig = spawn(&mut reference);
+        let target_at = reference_rig.gaze_origin + Vec3::new(0.5, 0.0, 1.0);
+        reference
+            .world_mut()
+            .entity_mut(reference_rig.root)
+            .insert(GazeTarget::new(target_at));
+        run_tracking(&mut reference);
+        let expected = reference
+            .world()
+            .get::<Transform>(reference_rig.left_eye)
+            .unwrap()
+            .rotation;
+        assert!(!rotation_is(expected, left_eye_rest()));
+
+        let mut app = test_app();
+        let rig = spawn(&mut app);
+        let target = app
+            .world_mut()
+            .spawn(GlobalTransform::from_translation(target_at))
+            .id();
+        app.world_mut()
+            .entity_mut(rig.root)
+            .insert(LookAt::Target(target));
+        app.add_plugins(LookAtPlugin);
+
+        app.update();
+
+        let gaze = app
+            .world()
+            .get::<GazeTarget>(rig.root)
+            .map(GazeTarget::position);
+        assert_eq!(gaze, Some(target_at));
+        let left = app.world().get::<Transform>(rig.left_eye).unwrap().rotation;
+        assert!(
+            rotation_is(left, expected),
+            "left eye {left:?} != {expected:?}"
+        );
     }
 }

@@ -205,11 +205,11 @@ fn calc_yaw_pitch_clamped(
 struct BoneState {
     /// The bone rotation before body tracking was applied (from animation or rest).
     base: Quat,
-    /// The gaze delta applied last frame.
-    last_delta: Quat,
     /// Whether state has been initialized.
     initialized: bool,
-    /// The final output rotation from last frame (for slerp smoothing).
+    /// The final output rotation from last frame. Used for slerp smoothing and
+    /// to detect animation writes: anything else in `Transform.rotation` was
+    /// written by someone other than us.
     prev_output: Quat,
 }
 
@@ -217,7 +217,6 @@ impl Default for BoneState {
     fn default() -> Self {
         Self {
             base: Quat::IDENTITY,
-            last_delta: Quat::IDENTITY,
             initialized: false,
             prev_output: Quat::IDENTITY,
         }
@@ -446,19 +445,17 @@ fn track_body_tracking(
             let state = bone_states.entry(bone.entity).or_default();
 
             // Detect whether animation updated the rotation since last frame.
-            // If tf.rotation differs from our expected value (base * last_delta),
-            // then the animation system has written a new value.
-            let base = if !state.initialized
-                || tf.rotation.dot(state.base * state.last_delta).abs() < 0.999
-            {
-                // Animation changed or first frame: use current rotation as base
+            // We only ever leave `prev_output` in `Transform.rotation`, so any
+            // other value was written by the animation system (however small
+            // the change) and becomes the new base. Comparing against the
+            // unsmoothed `base * delta` would misread our own smoothed output
+            // as an animation write and drift.
+            let base = if !state.initialized || tf.rotation != state.prev_output {
                 tf.rotation
             } else {
-                // No animation change: keep existing base
                 state.base
             };
 
-            let delta = rest_tf.rotation.inverse() * rotation;
             let target = compute_additive_rotation(base, rest_tf.rotation, rotation);
 
             tf.rotation = if state.initialized && tracking.output_smoothing > 0.0 {
@@ -474,7 +471,6 @@ fn track_body_tracking(
             };
 
             state.base = base;
-            state.last_delta = delta;
             state.prev_output = tf.rotation;
             state.initialized = true;
 
@@ -487,12 +483,14 @@ fn track_body_tracking(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::test_app;
+    use crate::tests::{rotation, rotation_is, run_frames, test_app};
     use crate::vrm::look_at::cursor::CursorRayThisFrame;
     use crate::vrm::look_at::eye_look_at_space;
     use crate::vrm::look_at::gaze_target::resolve_gaze_target;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::time::TimeUpdateStrategy;
     use std::f32::consts::{FRAC_PI_2, PI};
+    use std::time::Duration;
 
     /// In world space; `(-0.5, 0, 2)` from the head in the frame of an avatar
     /// turned by `PI` about `Y`.
@@ -934,72 +932,85 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_bone_state_no_accumulation_without_animation() {
-        // Simulate multiple frames without animation.
-        // The delta should NOT accumulate.
-        let rest = Quat::IDENTITY;
-        let rest_tf = RestTransform(Transform::IDENTITY);
-        let rest_gtf = RestGlobalTransform(GlobalTransform::IDENTITY);
+    /// The head's gaze origin in `spawn_rig`: the head bone, with no offset.
+    const RIG_HEAD_WORLD: Vec3 = Vec3::new(0.0, 1.5, 0.3);
 
-        let gaze = bone_rotation(20.0, 10.0, &rest_tf, &rest_gtf);
-        let mut state = BoneState::default();
+    fn head_yaw_degrees(
+        app: &App,
+        head: Entity,
+    ) -> f32 {
+        let rotation = app.world().get::<Transform>(head).unwrap().rotation;
+        rotation.to_euler(EulerRot::YXZ).0.to_degrees()
+    }
 
-        // Frame 1: first initialization
-        let base = rest; // tf.rotation starts at rest
-        let delta = rest.inverse() * gaze;
-        let result1 = compute_additive_rotation(base, rest, gaze);
-        state.base = base;
-        state.last_delta = delta;
-        state.initialized = true;
-
-        // Frame 2: no animation wrote, tf.rotation == base * last_delta == result1
-        let tf_rotation = result1;
-        let expected = state.base * state.last_delta;
-        let anim_changed = tf_rotation.dot(expected).abs() < 0.999;
-        assert!(!anim_changed, "Should detect no animation change");
-
-        let base2 = state.base; // same base
-        let result2 = compute_additive_rotation(base2, rest, gaze);
-        state.last_delta = delta;
-
-        // Results should be identical (no accumulation)
-        let diff = result1.angle_between(result2);
-        assert!(
-            diff < 0.001,
-            "Should not accumulate across frames: diff={diff}"
-        );
+    fn set_gaze_target(
+        app: &mut App,
+        root: Entity,
+        target: Vec3,
+    ) {
+        app.world_mut()
+            .entity_mut(root)
+            .insert(GazeTarget::new(target));
     }
 
     #[test]
-    fn test_bone_state_detects_animation_change() {
-        let rest = Quat::IDENTITY;
-        let rest_tf = RestTransform(Transform::IDENTITY);
-        let rest_gtf = RestGlobalTransform(GlobalTransform::IDENTITY);
+    fn output_smoothing_settles_on_the_gaze_without_drift() {
+        let mut app = test_app();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+        app.add_systems(Update, track_body_tracking);
+        let (root, head) = spawn_rig(&mut app, (LookAt::Cursor, SmoothedGaze::default()));
+        app.world_mut()
+            .entity_mut(root)
+            .insert(BodyTracking::default());
 
-        let gaze = bone_rotation(15.0, 0.0, &rest_tf, &rest_gtf);
-        let mut state = BoneState::default();
-
-        // Frame 1
-        let delta = rest.inverse() * gaze;
-        let result1 = compute_additive_rotation(rest, rest, gaze);
-        state.base = rest;
-        state.last_delta = delta;
-        state.initialized = true;
-
-        // Frame 2: animation writes a NEW rotation
-        let animated = Quat::from_rotation_x(0.3);
-        let expected = state.base * state.last_delta;
-        let anim_changed = animated.dot(expected).abs() < 0.999;
-        assert!(anim_changed, "Should detect animation change");
-
-        // New base should be the animated rotation
-        let result2 = compute_additive_rotation(animated, rest, gaze);
-        let diff = result2.angle_between(result1);
-        assert!(
-            diff > 0.01,
-            "With animation change, result should differ: diff={diff}"
+        let (sin, cos) = 45_f32.to_radians().sin_cos();
+        set_gaze_target(
+            &mut app,
+            root,
+            RIG_HEAD_WORLD + Vec3::new(sin, 0.0, cos) * 2.0,
         );
+        run_frames(&mut app, 120);
+        set_gaze_target(
+            &mut app,
+            root,
+            RIG_HEAD_WORLD + Vec3::new(-sin, 0.0, cos) * 2.0,
+        );
+        run_frames(&mut app, 600);
+
+        let yaw = head_yaw_degrees(&app, head);
+        assert!((yaw + 18.0).abs() < 0.1, "head yaw {yaw}, expected -18.0");
+    }
+
+    #[test]
+    fn small_animation_changes_become_the_new_base() {
+        let mut app = test_app();
+        app.add_systems(
+            Update,
+            (
+                |mut frame: Local<u32>, mut tfs: Query<&mut Transform, With<RestTransform>>| {
+                    *frame += 1;
+                    for mut tf in &mut tfs {
+                        tf.rotation = Quat::from_rotation_x((*frame as f32 * 0.5).to_radians());
+                    }
+                },
+                track_body_tracking,
+            )
+                .chain(),
+        );
+        let (root, head) = spawn_rig(&mut app, (LookAt::Cursor, SmoothedGaze::default()));
+        set_gaze_target(&mut app, root, RIG_HEAD_WORLD + Vec3::new(0.0, 0.0, 2.0));
+
+        for k in 1..=10 {
+            app.update();
+            let expected = Quat::from_rotation_x((k as f32 * 0.5).to_radians());
+            let actual = rotation(&app, head);
+            assert!(
+                rotation_is(actual, expected),
+                "frame {k}: head rotation {actual}, expected {expected}"
+            );
+        }
     }
 
     #[test]

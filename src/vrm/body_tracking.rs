@@ -271,6 +271,51 @@ pub(crate) fn body_look_at_space(
     })
 }
 
+/// Returns the world transform of `entity`'s parent as of this frame.
+///
+/// Walks up the `ChildOf` chain to the first ancestor in `computed` (a bone
+/// already updated this frame) and composes the local transforms of the
+/// untracked bones between it and `entity` on top of its world transform, so
+/// bones such as `upperChest` between tracked ones carry this frame's torso
+/// turn. Without such an ancestor, falls back to the stored `GlobalTransform`
+/// of the direct parent, read from `root_gtfs` when that parent is the `Vrm`
+/// root.
+fn parent_world_this_frame(
+    entity: Entity,
+    computed: &[(Entity, GlobalTransform)],
+    child_ofs: &Query<&ChildOf>,
+    transforms: &Query<(&mut Transform, &mut GlobalTransform), (Without<Camera>, Without<Vrm>)>,
+    root_gtfs: &Query<&GlobalTransform, With<Vrm>>,
+) -> Option<GlobalTransform> {
+    let direct_parent = child_ofs.get(entity).ok()?.parent();
+    // Local transforms of the untracked bones, nearest to `entity` first.
+    let mut between: Vec<Transform> = Vec::new();
+    let mut current = direct_parent;
+    loop {
+        if let Some((_, gtf)) = computed.iter().rev().find(|(e, _)| *e == current) {
+            return Some(
+                between
+                    .iter()
+                    .rev()
+                    .fold(*gtf, |world, local| world.mul_transform(*local)),
+            );
+        }
+        let Ok((tf, _)) = transforms.get(current) else {
+            break;
+        };
+        between.push(*tf);
+        let Ok(parent) = child_ofs.get(current) else {
+            break;
+        };
+        current = parent.parent();
+    }
+    transforms
+        .get(direct_parent)
+        .map(|(_, gtf)| *gtf)
+        .ok()
+        .or_else(|| root_gtfs.get(direct_parent).ok().copied())
+}
+
 fn track_body_tracking(
     mut vrms: Query<
         (
@@ -381,22 +426,15 @@ fn track_body_tracking(
             let bone_pitch = (smoothed.pitch * bone.weight).clamp(-bone.pitch_max, bone.pitch_max);
             let rotation = bone_rotation(bone_yaw, bone_pitch, rest_tf, rest_gtf);
 
-            // Get parent entity for chain propagation.
-            let Ok(child_of) = child_ofs.get(bone.entity) else {
-                continue;
-            };
-            let parent_entity = child_of.parent();
-
-            // Look up parent GlobalTransform: first check our local cache (for chain
-            // parents like spine->chest), then fall back to the read-only query.
-            let parent_gtf = computed_gtfs
-                .iter()
-                .rev()
-                .find(|(e, _)| *e == parent_entity)
-                .map(|(_, gtf)| *gtf)
-                .or_else(|| transforms.get(parent_entity).map(|(_, gtf)| *gtf).ok());
-
-            let Some(parent_gtf) = parent_gtf else {
+            // The parent's world transform as of this frame, including any
+            // untracked bones between this bone and the nearest chain ancestor.
+            let Some(parent_gtf) = parent_world_this_frame(
+                bone.entity,
+                &computed_gtfs,
+                &child_ofs,
+                &transforms,
+                &root_gtfs,
+            ) else {
                 continue;
             };
 
@@ -1209,5 +1247,159 @@ mod tests {
             yaw.abs() < 30.0,
             "Yaw should be moderate for behind-model target: {yaw}"
         );
+    }
+
+    struct TorsoRig {
+        spine: Entity,
+        chest: Entity,
+        head: Entity,
+        left_eye: Entity,
+    }
+
+    const EYE_REST_DEGREES: f32 = 21.8;
+
+    /// `hips -> spine -> chest -> upper_chest -> neck -> head -> eyes`, where
+    /// `upper_chest` is not part of the tracked chain. Rests are pure
+    /// translations and every `GlobalTransform` is composed by hand because
+    /// the test app has no transform propagation.
+    fn spawn_torso_rig(app: &mut App) -> TorsoRig {
+        let step = Transform::from_xyz(0.0, 0.1, 0.0);
+        let hips_tf = Transform::from_xyz(0.0, 0.9, 0.0);
+        let head_tf = Transform::from_xyz(0.0, 0.07, 0.0);
+        let left_tf = Transform::from_xyz(0.016, 0.056, 0.019)
+            .with_rotation(Quat::from_rotation_y(EYE_REST_DEGREES.to_radians()));
+        let right_tf = Transform::from_xyz(-0.016, 0.056, 0.019)
+            .with_rotation(Quat::from_rotation_y(-EYE_REST_DEGREES.to_radians()));
+
+        let hips_gtf = GlobalTransform::from(hips_tf);
+        let spine_gtf = hips_gtf.mul_transform(step);
+        let chest_gtf = spine_gtf.mul_transform(step);
+        let upper_chest_gtf = chest_gtf.mul_transform(step);
+        let neck_gtf = upper_chest_gtf.mul_transform(step);
+        let head_gtf = neck_gtf.mul_transform(head_tf);
+        let gaze_origin = head_gtf.translation() + Vec3::new(0.0, 0.06, 0.0);
+
+        let range = |max, scale| RangeMap {
+            input_max_value: max,
+            output_scale: scale,
+        };
+        let root = app
+            .world_mut()
+            .spawn((
+                Vrm,
+                LookAt::Cursor,
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                GazeTarget::new(gaze_origin + Vec3::new(0.3, 0.0, 1.0)),
+                LookAtProperties {
+                    offset_from_head_bone: [0.0, 0.06, 0.0],
+                    range_map_horizontal_inner: range(90.0, 8.0),
+                    range_map_horizontal_outer: range(90.0, 12.0),
+                    range_map_vertical_down: range(90.0, 10.0),
+                    range_map_vertical_up: range(90.0, 10.0),
+                    r#type: LookAtType::Bone,
+                },
+                BodyTracking {
+                    smoothing: 0.0,
+                    output_smoothing: 0.0,
+                    ..default()
+                },
+                SmoothedGaze::default(),
+            ))
+            .id();
+        let hips = app
+            .world_mut()
+            .spawn((hips_tf, hips_gtf, ChildOf(root)))
+            .id();
+        let mut bone = |tf: Transform, gtf: GlobalTransform, parent: Entity| {
+            app.world_mut()
+                .spawn((
+                    tf,
+                    gtf,
+                    ChildOf(parent),
+                    RestTransform(tf),
+                    RestGlobalTransform(gtf),
+                ))
+                .id()
+        };
+        let spine = bone(step, spine_gtf, hips);
+        let chest = bone(step, chest_gtf, spine);
+        let upper_chest = bone(step, upper_chest_gtf, chest);
+        let neck = bone(step, neck_gtf, upper_chest);
+        let head = bone(head_tf, head_gtf, neck);
+        let mut eye = |local: Transform| {
+            app.world_mut()
+                .spawn((
+                    Transform::IDENTITY,
+                    GlobalTransform::IDENTITY,
+                    ChildOf(head),
+                    RestTransform(local),
+                    RestGlobalTransform(head_gtf.mul_transform(local)),
+                ))
+                .id()
+        };
+        let left_eye = eye(left_tf);
+        let right_eye = eye(right_tf);
+        app.world_mut().entity_mut(root).insert((
+            SpineBoneEntity(spine),
+            ChestBoneEntity(chest),
+            NeckBoneEntity(neck),
+            HeadBoneEntity(head),
+            LeftEyeBoneEntity(left_eye),
+            RightEyeBoneEntity(right_eye),
+        ));
+        TorsoRig {
+            spine,
+            chest,
+            head,
+            left_eye,
+        }
+    }
+
+    fn assert_head_yaw_and_centred_eyes(
+        app: &App,
+        rig: &TorsoRig,
+    ) {
+        let head = app.world().get::<GlobalTransform>(rig.head).unwrap();
+        let (yaw, _, _) = head.rotation().to_euler(EulerRot::YXZ);
+        let expected = 0.3_f32.atan2(1.0).to_degrees();
+        assert!(
+            (yaw.to_degrees() - expected).abs() < 0.3,
+            "head yaw {} expected {expected}",
+            yaw.to_degrees()
+        );
+        let left = app.world().get::<Transform>(rig.left_eye).unwrap().rotation;
+        let rest = Quat::from_rotation_y(EYE_REST_DEGREES.to_radians());
+        let deviation = left.angle_between(rest).to_degrees();
+        assert!(deviation < 0.2, "left eye deviates {deviation} degrees");
+    }
+
+    #[test]
+    fn an_upper_chest_between_chest_and_neck_carries_this_frames_torso_turn() {
+        let mut app = test_app();
+        let rig = spawn_torso_rig(&mut app);
+        app.add_systems(Update, (track_body_tracking, track_looking_target).chain());
+        app.update();
+        assert_head_yaw_and_centred_eyes(&app, &rig);
+    }
+
+    #[test]
+    fn an_animated_torso_still_leaves_the_eyes_centred() {
+        let mut app = test_app();
+        let rig = spawn_torso_rig(&mut app);
+        let (spine, chest) = (rig.spine, rig.chest);
+        let animate = move |mut transforms: Query<&mut Transform>| {
+            for bone in [spine, chest] {
+                transforms.get_mut(bone).unwrap().rotation = Quat::IDENTITY;
+            }
+        };
+        app.add_systems(
+            Update,
+            (animate, track_body_tracking, track_looking_target).chain(),
+        );
+        for _ in 0..3 {
+            app.update();
+            assert_head_yaw_and_centred_eyes(&app, &rig);
+        }
     }
 }

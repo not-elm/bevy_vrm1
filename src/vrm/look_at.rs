@@ -422,88 +422,92 @@ mod tests {
         }
     }
 
-    /// Builds a rig by hand because the test app has no transform propagation.
-    ///
-    /// `root_rot` is the root's current world rotation and `root_rest_rot` the
-    /// rotation of its rest pose (`None` means the root has no rest
-    /// components). `head_turn` is applied in model space on the left of the
-    /// head's current global rotation.
-    fn spawn_eye_rig(
-        app: &mut App,
-        root_rot: Quat,
-        root_rest_rot: Option<Quat>,
-        neck_rest: Quat,
-        head_rest_local: Quat,
-        head_turn: Quat,
-    ) -> EyeRig {
-        let neck_local = Transform::from_xyz(0.0, 1.3, 0.0).with_rotation(neck_rest);
-        let head_local = Transform::from_xyz(0.0, 0.07, 0.0).with_rotation(head_rest_local);
-        let left_local = Transform::from_xyz(0.016, 0.056, 0.019).with_rotation(left_eye_rest());
-        let right_local = Transform::from_xyz(-0.016, 0.056, 0.019).with_rotation(right_eye_rest());
+    impl EyeRig {
+        /// Builds a rig by hand because the test app has no transform propagation.
+        ///
+        /// `root_rot` is the root's current world rotation and `root_rest_rot` the
+        /// rotation of its rest pose (`None` means the root has no rest
+        /// components). `head_turn` is applied in model space on the left of the
+        /// head's current global rotation.
+        fn spawn(
+            app: &mut App,
+            root_rot: Quat,
+            root_rest_rot: Option<Quat>,
+            neck_rest: Quat,
+            head_rest_local: Quat,
+            head_turn: Quat,
+        ) -> Self {
+            let neck_local = Transform::from_xyz(0.0, 1.3, 0.0).with_rotation(neck_rest);
+            let head_local = Transform::from_xyz(0.0, 0.07, 0.0).with_rotation(head_rest_local);
+            let left_local =
+                Transform::from_xyz(0.016, 0.056, 0.019).with_rotation(left_eye_rest());
+            let right_local =
+                Transform::from_xyz(-0.016, 0.056, 0.019).with_rotation(right_eye_rest());
 
-        let root_gtf = GlobalTransform::from(Transform::from_rotation(root_rot));
-        let head_gtf = root_gtf.mul_transform(neck_local).mul_transform(head_local);
-        let (_, head_rot, head_pos) = head_gtf.to_scale_rotation_translation();
-        let head_gtf = GlobalTransform::from(Transform {
-            translation: head_pos,
-            rotation: head_turn * head_rot,
-            scale: Vec3::ONE,
-        });
+            let root_gtf = GlobalTransform::from(Transform::from_rotation(root_rot));
+            let head_gtf = root_gtf.mul_transform(neck_local).mul_transform(head_local);
+            let (_, head_rot, head_pos) = head_gtf.to_scale_rotation_translation();
+            let head_gtf = GlobalTransform::from(Transform {
+                translation: head_pos,
+                rotation: head_turn * head_rot,
+                scale: Vec3::ONE,
+            });
 
-        let rest_root = GlobalTransform::from(Transform::from_rotation(
-            root_rest_rot.unwrap_or(Quat::IDENTITY),
-        ));
-        let rest_head = rest_root
-            .mul_transform(neck_local)
-            .mul_transform(head_local);
-
-        let gaze_origin = head_gtf.transform_point(Vec3::new(0.0, 0.06, 0.0));
-
-        let mut root = app.world_mut().spawn((
-            LookAt::Cursor,
-            bone_properties(),
-            Transform::from_rotation(root_rot),
-            root_gtf,
-        ));
-        if let Some(rot) = root_rest_rot {
-            root.insert((
-                RestTransform(Transform::from_rotation(rot)),
-                RestGlobalTransform(rest_root),
+            let rest_root = GlobalTransform::from(Transform::from_rotation(
+                root_rest_rot.unwrap_or(Quat::IDENTITY),
             ));
-        }
-        let root = root.id();
+            let rest_head = rest_root
+                .mul_transform(neck_local)
+                .mul_transform(head_local);
 
-        let head = app
-            .world_mut()
-            .spawn((
-                head_local,
-                head_gtf,
-                RestTransform(head_local),
-                RestGlobalTransform(rest_head),
-            ))
-            .id();
-        let mut spawn_eye = |local: Transform| {
-            app.world_mut()
+            let gaze_origin = head_gtf.transform_point(Vec3::new(0.0, 0.06, 0.0));
+
+            let mut root = app.world_mut().spawn((
+                LookAt::Cursor,
+                bone_properties(),
+                Transform::from_rotation(root_rot),
+                root_gtf,
+            ));
+            if let Some(rot) = root_rest_rot {
+                root.insert((
+                    RestTransform(Transform::from_rotation(rot)),
+                    RestGlobalTransform(rest_root),
+                ));
+            }
+            let root = root.id();
+
+            let head = app
+                .world_mut()
                 .spawn((
-                    Transform::from_rotation(Quat::IDENTITY),
-                    GlobalTransform::IDENTITY,
-                    RestTransform(local),
-                    RestGlobalTransform(rest_head.mul_transform(local)),
+                    head_local,
+                    head_gtf,
+                    RestTransform(head_local),
+                    RestGlobalTransform(rest_head),
                 ))
-                .id()
-        };
-        let left_eye = spawn_eye(left_local);
-        let right_eye = spawn_eye(right_local);
-        app.world_mut().entity_mut(root).insert((
-            HeadBoneEntity(head),
-            LeftEyeBoneEntity(left_eye),
-            RightEyeBoneEntity(right_eye),
-        ));
-        EyeRig {
-            root,
-            left_eye,
-            right_eye,
-            gaze_origin,
+                .id();
+            let mut spawn_eye = |local: Transform| {
+                app.world_mut()
+                    .spawn((
+                        Transform::from_rotation(Quat::IDENTITY),
+                        GlobalTransform::IDENTITY,
+                        RestTransform(local),
+                        RestGlobalTransform(rest_head.mul_transform(local)),
+                    ))
+                    .id()
+            };
+            let left_eye = spawn_eye(left_local);
+            let right_eye = spawn_eye(right_local);
+            app.world_mut().entity_mut(root).insert((
+                HeadBoneEntity(head),
+                LeftEyeBoneEntity(left_eye),
+                RightEyeBoneEntity(right_eye),
+            ));
+            Self {
+                root,
+                left_eye,
+                right_eye,
+                gaze_origin,
+            }
         }
     }
 
@@ -537,7 +541,7 @@ mod tests {
     #[test]
     fn eyes_stay_at_rest_for_a_target_straight_ahead_of_a_tilted_rest_head() {
         let mut app = test_app();
-        let rig = spawn_eye_rig(
+        let rig = EyeRig::spawn(
             &mut app,
             Quat::IDENTITY,
             None,
@@ -558,7 +562,7 @@ mod tests {
     fn eyes_follow_a_head_turned_by_animation() {
         let mut app = test_app();
         let turn = Quat::from_rotation_y(20.0_f32.to_radians());
-        let rig = spawn_eye_rig(
+        let rig = EyeRig::spawn(
             &mut app,
             Quat::IDENTITY,
             None,
@@ -579,7 +583,7 @@ mod tests {
     fn a_raw_spawn_measures_eye_gaze_in_the_root_frame() {
         let mut app = test_app();
         let o_s = Quat::from_rotation_y(180.0_f32.to_radians());
-        let rig = spawn_eye_rig(
+        let rig = EyeRig::spawn(
             &mut app,
             o_s,
             Some(Quat::from_rotation_y(90.0_f32.to_radians())),
@@ -599,7 +603,7 @@ mod tests {
     #[test]
     fn eyes_do_not_move_without_look_at() {
         let mut app = test_app();
-        let rig = spawn_eye_rig(
+        let rig = EyeRig::spawn(
             &mut app,
             Quat::IDENTITY,
             None,

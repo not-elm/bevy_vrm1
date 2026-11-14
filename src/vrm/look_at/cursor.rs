@@ -22,28 +22,30 @@ pub(crate) struct CursorRay {
 #[derive(Resource, Default)]
 pub(crate) struct CursorRayThisFrame(pub Option<CursorRay>);
 
-/// Finds the window containing the cursor and casts a ray through it.
-///
-/// Windows reporting `cursor_position()` win; only when none does, the platform
-/// fallback is tried, so that a window behind another one is not chosen wrongly.
-pub(crate) fn cursor_ray(
-    windows: &CursorWindows,
-    cameras: &Cameras,
-) -> Option<CursorRay> {
-    let (window_entity, cursor_pos) = windows
-        .iter()
-        .find_map(|(entity, window, _)| Some((entity, window.cursor_position()?)))
-        .or_else(|| {
-            windows.iter().find_map(|(entity, window, handle)| {
-                Some((entity, fallback_window_cursor_position(window, handle)?))
-            })
-        })?;
-    let (_, camera, _, camera_gtf, _) = cameras.find_camera_from_window(window_entity)?;
-    let ray = camera.viewport_to_world(camera_gtf, cursor_pos).ok()?;
-    Some(CursorRay {
-        ray,
-        camera_back: camera_gtf.back(),
-    })
+impl CursorRay {
+    /// Finds the window containing the cursor and casts a ray through it.
+    ///
+    /// Windows reporting `cursor_position()` win; only when none does, the platform
+    /// fallback is tried, so that a window behind another one is not chosen wrongly.
+    pub(crate) fn find(
+        windows: &CursorWindows,
+        cameras: &Cameras,
+    ) -> Option<Self> {
+        let (window_entity, cursor_pos) = windows
+            .iter()
+            .find_map(|(entity, window, _)| Some((entity, window.cursor_position()?)))
+            .or_else(|| {
+                windows.iter().find_map(|(entity, window, handle)| {
+                    Some((entity, fallback_window_cursor_position(window, handle)?))
+                })
+            })?;
+        let (_, camera, _, camera_gtf, _) = cameras.find_camera_from_window(window_entity)?;
+        let ray = camera.viewport_to_world(camera_gtf, cursor_pos).ok()?;
+        Some(Self {
+            ray,
+            camera_back: camera_gtf.back(),
+        })
+    }
 }
 
 /// Stores this frame's [`CursorRay`] into [`CursorRayThisFrame`].
@@ -52,7 +54,7 @@ pub(crate) fn update_cursor_ray(
     cameras: Cameras,
     mut out: ResMut<CursorRayThisFrame>,
 ) {
-    out.0 = cursor_ray(&windows, &cameras);
+    out.0 = CursorRay::find(&windows, &cameras);
 }
 
 /// Cursor position in `window`'s logical coordinates, obtained from the OS

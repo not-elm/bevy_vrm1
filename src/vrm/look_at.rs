@@ -317,6 +317,11 @@ mod tests {
         }
     }
 
+    /// Asserts that an avatar whose look-at type is `Expression` leaves its eye
+    /// bone transforms unchanged, even though a `GazeTarget` is present.
+    ///
+    /// Case: an app points an avatar at an entity, but the model drives its
+    /// gaze through expression morphs instead of eye bones.
     #[test]
     fn expression_look_at_leaves_the_eyes_untouched() -> TestResult {
         let mut app = test_app();
@@ -507,6 +512,12 @@ mod tests {
         );
     }
 
+    /// Asserts that the eyes keep their rest rotation when the target is
+    /// straight ahead of the head, even though the neck and head rest poses are
+    /// tilted.
+    ///
+    /// Case: an app places a target directly in front of an avatar whose model
+    /// rests with the neck and head tilted by a few degrees.
     #[test]
     fn eyes_stay_at_rest_for_a_target_straight_ahead_of_a_tilted_rest_head() {
         let mut app = test_app();
@@ -527,6 +538,12 @@ mod tests {
         assert_eyes_at_rest(&app, &rig);
     }
 
+    /// Asserts that the eyes keep their rest rotation when the target is
+    /// straight ahead of a head that an animation has turned, so the gaze is
+    /// measured from the head's current facing.
+    ///
+    /// Case: an animation turns the avatar's head by 20 degrees and the target
+    /// sits directly in front of where the head now faces.
     #[test]
     fn eyes_follow_a_head_turned_by_animation() {
         let mut app = test_app();
@@ -548,6 +565,13 @@ mod tests {
         assert_eyes_at_rest(&app, &rig);
     }
 
+    /// Asserts that the eye gaze is measured in the frame of the avatar's root,
+    /// so the eyes stay at rest for a target straight ahead of the root's
+    /// facing direction.
+    ///
+    /// Case: an app spawns a VRM directly under a rotated root that carries its
+    /// own rest pose, and a target sits straight in front of where the avatar
+    /// faces.
     #[test]
     fn a_raw_spawn_measures_eye_gaze_in_the_root_frame() {
         let mut app = test_app();
@@ -569,6 +593,11 @@ mod tests {
         assert_eyes_at_rest(&app, &rig);
     }
 
+    /// Asserts that the eye bones are left untouched when an entity carries a
+    /// `GazeTarget` but no `LookAt`.
+    ///
+    /// Case: an app turns look-at off for an avatar that still holds a target
+    /// from earlier.
     #[test]
     fn eyes_do_not_move_without_look_at() {
         let mut app = test_app();
@@ -596,6 +625,13 @@ mod tests {
         }
     }
 
+    /// Asserts that the body's look-at origin coincides with the eyes' look-at
+    /// origin, both placed by rotating the look-at offset out of the head's
+    /// rest frame and scaling it with the root.
+    ///
+    /// Case: an app shows an avatar whose head rests rotated by 90 degrees and
+    /// has a 6 cm look-at offset, first at normal size and then scaled up to
+    /// twice its size.
     #[test]
     fn the_body_origin_matches_the_rest_eye_origin() {
         let head_rest = RestGlobalTransform(GlobalTransform::from(
@@ -631,8 +667,13 @@ mod tests {
         );
     }
 
-    /// A non-uniform root scale must be applied along the root's axes, after the
-    /// offset is rotated out of the head's rest frame, as the eyes do.
+    /// Asserts that a non-uniform root scale is applied along the root's axes
+    /// after the look-at offset is rotated out of the head's rest frame, so the
+    /// body's look-at origin stays on the eyes' origin.
+    ///
+    /// Case: an app stretches an avatar's root to twice its height while the
+    /// head rests rotated, and then points the avatar at a target straight
+    /// ahead of its eyes.
     #[test]
     fn a_non_uniform_root_scale_keeps_the_body_origin_on_the_eye_origin() {
         let root_gtf = GlobalTransform::from_scale(Vec3::new(1.0, 2.0, 1.0));

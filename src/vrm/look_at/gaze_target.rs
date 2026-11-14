@@ -197,6 +197,11 @@ mod tests {
         app.world().get::<GazeTarget>(vrm).map(GazeTarget::position)
     }
 
+    /// Asserts that `LookAt::Target` resolves the target entity's world
+    /// position into the avatar's `GazeTarget`.
+    ///
+    /// Case: an app points an avatar at a prop that stands at a fixed place in
+    /// the scene.
     #[test]
     fn a_target_entity_becomes_the_gaze_target() {
         let mut app = App::new();
@@ -209,6 +214,11 @@ mod tests {
         assert_eq!(position_of(&app, vrm), Some(Vec3::new(1.0, 2.0, 3.0)));
     }
 
+    /// Asserts that a camera or another `Vrm` can be a `LookAt::Target`, and
+    /// that each avatar's `GazeTarget` is the position of its own target.
+    ///
+    /// Case: an app makes one avatar look at the camera while a second avatar
+    /// looks at a third avatar standing to the side.
     #[test]
     fn a_camera_or_another_vrm_can_be_the_target() {
         let mut app = App::new();
@@ -233,6 +243,13 @@ mod tests {
         assert_eq!(position_of(&app, b), Some(Vec3::new(4.0, 0.0, 0.0)));
     }
 
+    /// Asserts that `LookAt::Cursor` places each avatar's `GazeTarget` where
+    /// the cursor ray crosses a plane in front of that avatar's head, at the
+    /// avatar's own `CursorGazeDepth` or at 1.0 when none is set.
+    ///
+    /// Case: the user moves the cursor over a window that shows two avatars
+    /// standing at different distances, and one of them has a custom gaze
+    /// depth.
     #[test]
     fn the_cursor_ray_is_placed_in_front_of_each_avatar() {
         let mut app = App::new();
@@ -253,6 +270,11 @@ mod tests {
         );
     }
 
+    /// Asserts that an avatar keeps its last `GazeTarget` when the target can
+    /// no longer be resolved, rather than losing it.
+    ///
+    /// Case: an app despawns the entity an avatar was looking at, or the user
+    /// moves the cursor out of every window.
     #[test]
     fn an_unresolvable_target_keeps_the_last_point() {
         let mut app = App::new();
@@ -275,6 +297,11 @@ mod tests {
         assert_eq!(position_of(&app, cursor_vrm), Some(before));
     }
 
+    /// Asserts that removing `LookAt` from an avatar also removes its
+    /// `GazeTarget`.
+    ///
+    /// Case: an app turns look-at off for an avatar that has been looking at an
+    /// entity.
     #[test]
     fn removing_look_at_removes_the_gaze_target() {
         let mut app = App::new();
@@ -307,6 +334,12 @@ mod tests {
         calc_yaw_pitch(&GlobalTransform::from_translation(origin), target).0
     }
 
+    /// Asserts that the yaw from the head to the cursor's `GazeTarget` equals
+    /// the arctangent of the cursor's sideways offset over the gaze depth, for
+    /// offsets to either side and at depths 0.5 and 1.0.
+    ///
+    /// Case: the user holds the cursor slightly to the left or right of the
+    /// face of an avatar that faces the camera.
     #[test]
     fn cursor_target_yaw_is_atan_of_offset_over_depth() {
         for depth in [0.5_f32, 1.0] {
@@ -321,6 +354,12 @@ mod tests {
         }
     }
 
+    /// Asserts that the yaw to the cursor's `GazeTarget` changes in small
+    /// steps, without a jump, as the cursor passes through the point directly
+    /// in front of the face.
+    ///
+    /// Case: the user slowly sweeps the cursor across the middle of an avatar's
+    /// face.
     #[test]
     fn cursor_target_is_continuous_across_the_face_centre() {
         let yaws: Vec<f32> = (-10..=10)
@@ -338,6 +377,13 @@ mod tests {
         );
     }
 
+    /// Asserts that, for a camera turned by 30 degrees about the vertical axis,
+    /// the cursor's `GazeTarget` lies at the gaze depth along the camera's
+    /// viewing direction and its yaw changes strictly in one direction, without
+    /// jumps, as the cursor moves sideways.
+    ///
+    /// Case: an app views an avatar through a camera that is turned to the
+    /// side, and the user sweeps the cursor across the avatar's face.
     #[test]
     fn cursor_target_is_monotonic_for_a_rotated_camera() {
         let back = Dir3::new(Quat::from_rotation_y(30_f32.to_radians()) * Vec3::Z).unwrap();
@@ -362,6 +408,11 @@ mod tests {
         );
     }
 
+    /// Asserts that a cursor ray that never reaches the plane in front of the
+    /// head yields no `GazeTarget`.
+    ///
+    /// Case: the camera is oriented so that the plane in front of the avatar
+    /// lies behind the cursor ray.
     #[test]
     fn a_ray_that_misses_the_plane_yields_no_target() {
         let away = CursorRay {
@@ -371,6 +422,12 @@ mod tests {
         assert_eq!(GazeTarget::from_cursor(&away, Vec3::ZERO, 1.0), None);
     }
 
+    /// Asserts that a missing, non-finite, or non-positive cursor depth falls
+    /// back to 1.0 rather than being clamped, while a valid depth is used as
+    /// set.
+    ///
+    /// Case: an app sets `CursorGazeDepth(0.0)`, or loads a NaN from a broken
+    /// settings file.
     #[test]
     fn invalid_cursor_depths_fall_back_to_one() {
         assert_eq!(effective_cursor_depth(None), 1.0);

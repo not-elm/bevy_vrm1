@@ -918,6 +918,12 @@ mod tests {
         DynamicWorld, world_instance_spawner, world_instance_spawner_system,
     };
 
+    /// Asserts that removing an entity's root data removes the runtime-owned
+    /// `GazeTarget` but keeps the user-set `CursorGazeDepth`.
+    ///
+    /// Case: an app loads a different model into an avatar that has been
+    /// looking at the cursor with a custom gaze depth, so the old model's data
+    /// is cleared from the root.
     #[test]
     fn remove_root_data_removes_the_gaze_target() {
         let mut world = World::new();

@@ -621,6 +621,12 @@ mod tests {
             .expect("Failed to run track_body_tracking");
     }
 
+    /// Asserts that body tracking settles at zero yaw and pitch for a target
+    /// straight ahead of the head, even though the neck and head rest poses are
+    /// tilted.
+    ///
+    /// Case: the user holds the cursor directly in front of the face of an
+    /// avatar whose model rests with the neck and head tilted by a few degrees.
     #[test]
     fn a_tilted_neck_rest_does_not_bias_body_pitch() {
         let mut app = test_app();
@@ -707,6 +713,11 @@ mod tests {
         );
     }
 
+    /// Asserts that a `LookAt::Target` that names a camera makes the body's
+    /// gaze yaw turn toward the camera's position.
+    ///
+    /// Case: an app points a body-tracking avatar at a camera that stands off
+    /// to the side of the avatar.
     #[test]
     fn a_camera_target_turns_the_body() {
         let mut app = test_app();
@@ -721,6 +732,11 @@ mod tests {
         assert_turns_toward_target(&mut app, root);
     }
 
+    /// Asserts that a `LookAt::Target` that names another `Vrm` makes the
+    /// body's gaze yaw turn toward that avatar's position.
+    ///
+    /// Case: an app makes one body-tracking avatar look at a second avatar that
+    /// stands off to its side.
     #[test]
     fn another_vrm_target_turns_the_body() {
         let mut app = test_app();
@@ -732,6 +748,11 @@ mod tests {
         assert_turns_toward_target(&mut app, root);
     }
 
+    /// Asserts that body tracking leaves the smoothed gaze and the head bone
+    /// unchanged when an entity carries a `GazeTarget` but no `LookAt`.
+    ///
+    /// Case: an app turns look-at off for an avatar that still holds a target
+    /// from earlier and is currently looking off to one side.
     #[test]
     fn the_body_does_not_move_without_look_at() {
         let mut app = test_app();
@@ -905,6 +926,12 @@ mod tests {
             .insert(GazeTarget::new(target));
     }
 
+    /// Asserts that, with the default `BodyTracking` smoothing, the head yaw
+    /// settles where the gaze puts it after the gaze swings to the other side,
+    /// rather than drifting short of it.
+    ///
+    /// Case: the user swings the cursor from one side of an avatar's face to
+    /// the other and then holds it still for several seconds.
     #[test]
     fn output_smoothing_settles_on_the_gaze_without_drift() {
         let mut app = test_app();
@@ -935,6 +962,12 @@ mod tests {
         assert!((yaw + 18.0).abs() < 0.1, "head yaw {yaw}, expected -18.0");
     }
 
+    /// Asserts that a small change an animation writes to a bone each frame
+    /// becomes the new base pose, so the head follows the animation with the
+    /// same gaze rotation applied on top.
+    ///
+    /// Case: an animation nods the avatar's head by half a degree per frame
+    /// while the avatar looks toward a cursor that stays off to one side.
     #[test]
     fn small_animation_changes_become_the_new_base() {
         let mut app = test_app();
@@ -1347,6 +1380,13 @@ mod tests {
         assert!(deviation < 0.2, "left eye deviates {deviation} degrees");
     }
 
+    /// Asserts that an upper chest bone between the chest and the neck carries
+    /// the torso turn of the current frame, so the head faces the target and
+    /// the eyes stay centred on the first frame.
+    ///
+    /// Case: an app tracks the cursor with a model that has an `upperChest`
+    /// bone between `chest` and `neck`, and the cursor is off to the side of
+    /// the face.
     #[test]
     fn an_upper_chest_between_chest_and_neck_carries_this_frames_torso_turn() {
         let mut app = test_app();
@@ -1356,6 +1396,12 @@ mod tests {
         assert_head_yaw_and_centred_eyes(&app, &rig);
     }
 
+    /// Asserts that the head keeps facing the target and the eyes stay centred
+    /// on every frame while an animation rewrites the spine and chest rotations
+    /// each frame.
+    ///
+    /// Case: an animation resets the avatar's torso pose every frame while the
+    /// avatar's body and eyes track a cursor that is off to the side.
     #[test]
     fn an_animated_torso_still_leaves_the_eyes_centred() {
         let mut app = test_app();

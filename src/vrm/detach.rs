@@ -505,6 +505,12 @@ mod tests {
         success!()
     }
 
+    /// Asserts that detaching a VRM removes every root-side component,
+    /// including `LookAt`, `CursorGazeDepth`, and `GazeTarget`, but keeps the
+    /// root entity and the bone entities it referenced.
+    ///
+    /// Case: an app detaches a VRM that was spawned directly with a
+    /// `WorldAssetRoot` and had look-at, body tracking, and gaze depth set up.
     #[test]
     fn the_root_side_component_set_is_removed() -> TestResult {
         let mut app = setup_app();
@@ -551,6 +557,13 @@ mod tests {
         success!()
     }
 
+    /// Asserts that detaching a managed avatar keeps the root entity with its
+    /// `Name`, `Transform`, `LookAt`, and `CursorGazeDepth`, removes the
+    /// runtime-owned `GazeTarget` and the rig components, and despawns the
+    /// avatar's children.
+    ///
+    /// Case: an app detaches a VRM that it spawned through a `VrmHandle` and
+    /// keeps the user's placement and look-at settings on the entity.
     #[test]
     fn a_managed_detach_keeps_the_user_root_and_clears_the_rig() -> TestResult {
         let mut app = setup_app();

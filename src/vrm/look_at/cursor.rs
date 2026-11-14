@@ -146,6 +146,12 @@ fn client_cursor_physical(handle: &RawHandleWrapper) -> Option<Vec2> {
 mod tests {
     use super::*;
 
+    /// Asserts that a client-area position in physical pixels is converted to
+    /// logical window coordinates by dividing by the scale factor, with the far
+    /// window edge still counted as inside.
+    ///
+    /// Case: the user works on a display scaled to 150 percent and moves the
+    /// cursor within the window, up to its bottom-right corner.
     #[test]
     fn client_coordinates_are_divided_by_the_scale_factor() {
         let size = Vec2::new(800.0, 600.0);
@@ -159,6 +165,11 @@ mod tests {
         );
     }
 
+    /// Asserts that a client-area position beyond the left, top, or right edge
+    /// of the window yields `None` rather than being clamped to the edge.
+    ///
+    /// Case: the user moves the cursor outside the window while the app reads
+    /// the cursor position directly from the operating system.
     #[test]
     fn client_coordinates_outside_the_window_are_rejected() {
         let size = Vec2::new(800.0, 600.0);

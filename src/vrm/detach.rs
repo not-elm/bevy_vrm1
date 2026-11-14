@@ -4,7 +4,7 @@ use crate::vrm::instance::{
     PendingVrmScene, VrmGeneration, VrmHandle, VrmInstanceState, VrmSceneRoot, instance_entities,
     remove_model_name, remove_root_data,
 };
-use crate::vrm::look_at::LookAt;
+use crate::vrm::look_at::{CursorGazeDepth, GazeTarget, LookAt};
 use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
 use crate::vrm::{Initialized, RestGlobalTransform, RestTransform, Vrm, VrmBone};
 use crate::vrma::{VrmAnimationGraphState, Vrma, VrmaHandle};
@@ -245,6 +245,7 @@ fn strip_raw_root(
                 LookAt,
                 BodyTracking,
                 SmoothedGaze,
+                CursorGazeDepth,
             ),
             (
                 VrmNodeIndex,
@@ -504,6 +505,12 @@ mod tests {
         success!()
     }
 
+    /// Asserts that detaching a VRM removes every root-side component,
+    /// including `LookAt`, `CursorGazeDepth`, and `GazeTarget`, but keeps the
+    /// root entity and the bone entities it referenced.
+    ///
+    /// Case: an app detaches a VRM that was spawned directly with a
+    /// `WorldAssetRoot` and had look-at, body tracking, and gaze depth set up.
     #[test]
     fn the_root_side_component_set_is_removed() -> TestResult {
         let mut app = setup_app();
@@ -521,6 +528,8 @@ mod tests {
             LookAt::Cursor,
             BodyTracking::default(),
             SmoothedGaze::default(),
+            GazeTarget::new(Vec3::ZERO),
+            CursorGazeDepth(0.5),
             HipsBoneEntity(hips),
         ));
 
@@ -540,12 +549,21 @@ mod tests {
             LookAt,
             BodyTracking,
             SmoothedGaze,
+            GazeTarget,
+            CursorGazeDepth,
             HipsBoneEntity,
         );
         assert!(world.get_entity(hips).is_ok());
         success!()
     }
 
+    /// Asserts that detaching a managed avatar keeps the root entity with its
+    /// `Name`, `Transform`, `LookAt`, and `CursorGazeDepth`, removes the
+    /// runtime-owned `GazeTarget` and the rig components, and despawns the
+    /// avatar's children.
+    ///
+    /// Case: an app detaches a VRM that it spawned through a `VrmHandle` and
+    /// keeps the user's placement and look-at settings on the entity.
     #[test]
     fn a_managed_detach_keeps_the_user_root_and_clears_the_rig() -> TestResult {
         let mut app = setup_app();
@@ -561,6 +579,8 @@ mod tests {
                 Name::new("avatar"),
                 Transform::from_xyz(1.0, 2.0, 3.0),
                 LookAt::Cursor,
+                CursorGazeDepth(0.5),
+                GazeTarget::new(Vec3::ZERO),
             ))
             .id();
         app.world_mut().entity_mut(vrm).insert((
@@ -593,6 +613,14 @@ mod tests {
         );
         assert!(world.get::<Transform>(vrm).is_some(), "placement is kept");
         assert!(world.get::<LookAt>(vrm).is_some(), "`LookAt` is kept");
+        assert!(
+            world.get::<CursorGazeDepth>(vrm).is_some(),
+            "`CursorGazeDepth` is user-owned and kept"
+        );
+        assert!(
+            world.get::<GazeTarget>(vrm).is_none(),
+            "`GazeTarget` is runtime-owned and removed"
+        );
         assert_all_removed!(
             world.entity(vrm),
             Vrm,

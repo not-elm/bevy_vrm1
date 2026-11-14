@@ -1,10 +1,10 @@
 use crate::prelude::*;
 use crate::system_set::VrmSystemSets;
-use crate::vrm::look_at::{calc_yaw_pitch, find_cursor_world_position, track_looking_target};
-use crate::vrm::{RestGlobalTransform, RestTransform};
+use crate::vrm::look_at::gaze_target::GazeResolveSet;
+use crate::vrm::look_at::{calc_yaw_pitch, track_looking_target};
+use crate::vrm::{RestGlobalTransform, RestTransform, root_rest_rotation};
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
-use bevy::window::Window;
 use std::collections::HashMap;
 
 /// Optional body tracking that makes head, neck, chest, and spine bones
@@ -61,9 +61,12 @@ pub struct BodyTracking {
     #[cfg_attr(feature = "serde", serde(default = "default_output_smoothing"))]
     pub output_smoothing: f32,
 
-    /// Minimum forward depth (meters) for yaw/pitch calculation.
-    /// Prevents extreme yaw when the camera is directly in front of the model.
-    /// Higher values reduce sensitivity. Default: 1.0.
+    /// Minimum forward depth used as a safety clamp when a real target is behind or
+    /// very close to the model. Cursor sensitivity is controlled by [`CursorGazeDepth`].
+    /// Body tracking never measures a forward depth below this value, so to make the body
+    /// follow the cursor more strongly, lower `reference_depth` together with
+    /// [`CursorGazeDepth`].
+    /// Default: 1.0.
     #[cfg_attr(feature = "serde", serde(default = "default_reference_depth"))]
     pub reference_depth: f32,
 }
@@ -88,14 +91,6 @@ impl Default for BodyTracking {
             reference_depth: 1.0,
         }
     }
-}
-
-fn default_output_smoothing() -> f32 {
-    25.0
-}
-
-fn default_reference_depth() -> f32 {
-    1.0
 }
 
 /// Smoothed gaze state stored on the VRM root entity.
@@ -124,10 +119,72 @@ impl Plugin for BodyTrackingPlugin {
                 track_body_tracking
                     .in_set(VrmSystemSets::GazeControl)
                     .after(VrmSystemSets::PropagateAfterConstraints)
+                    .after(GazeResolveSet)
                     .before(track_looking_target)
                     .run_if(any_with_component::<BodyTracking>),
             );
     }
+}
+
+/// Per-bone state for tracking animation changes between frames.
+#[derive(Debug, Clone)]
+struct BoneState {
+    /// The bone rotation before body tracking was applied (from animation or rest).
+    base: Quat,
+    /// Whether state has been initialized.
+    initialized: bool,
+    /// The final output rotation from last frame. Used for slerp smoothing and
+    /// to detect animation writes: anything else in `Transform.rotation` was
+    /// written by someone other than us.
+    prev_output: Quat,
+}
+
+impl Default for BoneState {
+    fn default() -> Self {
+        Self {
+            base: Quat::IDENTITY,
+            initialized: false,
+            prev_output: Quat::IDENTITY,
+        }
+    }
+}
+
+/// Bone descriptor used when iterating through the chain.
+struct BoneEntry {
+    entity: Entity,
+    weight: f32,
+    yaw_max: f32,
+    pitch_max: f32,
+}
+
+/// The look-at space in which body tracking measures the gaze.
+///
+/// Its axes follow the avatar root, and its origin is the rest-pose eye
+/// position carried by the head; the head's current rotation does not move it.
+/// `offset` is the look-at offset in the head's rest frame, and the root's
+/// scale applies to it along the root's axes.
+pub(crate) fn body_look_at_space(
+    head_translation: Vec3,
+    root_gtf: &GlobalTransform,
+    root_rest_rot: Quat,
+    head_rest_rot: Quat,
+    offset: Vec3,
+) -> GlobalTransform {
+    let head_in_root = root_rest_rot.inverse() * head_rest_rot;
+    let offset_world = root_gtf.affine().transform_vector3(head_in_root * offset);
+    GlobalTransform::from(Transform {
+        translation: head_translation + offset_world,
+        rotation: root_gtf.rotation(),
+        scale: Vec3::ONE,
+    })
+}
+
+fn default_output_smoothing() -> f32 {
+    25.0
+}
+
+fn default_reference_depth() -> f32 {
+    1.0
 }
 
 /// Automatically insert [`SmoothedGaze`] when [`BodyTracking`] is added.
@@ -199,30 +256,6 @@ fn calc_yaw_pitch_clamped(
     (yaw, pitch)
 }
 
-/// Per-bone state for tracking animation changes between frames.
-#[derive(Debug, Clone)]
-struct BoneState {
-    /// The bone rotation before body tracking was applied (from animation or rest).
-    base: Quat,
-    /// The gaze delta applied last frame.
-    last_delta: Quat,
-    /// Whether state has been initialized.
-    initialized: bool,
-    /// The final output rotation from last frame (for slerp smoothing).
-    prev_output: Quat,
-}
-
-impl Default for BoneState {
-    fn default() -> Self {
-        Self {
-            base: Quat::IDENTITY,
-            last_delta: Quat::IDENTITY,
-            initialized: false,
-            prev_output: Quat::IDENTITY,
-        }
-    }
-}
-
 /// Compute additive rotation: apply the gaze delta (relative to rest) on top of
 /// the base (animated) rotation.
 ///
@@ -241,91 +274,100 @@ fn compute_additive_rotation(
     base * delta
 }
 
-/// Bone descriptor used when iterating through the chain.
-struct BoneEntry {
+/// Returns the world transform of `entity`'s parent as of this frame.
+///
+/// When an ancestor of `entity` is in `computed` (bones already updated this
+/// frame), the result carries that ancestor's updated world transform through
+/// the bones in between, such as `upperChest`. Otherwise it is the stored
+/// `GlobalTransform` of the direct parent, which may be the `Vrm` root. It is
+/// `None` when `entity` has no parent or the parent has no transform.
+fn parent_world_this_frame(
     entity: Entity,
-    weight: f32,
-    yaw_max: f32,
-    pitch_max: f32,
+    computed: &[(Entity, GlobalTransform)],
+    child_ofs: &Query<&ChildOf>,
+    transforms: &Query<(&mut Transform, &mut GlobalTransform), (Without<Camera>, Without<Vrm>)>,
+    root_gtfs: &Query<&GlobalTransform, With<Vrm>>,
+) -> Option<GlobalTransform> {
+    let direct_parent = child_ofs.get(entity).ok()?.parent();
+    let mut untracked_locals: Vec<Transform> = Vec::new();
+    let mut current = direct_parent;
+    loop {
+        if let Some((_, gtf)) = computed.iter().rev().find(|(e, _)| *e == current) {
+            return Some(
+                untracked_locals
+                    .iter()
+                    .rev()
+                    .fold(*gtf, |world, local| world.mul_transform(*local)),
+            );
+        }
+        let Ok((tf, _)) = transforms.get(current) else {
+            break;
+        };
+        untracked_locals.push(*tf);
+        let Ok(parent) = child_ofs.get(current) else {
+            break;
+        };
+        current = parent.parent();
+    }
+    transforms
+        .get(direct_parent)
+        .map(|(_, gtf)| *gtf)
+        .ok()
+        .or_else(|| root_gtfs.get(direct_parent).ok().copied())
 }
 
 fn track_body_tracking(
-    mut vrms: Query<(
-        Entity,
-        &LookAt,
-        &LookAtProperties,
-        &BodyTracking,
-        &HeadBoneEntity,
-        Option<&NeckBoneEntity>,
-        Option<&ChestBoneEntity>,
-        Option<&SpineBoneEntity>,
-        &mut SmoothedGaze,
-    )>,
+    mut vrms: Query<
+        (
+            Entity,
+            &GazeTarget,
+            &LookAtProperties,
+            &BodyTracking,
+            &HeadBoneEntity,
+            Option<&NeckBoneEntity>,
+            Option<&ChestBoneEntity>,
+            Option<&SpineBoneEntity>,
+            &mut SmoothedGaze,
+        ),
+        With<LookAt>,
+    >,
     mut transforms: Query<(&mut Transform, &mut GlobalTransform), (Without<Camera>, Without<Vrm>)>,
+    mut bone_states: Local<HashMap<Entity, BoneState>>,
     root_gtfs: Query<&GlobalTransform, With<Vrm>>,
     child_ofs: Query<&ChildOf>,
     rests: Query<(&RestTransform, &RestGlobalTransform)>,
-    windows: Query<(Entity, &Window)>,
-    cameras: Cameras,
     time: Res<Time>,
-    mut bone_states: Local<HashMap<Entity, BoneState>>,
 ) {
     let dt = time.delta_secs();
 
-    for (root_entity, look_at, properties, tracking, head, neck, chest, spine, mut smoothed) in
+    for (root_entity, gaze, properties, tracking, head, neck, chest, spine, mut smoothed) in
         vrms.iter_mut()
     {
-        let Ok((&head_tf, &head_gtf)) = transforms.get(head.0) else {
+        let Ok((_, &head_gtf)) = transforms.get(head.0) else {
             continue;
         };
-        let Ok((rest_tf, rest_gtf)) = rests.get(head.0) else {
+        let Ok((_, rest_gtf)) = rests.get(head.0) else {
             continue;
         };
         let Ok(root_gtf) = root_gtfs.get(root_entity) else {
             continue;
         };
 
-        let root_rest_rot = rests
-            .get(root_entity)
-            .map_or(Quat::IDENTITY, |(_, rest)| rest.rotation());
-        let owner_rot = root_gtf.rotation() * root_rest_rot.inverse();
-        let rest_parent_rot = rest_gtf.rotation() * rest_tf.rotation.inverse();
-        let stable_rotation = owner_rot * rest_parent_rot;
+        let root_rest_rot = root_rest_rotation(&rests, root_entity);
+        let look_at_space = body_look_at_space(
+            head_gtf.translation(),
+            root_gtf,
+            root_rest_rot,
+            rest_gtf.rotation(),
+            Vec3::from(properties.offset_from_head_bone),
+        );
 
-        let offset = stable_rotation * Vec3::from(properties.offset_from_head_bone);
-        let look_at_space = GlobalTransform::from(Transform {
-            translation: head_gtf.translation() + offset,
-            rotation: stable_rotation,
-            scale: Vec3::ONE,
-        });
+        let (raw_yaw, raw_pitch) =
+            calc_yaw_pitch_clamped(&look_at_space, gaze.position(), tracking.reference_depth);
 
-        // 2. Calculate raw yaw/pitch with z-depth clamping.
-        let (raw_yaw, raw_pitch) = match look_at {
-            LookAt::Cursor => {
-                let Some(target_pos) = find_cursor_world_position(&windows, &cameras, &head_gtf)
-                else {
-                    continue;
-                };
-                calc_yaw_pitch_clamped(&look_at_space, target_pos, tracking.reference_depth)
-            }
-            LookAt::Target(target_entity) => {
-                let Ok((_, &target_gtf)) = transforms.get(*target_entity) else {
-                    continue;
-                };
-                calc_yaw_pitch_clamped(
-                    &look_at_space,
-                    target_gtf.translation(),
-                    tracking.reference_depth,
-                )
-            }
-        };
-
-        // 3. Smooth yaw/pitch.
         smoothed.yaw = smooth_angle(smoothed.yaw, raw_yaw, tracking.smoothing, dt);
         smoothed.pitch = smooth_angle(smoothed.pitch, raw_pitch, tracking.smoothing, dt);
 
-        // Normalize yaw to [-180, 180] to prevent unbounded growth
-        // during ±180° crossings when cursor passes over the head.
         while smoothed.yaw > 180.0 {
             smoothed.yaw -= 360.0;
         }
@@ -333,7 +375,6 @@ fn track_body_tracking(
             smoothed.yaw += 360.0;
         }
 
-        // 4. Build bone chain bottom-up: spine -> chest -> neck -> head.
         let mut chain: Vec<BoneEntry> = Vec::with_capacity(4);
         if let Some(spine) = spine {
             chain.push(BoneEntry {
@@ -366,9 +407,6 @@ fn track_body_tracking(
             pitch_max: tracking.head_pitch_max,
         });
 
-        // 5. Apply rotations bottom-up, propagating GlobalTransform along the chain.
-        //    We track which entities we've already computed so we can use local
-        //    cached values for parent lookups when the parent is also in the chain.
         let mut computed_gtfs: Vec<(Entity, GlobalTransform)> = Vec::with_capacity(4);
 
         for bone in &chain {
@@ -380,46 +418,32 @@ fn track_body_tracking(
             let bone_pitch = (smoothed.pitch * bone.weight).clamp(-bone.pitch_max, bone.pitch_max);
             let rotation = bone_rotation(bone_yaw, bone_pitch, rest_tf, rest_gtf);
 
-            // Get parent entity for chain propagation.
-            let Ok(child_of) = child_ofs.get(bone.entity) else {
-                continue;
-            };
-            let parent_entity = child_of.parent();
-
-            // Look up parent GlobalTransform: first check our local cache (for chain
-            // parents like spine->chest), then fall back to the read-only query.
-            let parent_gtf = computed_gtfs
-                .iter()
-                .rev()
-                .find(|(e, _)| *e == parent_entity)
-                .map(|(_, gtf)| *gtf)
-                .or_else(|| transforms.get(parent_entity).map(|(_, gtf)| *gtf).ok());
-
-            let Some(parent_gtf) = parent_gtf else {
+            let Some(parent_gtf) = parent_world_this_frame(
+                bone.entity,
+                &computed_gtfs,
+                &child_ofs,
+                &transforms,
+                &root_gtfs,
+            ) else {
                 continue;
             };
 
-            // Write Transform.rotation additively and propagate GlobalTransform.
             let Ok((mut tf, mut gtf)) = transforms.get_mut(bone.entity) else {
                 continue;
             };
 
             let state = bone_states.entry(bone.entity).or_default();
 
-            // Detect whether animation updated the rotation since last frame.
-            // If tf.rotation differs from our expected value (base * last_delta),
-            // then the animation system has written a new value.
-            let base = if !state.initialized
-                || tf.rotation.dot(state.base * state.last_delta).abs() < 0.999
-            {
-                // Animation changed or first frame: use current rotation as base
+            // NOTE: This system leaves only `prev_output` in `Transform.rotation`,
+            // so any other value is an animation write and becomes the new base.
+            // Comparing against the unsmoothed `base * delta` instead mistakes the
+            // smoothed output for an animation write, and the pose drifts.
+            let base = if !state.initialized || tf.rotation != state.prev_output {
                 tf.rotation
             } else {
-                // No animation change: keep existing base
                 state.base
             };
 
-            let delta = rest_tf.rotation.inverse() * rotation;
             let target = compute_additive_rotation(base, rest_tf.rotation, rotation);
 
             tf.rotation = if state.initialized && tracking.output_smoothing > 0.0 {
@@ -435,7 +459,6 @@ fn track_body_tracking(
             };
 
             state.base = base;
-            state.last_delta = delta;
             state.prev_output = tf.rotation;
             state.initialized = true;
 
@@ -448,9 +471,13 @@ fn track_body_tracking(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::test_app;
+    use crate::tests::{rotation, rotation_is, run_frames, test_app};
+    use crate::vrm::look_at::cursor::CursorRayThisFrame;
+    use crate::vrm::look_at::gaze_target::resolve_gaze_target;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::time::TimeUpdateStrategy;
     use std::f32::consts::{FRAC_PI_2, PI};
+    use std::time::Duration;
 
     /// In world space; `(-0.5, 0, 2)` from the head in the frame of an avatar
     /// turned by `PI` about `Y`.
@@ -472,13 +499,6 @@ mod tests {
         let owner_gtf = GlobalTransform::from(owner_tf);
         let scene_gtf = owner_gtf.mul_transform(scene_tf);
 
-        let target = app
-            .world_mut()
-            .spawn((
-                Transform::from_translation(TARGET),
-                GlobalTransform::from_translation(TARGET),
-            ))
-            .id();
         let owner_entity = app.world_mut().spawn((owner_tf, owner_gtf)).id();
         let scene = app
             .world_mut()
@@ -503,7 +523,8 @@ mod tests {
         let root = if raw { scene } else { owner_entity };
         app.world_mut().entity_mut(root).insert((
             Vrm,
-            LookAt::Target(target),
+            LookAt::Cursor,
+            GazeTarget::new(TARGET),
             LookAtProperties::default(),
             BodyTracking {
                 smoothing: 0.0,
@@ -546,6 +567,212 @@ mod tests {
             "yaw {yaw}, expected {}",
             expected_yaw()
         );
+    }
+
+    /// A `Vrm` root at the origin with a plain `hips` and a `head` at
+    /// `(0, 1.5, 0.3)`, ready for `track_body_tracking`.
+    fn spawn_rig(
+        app: &mut App,
+        extra: impl Bundle,
+    ) -> (Entity, Entity) {
+        let hips_tf = Transform::from_xyz(0.0, 1.0, 0.3);
+        let head_tf = Transform::from_xyz(0.0, 0.5, 0.0);
+        let root = app
+            .world_mut()
+            .spawn((
+                Vrm,
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                LookAtProperties {
+                    offset_from_head_bone: [0.0; 3],
+                    ..default()
+                },
+                BodyTracking {
+                    smoothing: 0.0,
+                    output_smoothing: 0.0,
+                    ..default()
+                },
+                extra,
+            ))
+            .id();
+        let hips = app
+            .world_mut()
+            .spawn((hips_tf, GlobalTransform::from(hips_tf), ChildOf(root)))
+            .id();
+        let head = app
+            .world_mut()
+            .spawn((
+                head_tf,
+                GlobalTransform::from(hips_tf).mul_transform(head_tf),
+                ChildOf(hips),
+                RestTransform(head_tf),
+                RestGlobalTransform(GlobalTransform::from(hips_tf).mul_transform(head_tf)),
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(root)
+            .insert(HeadBoneEntity(head));
+        (root, head)
+    }
+
+    fn track(app: &mut App) {
+        app.world_mut()
+            .run_system_once(track_body_tracking)
+            .expect("Failed to run track_body_tracking");
+    }
+
+    /// Asserts that body tracking settles at zero yaw and pitch for a target
+    /// straight ahead of the head, even though the neck and head rest poses are
+    /// tilted.
+    ///
+    /// Case: the user holds the cursor directly in front of the face of an
+    /// avatar whose model rests with the neck and head tilted by a few degrees.
+    #[test]
+    fn a_tilted_neck_rest_does_not_bias_body_pitch() {
+        let mut app = test_app();
+        let hips_tf = Transform::from_xyz(0.0, 1.0, 0.0);
+        let neck_tf = Transform::from_xyz(0.0, 0.3, 0.0)
+            .with_rotation(Quat::from_rotation_x(6.85_f32.to_radians()));
+        let head_tf = Transform::from_xyz(0.0, 0.1, 0.0)
+            .with_rotation(Quat::from_rotation_x(-6.23_f32.to_radians()));
+        let hips_gtf = GlobalTransform::from(hips_tf);
+        let neck_gtf = hips_gtf.mul_transform(neck_tf);
+        let head_gtf = neck_gtf.mul_transform(head_tf);
+        let root = app
+            .world_mut()
+            .spawn((
+                Vrm,
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                LookAt::Cursor,
+                GazeTarget::new(head_gtf.translation() + Vec3::new(0.0, 0.0, 2.0)),
+                LookAtProperties {
+                    offset_from_head_bone: [0.0; 3],
+                    ..default()
+                },
+                BodyTracking {
+                    smoothing: 0.0,
+                    output_smoothing: 0.0,
+                    ..default()
+                },
+                SmoothedGaze {
+                    yaw: 45.0,
+                    pitch: 45.0,
+                },
+            ))
+            .id();
+        let hips = app
+            .world_mut()
+            .spawn((hips_tf, hips_gtf, ChildOf(root)))
+            .id();
+        let neck = app
+            .world_mut()
+            .spawn((
+                neck_tf,
+                neck_gtf,
+                ChildOf(hips),
+                RestTransform(neck_tf),
+                RestGlobalTransform(neck_gtf),
+            ))
+            .id();
+        let head = app
+            .world_mut()
+            .spawn((
+                head_tf,
+                head_gtf,
+                ChildOf(neck),
+                RestTransform(head_tf),
+                RestGlobalTransform(head_gtf),
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(root)
+            .insert((HeadBoneEntity(head), NeckBoneEntity(neck)));
+
+        track(&mut app);
+
+        let smoothed = app.world().get::<SmoothedGaze>(root).unwrap();
+        assert!(smoothed.pitch.abs() < 0.01, "pitch {}", smoothed.pitch);
+        assert!(smoothed.yaw.abs() < 0.01, "yaw {}", smoothed.yaw);
+    }
+
+    fn assert_turns_toward_target(
+        app: &mut App,
+        root: Entity,
+    ) {
+        app.init_resource::<CursorRayThisFrame>();
+        app.world_mut()
+            .run_system_once(resolve_gaze_target)
+            .expect("Failed to run resolve_gaze_target");
+        track(app);
+        let expected = 0.5_f32.atan2(2.0 - 0.3).to_degrees();
+        let yaw = app.world().get::<SmoothedGaze>(root).unwrap().yaw;
+        assert!(
+            (yaw - expected).abs() < 0.1,
+            "yaw {yaw}, expected {expected}"
+        );
+    }
+
+    /// Asserts that a `LookAt::Target` that names a camera makes the body's
+    /// gaze yaw turn toward the camera's position.
+    ///
+    /// Case: an app points a body-tracking avatar at a camera that stands off
+    /// to the side of the avatar.
+    #[test]
+    fn a_camera_target_turns_the_body() {
+        let mut app = test_app();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                GlobalTransform::from_xyz(0.5, 1.5, 2.0),
+            ))
+            .id();
+        let (root, _) = spawn_rig(&mut app, (LookAt::Target(camera), SmoothedGaze::default()));
+        assert_turns_toward_target(&mut app, root);
+    }
+
+    /// Asserts that a `LookAt::Target` that names another `Vrm` makes the
+    /// body's gaze yaw turn toward that avatar's position.
+    ///
+    /// Case: an app makes one body-tracking avatar look at a second avatar that
+    /// stands off to its side.
+    #[test]
+    fn another_vrm_target_turns_the_body() {
+        let mut app = test_app();
+        let other = app
+            .world_mut()
+            .spawn((Vrm, GlobalTransform::from_xyz(0.5, 1.5, 2.0)))
+            .id();
+        let (root, _) = spawn_rig(&mut app, (LookAt::Target(other), SmoothedGaze::default()));
+        assert_turns_toward_target(&mut app, root);
+    }
+
+    /// Asserts that body tracking leaves the smoothed gaze and the head bone
+    /// unchanged when an entity carries a `GazeTarget` but no `LookAt`.
+    ///
+    /// Case: an app turns look-at off for an avatar that still holds a target
+    /// from earlier and is currently looking off to one side.
+    #[test]
+    fn the_body_does_not_move_without_look_at() {
+        let mut app = test_app();
+        let (root, head) = spawn_rig(
+            &mut app,
+            (
+                GazeTarget::new(Vec3::new(1.0, 0.0, 1.0)),
+                SmoothedGaze {
+                    yaw: 45.0,
+                    pitch: 45.0,
+                },
+            ),
+        );
+        let before = *app.world().get::<Transform>(head).unwrap();
+
+        track(&mut app);
+
+        let smoothed = app.world().get::<SmoothedGaze>(root).unwrap();
+        assert_eq!((smoothed.yaw, smoothed.pitch), (45.0, 45.0));
+        assert_eq!(*app.world().get::<Transform>(head).unwrap(), before);
     }
 
     #[test]
@@ -678,72 +905,105 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_bone_state_no_accumulation_without_animation() {
-        // Simulate multiple frames without animation.
-        // The delta should NOT accumulate.
-        let rest = Quat::IDENTITY;
-        let rest_tf = RestTransform(Transform::IDENTITY);
-        let rest_gtf = RestGlobalTransform(GlobalTransform::IDENTITY);
+    /// The head's gaze origin in `spawn_rig`: the head bone, with no offset.
+    const RIG_HEAD_WORLD: Vec3 = Vec3::new(0.0, 1.5, 0.3);
 
-        let gaze = bone_rotation(20.0, 10.0, &rest_tf, &rest_gtf);
-        let mut state = BoneState::default();
-
-        // Frame 1: first initialization
-        let base = rest; // tf.rotation starts at rest
-        let delta = rest.inverse() * gaze;
-        let result1 = compute_additive_rotation(base, rest, gaze);
-        state.base = base;
-        state.last_delta = delta;
-        state.initialized = true;
-
-        // Frame 2: no animation wrote, tf.rotation == base * last_delta == result1
-        let tf_rotation = result1;
-        let expected = state.base * state.last_delta;
-        let anim_changed = tf_rotation.dot(expected).abs() < 0.999;
-        assert!(!anim_changed, "Should detect no animation change");
-
-        let base2 = state.base; // same base
-        let result2 = compute_additive_rotation(base2, rest, gaze);
-        state.last_delta = delta;
-
-        // Results should be identical (no accumulation)
-        let diff = result1.angle_between(result2);
-        assert!(
-            diff < 0.001,
-            "Should not accumulate across frames: diff={diff}"
-        );
+    fn head_yaw_degrees(
+        app: &App,
+        head: Entity,
+    ) -> f32 {
+        let rotation = app.world().get::<Transform>(head).unwrap().rotation;
+        rotation.to_euler(EulerRot::YXZ).0.to_degrees()
     }
 
+    fn set_gaze_target(
+        app: &mut App,
+        root: Entity,
+        target: Vec3,
+    ) {
+        app.world_mut()
+            .entity_mut(root)
+            .insert(GazeTarget::new(target));
+    }
+
+    /// Asserts that, with the default `BodyTracking` smoothing, the head yaw
+    /// settles where the gaze puts it after the gaze swings to the other side,
+    /// rather than drifting short of it.
+    ///
+    /// Case: the user swings the cursor from one side of an avatar's face to
+    /// the other and then holds it still for several seconds.
     #[test]
-    fn test_bone_state_detects_animation_change() {
-        let rest = Quat::IDENTITY;
-        let rest_tf = RestTransform(Transform::IDENTITY);
-        let rest_gtf = RestGlobalTransform(GlobalTransform::IDENTITY);
+    fn output_smoothing_settles_on_the_gaze_without_drift() {
+        let mut app = test_app();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 60.0,
+        )));
+        app.add_systems(Update, track_body_tracking);
+        let (root, head) = spawn_rig(&mut app, (LookAt::Cursor, SmoothedGaze::default()));
+        app.world_mut()
+            .entity_mut(root)
+            .insert(BodyTracking::default());
 
-        let gaze = bone_rotation(15.0, 0.0, &rest_tf, &rest_gtf);
-        let mut state = BoneState::default();
-
-        // Frame 1
-        let delta = rest.inverse() * gaze;
-        let result1 = compute_additive_rotation(rest, rest, gaze);
-        state.base = rest;
-        state.last_delta = delta;
-        state.initialized = true;
-
-        // Frame 2: animation writes a NEW rotation
-        let animated = Quat::from_rotation_x(0.3);
-        let expected = state.base * state.last_delta;
-        let anim_changed = animated.dot(expected).abs() < 0.999;
-        assert!(anim_changed, "Should detect animation change");
-
-        // New base should be the animated rotation
-        let result2 = compute_additive_rotation(animated, rest, gaze);
-        let diff = result2.angle_between(result1);
-        assert!(
-            diff > 0.01,
-            "With animation change, result should differ: diff={diff}"
+        let (sin, cos) = 45_f32.to_radians().sin_cos();
+        set_gaze_target(
+            &mut app,
+            root,
+            RIG_HEAD_WORLD + Vec3::new(sin, 0.0, cos) * 2.0,
         );
+        run_frames(&mut app, 120);
+        set_gaze_target(
+            &mut app,
+            root,
+            RIG_HEAD_WORLD + Vec3::new(-sin, 0.0, cos) * 2.0,
+        );
+        run_frames(&mut app, 600);
+
+        let yaw = head_yaw_degrees(&app, head);
+        assert!((yaw + 18.0).abs() < 0.1, "head yaw {yaw}, expected -18.0");
+    }
+
+    /// Asserts that a small change an animation writes to a bone each frame
+    /// becomes the new base pose, so the head follows the animation with the
+    /// same gaze rotation applied on top.
+    ///
+    /// Case: an animation nods the avatar's head by half a degree per frame
+    /// while the avatar looks toward a cursor that stays off to one side.
+    #[test]
+    fn small_animation_changes_become_the_new_base() {
+        let mut app = test_app();
+        app.add_systems(
+            Update,
+            (
+                |mut frame: Local<u32>, mut tfs: Query<&mut Transform, With<RestTransform>>| {
+                    *frame += 1;
+                    for mut tf in &mut tfs {
+                        tf.rotation = Quat::from_rotation_x((*frame as f32 * 0.5).to_radians());
+                    }
+                },
+                track_body_tracking,
+            )
+                .chain(),
+        );
+        let (root, head) = spawn_rig(&mut app, (LookAt::Cursor, SmoothedGaze::default()));
+        set_gaze_target(&mut app, root, RIG_HEAD_WORLD + Vec3::new(0.5, 0.0, 2.0));
+        let anim = |k: u32| Quat::from_rotation_x((k as f32 * 0.5).to_radians());
+
+        app.update();
+        let delta = anim(1).inverse() * rotation(&app, head);
+        assert!(
+            delta.angle_between(Quat::IDENTITY) > 1.0_f32.to_radians(),
+            "the gaze delta {delta} must be non-identity for this test to discriminate"
+        );
+
+        for k in 2..=10 {
+            app.update();
+            let expected = anim(k) * delta;
+            let actual = rotation(&app, head);
+            assert!(
+                rotation_is(actual, expected),
+                "frame {k}: head rotation {actual}, expected {expected}"
+            );
+        }
     }
 
     #[test]
@@ -991,5 +1251,174 @@ mod tests {
             yaw.abs() < 30.0,
             "Yaw should be moderate for behind-model target: {yaw}"
         );
+    }
+
+    struct TorsoRig {
+        spine: Entity,
+        chest: Entity,
+        head: Entity,
+        left_eye: Entity,
+    }
+
+    const EYE_REST_DEGREES: f32 = 21.8;
+
+    impl TorsoRig {
+        /// `hips -> spine -> chest -> upper_chest -> neck -> head -> eyes`, where
+        /// `upper_chest` is not part of the tracked chain. Rests are pure
+        /// translations and every `GlobalTransform` is composed by hand because
+        /// the test app has no transform propagation.
+        fn spawn(app: &mut App) -> Self {
+            let step = Transform::from_xyz(0.0, 0.1, 0.0);
+            let hips_tf = Transform::from_xyz(0.0, 0.9, 0.0);
+            let head_tf = Transform::from_xyz(0.0, 0.07, 0.0);
+            let left_tf = Transform::from_xyz(0.016, 0.056, 0.019)
+                .with_rotation(Quat::from_rotation_y(EYE_REST_DEGREES.to_radians()));
+            let right_tf = Transform::from_xyz(-0.016, 0.056, 0.019)
+                .with_rotation(Quat::from_rotation_y(-EYE_REST_DEGREES.to_radians()));
+
+            let hips_gtf = GlobalTransform::from(hips_tf);
+            let spine_gtf = hips_gtf.mul_transform(step);
+            let chest_gtf = spine_gtf.mul_transform(step);
+            let upper_chest_gtf = chest_gtf.mul_transform(step);
+            let neck_gtf = upper_chest_gtf.mul_transform(step);
+            let head_gtf = neck_gtf.mul_transform(head_tf);
+            let gaze_origin = head_gtf.translation() + Vec3::new(0.0, 0.06, 0.0);
+
+            let range = |max, scale| RangeMap {
+                input_max_value: max,
+                output_scale: scale,
+            };
+            let root = app
+                .world_mut()
+                .spawn((
+                    Vrm,
+                    LookAt::Cursor,
+                    Transform::IDENTITY,
+                    GlobalTransform::IDENTITY,
+                    GazeTarget::new(gaze_origin + Vec3::new(0.3, 0.0, 1.0)),
+                    LookAtProperties {
+                        offset_from_head_bone: [0.0, 0.06, 0.0],
+                        range_map_horizontal_inner: range(90.0, 8.0),
+                        range_map_horizontal_outer: range(90.0, 12.0),
+                        range_map_vertical_down: range(90.0, 10.0),
+                        range_map_vertical_up: range(90.0, 10.0),
+                        r#type: LookAtType::Bone,
+                    },
+                    BodyTracking {
+                        smoothing: 0.0,
+                        output_smoothing: 0.0,
+                        ..default()
+                    },
+                    SmoothedGaze::default(),
+                ))
+                .id();
+            let hips = app
+                .world_mut()
+                .spawn((hips_tf, hips_gtf, ChildOf(root)))
+                .id();
+            let mut bone = |tf: Transform, gtf: GlobalTransform, parent: Entity| {
+                app.world_mut()
+                    .spawn((
+                        tf,
+                        gtf,
+                        ChildOf(parent),
+                        RestTransform(tf),
+                        RestGlobalTransform(gtf),
+                    ))
+                    .id()
+            };
+            let spine = bone(step, spine_gtf, hips);
+            let chest = bone(step, chest_gtf, spine);
+            let upper_chest = bone(step, upper_chest_gtf, chest);
+            let neck = bone(step, neck_gtf, upper_chest);
+            let head = bone(head_tf, head_gtf, neck);
+            let mut eye = |local: Transform| {
+                app.world_mut()
+                    .spawn((
+                        Transform::IDENTITY,
+                        GlobalTransform::IDENTITY,
+                        ChildOf(head),
+                        RestTransform(local),
+                        RestGlobalTransform(head_gtf.mul_transform(local)),
+                    ))
+                    .id()
+            };
+            let left_eye = eye(left_tf);
+            let right_eye = eye(right_tf);
+            app.world_mut().entity_mut(root).insert((
+                SpineBoneEntity(spine),
+                ChestBoneEntity(chest),
+                NeckBoneEntity(neck),
+                HeadBoneEntity(head),
+                LeftEyeBoneEntity(left_eye),
+                RightEyeBoneEntity(right_eye),
+            ));
+            Self {
+                spine,
+                chest,
+                head,
+                left_eye,
+            }
+        }
+    }
+
+    fn assert_head_yaw_and_centred_eyes(
+        app: &App,
+        rig: &TorsoRig,
+    ) {
+        let head = app.world().get::<GlobalTransform>(rig.head).unwrap();
+        let (yaw, _, _) = head.rotation().to_euler(EulerRot::YXZ);
+        let expected = 0.3_f32.atan2(1.0).to_degrees();
+        assert!(
+            (yaw.to_degrees() - expected).abs() < 0.3,
+            "head yaw {} expected {expected}",
+            yaw.to_degrees()
+        );
+        let left = app.world().get::<Transform>(rig.left_eye).unwrap().rotation;
+        let rest = Quat::from_rotation_y(EYE_REST_DEGREES.to_radians());
+        let deviation = left.angle_between(rest).to_degrees();
+        assert!(deviation < 0.2, "left eye deviates {deviation} degrees");
+    }
+
+    /// Asserts that an upper chest bone between the chest and the neck carries
+    /// the torso turn of the current frame, so the head faces the target and
+    /// the eyes stay centred on the first frame.
+    ///
+    /// Case: an app tracks the cursor with a model that has an `upperChest`
+    /// bone between `chest` and `neck`, and the cursor is off to the side of
+    /// the face.
+    #[test]
+    fn an_upper_chest_between_chest_and_neck_carries_this_frames_torso_turn() {
+        let mut app = test_app();
+        let rig = TorsoRig::spawn(&mut app);
+        app.add_systems(Update, (track_body_tracking, track_looking_target).chain());
+        app.update();
+        assert_head_yaw_and_centred_eyes(&app, &rig);
+    }
+
+    /// Asserts that the head keeps facing the target and the eyes stay centred
+    /// on every frame while an animation rewrites the spine and chest rotations
+    /// each frame.
+    ///
+    /// Case: an animation resets the avatar's torso pose every frame while the
+    /// avatar's body and eyes track a cursor that is off to the side.
+    #[test]
+    fn an_animated_torso_still_leaves_the_eyes_centred() {
+        let mut app = test_app();
+        let rig = TorsoRig::spawn(&mut app);
+        let (spine, chest) = (rig.spine, rig.chest);
+        let animate = move |mut transforms: Query<&mut Transform>| {
+            for bone in [spine, chest] {
+                transforms.get_mut(bone).unwrap().rotation = Quat::IDENTITY;
+            }
+        };
+        app.add_systems(
+            Update,
+            (animate, track_body_tracking, track_looking_target).chain(),
+        );
+        for _ in 0..3 {
+            app.update();
+            assert_head_yaw_and_centred_eyes(&app, &rig);
+        }
     }
 }

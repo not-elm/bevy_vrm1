@@ -4,7 +4,7 @@ use crate::vrm::instance::{
     PendingVrmScene, VrmGeneration, VrmHandle, VrmInstanceState, VrmSceneRoot, instance_entities,
     remove_model_name, remove_root_data,
 };
-use crate::vrm::look_at::LookAt;
+use crate::vrm::look_at::{CursorGazeDepth, GazeTarget, LookAt};
 use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
 use crate::vrm::{Initialized, RestGlobalTransform, RestTransform, Vrm, VrmBone};
 use crate::vrma::{VrmAnimationGraphState, Vrma, VrmaHandle};
@@ -245,6 +245,7 @@ fn strip_raw_root(
                 LookAt,
                 BodyTracking,
                 SmoothedGaze,
+                CursorGazeDepth,
             ),
             (
                 VrmNodeIndex,
@@ -521,6 +522,8 @@ mod tests {
             LookAt::Cursor,
             BodyTracking::default(),
             SmoothedGaze::default(),
+            GazeTarget::new(Vec3::ZERO),
+            CursorGazeDepth(0.5),
             HipsBoneEntity(hips),
         ));
 
@@ -540,6 +543,8 @@ mod tests {
             LookAt,
             BodyTracking,
             SmoothedGaze,
+            GazeTarget,
+            CursorGazeDepth,
             HipsBoneEntity,
         );
         assert!(world.get_entity(hips).is_ok());
@@ -561,6 +566,8 @@ mod tests {
                 Name::new("avatar"),
                 Transform::from_xyz(1.0, 2.0, 3.0),
                 LookAt::Cursor,
+                CursorGazeDepth(0.5),
+                GazeTarget::new(Vec3::ZERO),
             ))
             .id();
         app.world_mut().entity_mut(vrm).insert((
@@ -593,6 +600,14 @@ mod tests {
         );
         assert!(world.get::<Transform>(vrm).is_some(), "placement is kept");
         assert!(world.get::<LookAt>(vrm).is_some(), "`LookAt` is kept");
+        assert!(
+            world.get::<CursorGazeDepth>(vrm).is_some(),
+            "`CursorGazeDepth` is user-owned and kept"
+        );
+        assert!(
+            world.get::<GazeTarget>(vrm).is_none(),
+            "`GazeTarget` is runtime-owned and removed"
+        );
         assert_all_removed!(
             world.entity(vrm),
             Vrm,

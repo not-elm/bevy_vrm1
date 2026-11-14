@@ -1,6 +1,7 @@
 //! The world-space point the avatar looks at, and how the cursor produces it.
 
-use crate::vrm::look_at::cursor::CursorRay;
+use crate::prelude::*;
+use crate::vrm::look_at::cursor::{CursorRay, CursorRayThisFrame};
 use bevy::prelude::*;
 
 /// How far in front of the face, toward the camera, `LookAt::Cursor` places the cursor (metres).
@@ -24,8 +25,6 @@ const DEFAULT_CURSOR_DEPTH: f32 = 1.0;
 /// Do not insert it yourself.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Reflect)]
 #[reflect(Component)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct GazeTarget {
     position: Vec3,
 }
@@ -63,12 +62,202 @@ pub(crate) fn cursor_gaze_target(
     Some(point + *cursor.camera_back * depth)
 }
 
+/// Resolves `LookAt` into the shared [`GazeTarget`] once per frame.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct GazeResolveSet;
+
+/// Writes each avatar's [`GazeTarget`] from its `LookAt`.
+/// When the point cannot be resolved this frame, the previous one is kept.
+pub(crate) fn resolve_gaze_target(
+    mut commands: Commands,
+    cursor: Res<CursorRayThisFrame>,
+    mut vrms: Query<(
+        Entity,
+        &LookAt,
+        &LookAtProperties,
+        &HeadBoneEntity,
+        Option<&CursorGazeDepth>,
+        Option<&mut GazeTarget>,
+    )>,
+    stale: Query<Entity, (With<GazeTarget>, Without<LookAt>)>,
+    global_transforms: Query<&GlobalTransform>,
+) {
+    for (vrm, look_at, properties, head, depth, gaze) in &mut vrms {
+        let position = match look_at {
+            LookAt::Cursor => {
+                let (Some(cursor), Ok(head_gtf)) =
+                    (cursor.0.as_ref(), global_transforms.get(head.0))
+                else {
+                    continue;
+                };
+                let origin = head_gtf.transform_point(Vec3::from(properties.offset_from_head_bone));
+                cursor_gaze_target(cursor, origin, effective_cursor_depth(depth))
+            }
+            LookAt::Target(target) => global_transforms
+                .get(*target)
+                .ok()
+                .map(GlobalTransform::translation),
+        };
+        let Some(position) = position else {
+            continue;
+        };
+        match gaze {
+            Some(mut gaze) => {
+                gaze.set_if_neq(GazeTarget::new(position));
+            }
+            None => {
+                commands.entity(vrm).try_insert(GazeTarget::new(position));
+            }
+        }
+    }
+    for entity in &stale {
+        commands.entity(entity).try_remove::<GazeTarget>();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prelude::*;
     use crate::vrm::look_at::calc_yaw_pitch;
-    use crate::vrm::look_at::cursor::CursorRay;
+    use crate::vrm::look_at::cursor::{CursorRay, CursorRayThisFrame};
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
+
+    fn spawn_avatar(
+        app: &mut App,
+        head_at: Vec3,
+        look_at: LookAt,
+    ) -> Entity {
+        app.init_resource::<CursorRayThisFrame>();
+        let head = app
+            .world_mut()
+            .spawn(GlobalTransform::from_translation(head_at))
+            .id();
+        app.world_mut()
+            .spawn((
+                look_at,
+                LookAtProperties {
+                    offset_from_head_bone: [0.0; 3],
+                    ..default()
+                },
+                HeadBoneEntity(head),
+            ))
+            .id()
+    }
+
+    fn resolve(app: &mut App) {
+        app.world_mut()
+            .run_system_once(resolve_gaze_target)
+            .unwrap();
+    }
+
+    fn position_of(
+        app: &App,
+        vrm: Entity,
+    ) -> Option<Vec3> {
+        app.world().get::<GazeTarget>(vrm).map(GazeTarget::position)
+    }
+
+    fn cursor_ray() -> CursorRay {
+        CursorRay {
+            ray: Ray3d::new(Vec3::new(0.1, 1.3, 20.0), Dir3::NEG_Z),
+            camera_back: Dir3::Z,
+        }
+    }
+
+    #[test]
+    fn a_target_entity_becomes_the_gaze_target() {
+        let mut app = App::new();
+        let target = app
+            .world_mut()
+            .spawn(GlobalTransform::from_translation(Vec3::new(1.0, 2.0, 3.0)))
+            .id();
+        let vrm = spawn_avatar(&mut app, Vec3::ZERO, LookAt::Target(target));
+        resolve(&mut app);
+        assert_eq!(position_of(&app, vrm), Some(Vec3::new(1.0, 2.0, 3.0)));
+    }
+
+    #[test]
+    fn a_camera_or_another_vrm_can_be_the_target() {
+        let mut app = App::new();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                GlobalTransform::from_translation(Vec3::new(0.0, 1.0, 5.0)),
+            ))
+            .id();
+        let other = app
+            .world_mut()
+            .spawn((
+                Vrm,
+                GlobalTransform::from_translation(Vec3::new(4.0, 0.0, 0.0)),
+            ))
+            .id();
+        let a = spawn_avatar(&mut app, Vec3::ZERO, LookAt::Target(camera));
+        let b = spawn_avatar(&mut app, Vec3::ZERO, LookAt::Target(other));
+        resolve(&mut app);
+        assert_eq!(position_of(&app, a), Some(Vec3::new(0.0, 1.0, 5.0)));
+        assert_eq!(position_of(&app, b), Some(Vec3::new(4.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn the_cursor_ray_is_placed_in_front_of_each_avatar() {
+        let mut app = App::new();
+        let near = spawn_avatar(&mut app, Vec3::new(0.0, 1.3, 0.0), LookAt::Cursor);
+        let far = spawn_avatar(&mut app, Vec3::new(0.0, 1.3, -2.0), LookAt::Cursor);
+        app.world_mut().entity_mut(far).insert(CursorGazeDepth(0.5));
+        app.insert_resource(CursorRayThisFrame(Some(cursor_ray())));
+        resolve(&mut app);
+        assert!(
+            position_of(&app, near)
+                .unwrap()
+                .abs_diff_eq(Vec3::new(0.1, 1.3, 1.0), 1e-5)
+        );
+        assert!(
+            position_of(&app, far)
+                .unwrap()
+                .abs_diff_eq(Vec3::new(0.1, 1.3, -1.5), 1e-5)
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_target_keeps_the_last_point() {
+        let mut app = App::new();
+        let target = app
+            .world_mut()
+            .spawn(GlobalTransform::from_translation(Vec3::new(1.0, 2.0, 3.0)))
+            .id();
+        let vrm = spawn_avatar(&mut app, Vec3::ZERO, LookAt::Target(target));
+        resolve(&mut app);
+        app.world_mut().despawn(target);
+        resolve(&mut app);
+        assert_eq!(position_of(&app, vrm), Some(Vec3::new(1.0, 2.0, 3.0)));
+
+        let cursor_vrm = spawn_avatar(&mut app, Vec3::new(0.0, 1.3, 0.0), LookAt::Cursor);
+        app.insert_resource(CursorRayThisFrame(Some(cursor_ray())));
+        resolve(&mut app);
+        let before = position_of(&app, cursor_vrm).unwrap();
+        app.insert_resource(CursorRayThisFrame(None));
+        resolve(&mut app);
+        assert_eq!(position_of(&app, cursor_vrm), Some(before));
+    }
+
+    #[test]
+    fn removing_look_at_removes_the_gaze_target() {
+        let mut app = App::new();
+        let target = app
+            .world_mut()
+            .spawn(GlobalTransform::from_translation(Vec3::ONE))
+            .id();
+        let vrm = spawn_avatar(&mut app, Vec3::ZERO, LookAt::Target(target));
+        resolve(&mut app);
+        assert!(position_of(&app, vrm).is_some());
+        app.world_mut().entity_mut(vrm).remove::<LookAt>();
+        resolve(&mut app);
+        assert!(position_of(&app, vrm).is_none());
+    }
 
     fn front_cursor(
         x: f32,

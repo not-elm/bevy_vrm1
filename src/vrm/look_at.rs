@@ -11,6 +11,9 @@ use bevy::window::Window;
 pub(crate) mod cursor;
 pub(crate) mod gaze_target;
 
+use cursor::{CursorRayThisFrame, update_cursor_ray};
+use gaze_target::{GazeResolveSet, resolve_gaze_target};
+
 pub use gaze_target::{CursorGazeDepth, GazeTarget};
 
 /// Controls what the VRM model looks at.
@@ -54,7 +57,20 @@ impl Plugin for LookAtPlugin {
         &self,
         app: &mut App,
     ) {
-        app.register_type::<LookAt>()
+        app.init_resource::<CursorRayThisFrame>()
+            .configure_sets(
+                PostUpdate,
+                GazeResolveSet
+                    .in_set(VrmSystemSets::GazeControl)
+                    .after(VrmSystemSets::PropagateAfterConstraints),
+            )
+            .add_systems(
+                PostUpdate,
+                (update_cursor_ray, resolve_gaze_target)
+                    .chain()
+                    .in_set(GazeResolveSet),
+            )
+            .register_type::<LookAt>()
             .register_type::<CursorGazeDepth>()
             .register_type::<GazeTarget>()
             .register_type::<LookAtProperties>()
@@ -63,7 +79,8 @@ impl Plugin for LookAtPlugin {
                 PostUpdate,
                 track_looking_target
                     .in_set(VrmSystemSets::GazeControl)
-                    .after(VrmSystemSets::PropagateAfterConstraints),
+                    .after(VrmSystemSets::PropagateAfterConstraints)
+                    .after(GazeResolveSet),
             );
     }
 }

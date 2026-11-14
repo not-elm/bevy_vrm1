@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use crate::system_set::VrmSystemSets;
+use crate::vrm::look_at::gaze_target::GazeResolveSet;
 use crate::vrm::look_at::{calc_yaw_pitch, find_cursor_world_position, track_looking_target};
 use crate::vrm::{RestGlobalTransform, RestTransform};
 use bevy::app::{App, Plugin};
@@ -124,6 +125,7 @@ impl Plugin for BodyTrackingPlugin {
                 track_body_tracking
                     .in_set(VrmSystemSets::GazeControl)
                     .after(VrmSystemSets::PropagateAfterConstraints)
+                    .after(GazeResolveSet)
                     .before(track_looking_target)
                     .run_if(any_with_component::<BodyTracking>),
             );

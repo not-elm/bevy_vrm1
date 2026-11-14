@@ -108,7 +108,7 @@ pub(crate) fn root_rest_rotation(
 
 /// The VRM 1.0 look-at space: it follows the head, but its axes stay aligned
 /// with the model's rest frame, so an unrotated model looks along `+Z`.
-pub(crate) fn eye_look_at_space(
+fn eye_look_at_space(
     head_gtf: &GlobalTransform,
     head_rest: &RestGlobalTransform,
     root_rest_rot: Quat,
@@ -330,6 +330,7 @@ mod tests {
     use super::*;
     use crate::success;
     use crate::tests::{TestResult, rotation_is, test_app};
+    use crate::vrm::body_tracking::body_look_at_space;
     use bevy::ecs::system::RunSystemOnce;
 
     fn expression_properties() -> LookAtProperties {
@@ -620,5 +621,40 @@ mod tests {
                 "eye was rewritten: {rot:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_body_origin_matches_the_rest_eye_origin() {
+        let head_rest = RestGlobalTransform(GlobalTransform::from(
+            Transform::from_xyz(0.0, 1.4, 0.0)
+                .with_rotation(Quat::from_rotation_x(90_f32.to_radians())),
+        ));
+        let offset = Vec3::new(0.0, 0.06, 0.0);
+        let head = Vec3::new(0.0, 1.4, 0.0);
+        let body = body_look_at_space(
+            head,
+            &GlobalTransform::IDENTITY,
+            Quat::IDENTITY,
+            head_rest.rotation(),
+            offset,
+        );
+        assert!(
+            body.translation()
+                .abs_diff_eq(Vec3::new(0.0, 1.4, 0.06), 1e-5)
+        );
+        let eye = eye_look_at_space(&head_rest.0, &head_rest, Quat::IDENTITY, offset);
+        assert!(body.translation().abs_diff_eq(eye.translation(), 1e-5));
+        let scaled = body_look_at_space(
+            head,
+            &GlobalTransform::from_scale(Vec3::splat(2.0)),
+            Quat::IDENTITY,
+            head_rest.rotation(),
+            offset,
+        );
+        assert!(
+            scaled
+                .translation()
+                .abs_diff_eq(Vec3::new(0.0, 1.4, 0.12), 1e-5)
+        );
     }
 }

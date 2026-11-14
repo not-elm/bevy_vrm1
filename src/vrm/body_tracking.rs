@@ -489,7 +489,6 @@ mod tests {
     use super::*;
     use crate::tests::{rotation, rotation_is, run_frames, test_app};
     use crate::vrm::look_at::cursor::CursorRayThisFrame;
-    use crate::vrm::look_at::eye_look_at_space;
     use crate::vrm::look_at::gaze_target::resolve_gaze_target;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::time::TimeUpdateStrategy;
@@ -705,41 +704,6 @@ mod tests {
         let smoothed = app.world().get::<SmoothedGaze>(root).unwrap();
         assert!(smoothed.pitch.abs() < 0.01, "pitch {}", smoothed.pitch);
         assert!(smoothed.yaw.abs() < 0.01, "yaw {}", smoothed.yaw);
-    }
-
-    #[test]
-    fn the_body_origin_matches_the_rest_eye_origin() {
-        let head_rest = RestGlobalTransform(GlobalTransform::from(
-            Transform::from_xyz(0.0, 1.4, 0.0)
-                .with_rotation(Quat::from_rotation_x(90_f32.to_radians())),
-        ));
-        let offset = Vec3::new(0.0, 0.06, 0.0);
-        let head = Vec3::new(0.0, 1.4, 0.0);
-        let body = body_look_at_space(
-            head,
-            &GlobalTransform::IDENTITY,
-            Quat::IDENTITY,
-            head_rest.rotation(),
-            offset,
-        );
-        assert!(
-            body.translation()
-                .abs_diff_eq(Vec3::new(0.0, 1.4, 0.06), 1e-5)
-        );
-        let eye = eye_look_at_space(&head_rest.0, &head_rest, Quat::IDENTITY, offset);
-        assert!(body.translation().abs_diff_eq(eye.translation(), 1e-5));
-        let scaled = body_look_at_space(
-            head,
-            &GlobalTransform::from_scale(Vec3::splat(2.0)),
-            Quat::IDENTITY,
-            head_rest.rotation(),
-            offset,
-        );
-        assert!(
-            scaled
-                .translation()
-                .abs_diff_eq(Vec3::new(0.0, 1.4, 0.12), 1e-5)
-        );
     }
 
     fn assert_turns_toward_target(

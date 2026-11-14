@@ -51,7 +51,7 @@ pub mod prelude {
         gltf::prelude::*,
         humanoid_bone::prelude::*,
         instance::VrmHandle,
-        look_at::LookAt,
+        look_at::{CursorGazeDepth, GazeTarget, LookAt},
         mtoon::prelude::*,
         spring_bone::{SpringJointProps, SpringJoints, SpringRoot},
     };

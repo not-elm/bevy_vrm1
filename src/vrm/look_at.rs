@@ -9,6 +9,9 @@ use bevy::prelude::*;
 use bevy::window::Window;
 
 pub(crate) mod cursor;
+pub(crate) mod gaze_target;
+
+pub use gaze_target::{CursorGazeDepth, GazeTarget};
 
 /// Controls what the VRM model looks at.
 /// This component should be inserted into the root entity of the VRM.
@@ -52,6 +55,8 @@ impl Plugin for LookAtPlugin {
         app: &mut App,
     ) {
         app.register_type::<LookAt>()
+            .register_type::<CursorGazeDepth>()
+            .register_type::<GazeTarget>()
             .register_type::<LookAtProperties>()
             .register_type::<LookAtType>()
             .add_systems(

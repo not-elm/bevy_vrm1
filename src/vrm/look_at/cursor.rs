@@ -78,6 +78,21 @@ pub(crate) fn fallback_window_cursor_position(
     None
 }
 
+/// Converts a client-area physical position to window logical coordinates,
+/// returning `None` when it lies outside the window (edges inclusive).
+pub(crate) fn client_to_window_logical(
+    client_physical: Vec2,
+    scale_factor: f32,
+    logical_size: Vec2,
+) -> Option<Vec2> {
+    let logical = client_physical / scale_factor;
+    (logical.x >= 0.0
+        && logical.y >= 0.0
+        && logical.x <= logical_size.x
+        && logical.y <= logical_size.y)
+        .then_some(logical)
+}
+
 #[cfg(target_os = "windows")]
 fn client_cursor_physical(handle: &RawHandleWrapper) -> Option<Vec2> {
     use raw_window_handle::RawWindowHandle;
@@ -100,21 +115,6 @@ fn client_cursor_physical(handle: &RawHandleWrapper) -> Option<Vec2> {
         }
     }
     Some(Vec2::new(point.x as f32, point.y as f32))
-}
-
-/// Converts a client-area physical position to window logical coordinates,
-/// returning `None` when it lies outside the window (edges inclusive).
-pub(crate) fn client_to_window_logical(
-    client_physical: Vec2,
-    scale_factor: f32,
-    logical_size: Vec2,
-) -> Option<Vec2> {
-    let logical = client_physical / scale_factor;
-    (logical.x >= 0.0
-        && logical.y >= 0.0
-        && logical.x <= logical_size.x
-        && logical.y <= logical_size.y)
-        .then_some(logical)
 }
 
 #[cfg(test)]

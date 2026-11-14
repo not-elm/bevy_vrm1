@@ -93,14 +93,6 @@ impl Default for BodyTracking {
     }
 }
 
-fn default_output_smoothing() -> f32 {
-    25.0
-}
-
-fn default_reference_depth() -> f32 {
-    1.0
-}
-
 /// Smoothed gaze state stored on the VRM root entity.
 /// Inserted automatically when `BodyTracking` is present.
 #[derive(Component, Debug, Clone, Reflect, Default)]
@@ -132,6 +124,69 @@ impl Plugin for BodyTrackingPlugin {
                     .run_if(any_with_component::<BodyTracking>),
             );
     }
+}
+
+/// Per-bone state for tracking animation changes between frames.
+#[derive(Debug, Clone)]
+struct BoneState {
+    /// The bone rotation before body tracking was applied (from animation or rest).
+    base: Quat,
+    /// Whether state has been initialized.
+    initialized: bool,
+    /// The final output rotation from last frame. Used for slerp smoothing and
+    /// to detect animation writes: anything else in `Transform.rotation` was
+    /// written by someone other than us.
+    prev_output: Quat,
+}
+
+impl Default for BoneState {
+    fn default() -> Self {
+        Self {
+            base: Quat::IDENTITY,
+            initialized: false,
+            prev_output: Quat::IDENTITY,
+        }
+    }
+}
+
+/// Bone descriptor used when iterating through the chain.
+struct BoneEntry {
+    entity: Entity,
+    weight: f32,
+    yaw_max: f32,
+    pitch_max: f32,
+}
+
+/// The look-at space in which body tracking measures the gaze.
+///
+/// Its axes follow the avatar root, so the gaze is measured in the avatar's own
+/// frame, and its origin is the rest-pose eye position carried by the head.
+/// Unlike the eye look-at space it ignores the head's current rotation, which body
+/// tracking itself drives, so it is a stable frame.
+pub(crate) fn body_look_at_space(
+    head_translation: Vec3,
+    root_gtf: &GlobalTransform,
+    root_rest_rot: Quat,
+    head_rest_rot: Quat,
+    offset: Vec3,
+) -> GlobalTransform {
+    let head_in_root = root_rest_rot.inverse() * head_rest_rot;
+    // The root's linear part scales along the root's axes, after the offset has
+    // been rotated out of the head's rest frame.
+    let offset_world = root_gtf.affine().transform_vector3(head_in_root * offset);
+    GlobalTransform::from(Transform {
+        translation: head_translation + offset_world,
+        rotation: root_gtf.rotation(),
+        scale: Vec3::ONE,
+    })
+}
+
+fn default_output_smoothing() -> f32 {
+    25.0
+}
+
+fn default_reference_depth() -> f32 {
+    1.0
 }
 
 /// Automatically insert [`SmoothedGaze`] when [`BodyTracking`] is added.
@@ -203,29 +258,6 @@ fn calc_yaw_pitch_clamped(
     (yaw, pitch)
 }
 
-/// Per-bone state for tracking animation changes between frames.
-#[derive(Debug, Clone)]
-struct BoneState {
-    /// The bone rotation before body tracking was applied (from animation or rest).
-    base: Quat,
-    /// Whether state has been initialized.
-    initialized: bool,
-    /// The final output rotation from last frame. Used for slerp smoothing and
-    /// to detect animation writes: anything else in `Transform.rotation` was
-    /// written by someone other than us.
-    prev_output: Quat,
-}
-
-impl Default for BoneState {
-    fn default() -> Self {
-        Self {
-            base: Quat::IDENTITY,
-            initialized: false,
-            prev_output: Quat::IDENTITY,
-        }
-    }
-}
-
 /// Compute additive rotation: apply the gaze delta (relative to rest) on top of
 /// the base (animated) rotation.
 ///
@@ -242,38 +274,6 @@ fn compute_additive_rotation(
 ) -> Quat {
     let delta = rest.inverse() * gaze;
     base * delta
-}
-
-/// Bone descriptor used when iterating through the chain.
-struct BoneEntry {
-    entity: Entity,
-    weight: f32,
-    yaw_max: f32,
-    pitch_max: f32,
-}
-
-/// The look-at space in which body tracking measures the gaze.
-///
-/// Its axes follow the avatar root, so the gaze is measured in the avatar's own
-/// frame, and its origin is the rest-pose eye position carried by the head.
-/// Unlike the eye look-at space it ignores the head's current rotation, which body
-/// tracking itself drives, so it is a stable frame.
-pub(crate) fn body_look_at_space(
-    head_translation: Vec3,
-    root_gtf: &GlobalTransform,
-    root_rest_rot: Quat,
-    head_rest_rot: Quat,
-    offset: Vec3,
-) -> GlobalTransform {
-    let head_in_root = root_rest_rot.inverse() * head_rest_rot;
-    // The root's linear part scales along the root's axes, after the offset has
-    // been rotated out of the head's rest frame.
-    let offset_world = root_gtf.affine().transform_vector3(head_in_root * offset);
-    GlobalTransform::from(Transform {
-        translation: head_translation + offset_world,
-        rotation: root_gtf.rotation(),
-        scale: Vec3::ONE,
-    })
 }
 
 /// Returns the world transform of `entity`'s parent as of this frame.

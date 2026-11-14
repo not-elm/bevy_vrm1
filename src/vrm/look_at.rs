@@ -106,21 +106,6 @@ pub(crate) fn root_rest_rotation(
         .map_or(Quat::IDENTITY, |(_, rest_gtf)| rest_gtf.rotation())
 }
 
-/// The VRM 1.0 look-at space: it follows the head, but its axes stay aligned
-/// with the model's rest frame, so an unrotated model looks along `+Z`.
-fn eye_look_at_space(
-    head_gtf: &GlobalTransform,
-    head_rest: &RestGlobalTransform,
-    root_rest_rot: Quat,
-    offset: Vec3,
-) -> GlobalTransform {
-    GlobalTransform::from(Transform {
-        translation: head_gtf.transform_point(offset),
-        rotation: head_gtf.rotation() * head_rest.rotation().inverse() * root_rest_rot,
-        scale: Vec3::ONE,
-    })
-}
-
 pub(crate) fn track_looking_target(
     mut commands: Commands,
     vrms: Query<
@@ -176,6 +161,38 @@ pub(crate) fn track_looking_target(
         });
 }
 
+pub(crate) fn calc_yaw_pitch(
+    look_at_space: &GlobalTransform,
+    target: Vec3,
+) -> (f32, f32) {
+    let local_target = look_at_space.to_matrix().inverse().transform_point3(target);
+
+    let z = local_target.dot(Vec3::Z);
+    let x = local_target.dot(Vec3::X);
+    let yaw = (x.atan2(z)).to_degrees();
+
+    let xz = (x * x + z * z).sqrt();
+    let y = local_target.dot(Vec3::Y);
+    let pitch = (-y.atan2(xz)).to_degrees();
+
+    (yaw, pitch)
+}
+
+/// The VRM 1.0 look-at space: it follows the head, but its axes stay aligned
+/// with the model's rest frame, so an unrotated model looks along `+Z`.
+fn eye_look_at_space(
+    head_gtf: &GlobalTransform,
+    head_rest: &RestGlobalTransform,
+    root_rest_rot: Quat,
+    offset: Vec3,
+) -> GlobalTransform {
+    GlobalTransform::from(Transform {
+        translation: head_gtf.transform_point(offset),
+        rotation: head_gtf.rotation() * head_rest.rotation().inverse() * root_rest_rot,
+        scale: Vec3::ONE,
+    })
+}
+
 fn apply_bone(
     commands: &mut Commands,
     transforms: &Query<&Transform>,
@@ -216,23 +233,6 @@ fn apply_bone(
     );
     commands.entity(left_eye.0).insert(applied_left_eye_tf);
     commands.entity(right_eye.0).insert(applied_right_eye_tf);
-}
-
-pub(crate) fn calc_yaw_pitch(
-    look_at_space: &GlobalTransform,
-    target: Vec3,
-) -> (f32, f32) {
-    let local_target = look_at_space.to_matrix().inverse().transform_point3(target);
-
-    let z = local_target.dot(Vec3::Z);
-    let x = local_target.dot(Vec3::X);
-    let yaw = (x.atan2(z)).to_degrees();
-
-    let xz = (x * x + z * z).sqrt();
-    let y = local_target.dot(Vec3::Y);
-    let pitch = (-y.atan2(xz)).to_degrees();
-
-    (yaw, pitch)
 }
 
 fn apply_left_eye_bone(

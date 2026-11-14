@@ -4,6 +4,7 @@
 use crate::error::vrm_warn;
 use crate::prelude::*;
 use crate::system_set::VrmSystemSets;
+use crate::vrm::root_rest_rotation;
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 
@@ -90,20 +91,6 @@ impl Plugin for LookAtPlugin {
                     .after(GazeResolveSet),
             );
     }
-}
-
-/// The rotation of the model root's rest pose, or identity when it has none.
-///
-/// [`RestGlobalTransform`] is relative to the entity that owns the scene, so
-/// the rest rotation of the root (for example the rotation of a raw-spawned
-/// scene root) has to be re-applied when measuring in world space.
-pub(crate) fn root_rest_rotation(
-    rests: &Query<(&RestTransform, &RestGlobalTransform)>,
-    root: Entity,
-) -> Quat {
-    rests
-        .get(root)
-        .map_or(Quat::IDENTITY, |(_, rest_gtf)| rest_gtf.rotation())
 }
 
 pub(crate) fn track_looking_target(

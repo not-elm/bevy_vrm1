@@ -197,6 +197,23 @@ impl Plugin for VrmPlugin {
     }
 }
 
+/// The rotation of the model root's rest pose, or identity when it has none.
+///
+/// [`RestGlobalTransform`] is relative to the entity that owns the scene, so
+/// the rest rotation of the root (for example the rotation of a raw-spawned
+/// scene root) has to be re-applied when measuring in world space.
+///
+/// Private to this module so that only its child modules (`look_at` and
+/// `body_tracking`) can use it.
+fn root_rest_rotation(
+    rests: &Query<(&RestTransform, &RestGlobalTransform)>,
+    root: Entity,
+) -> Quat {
+    rests
+        .get(root)
+        .map_or(Quat::IDENTITY, |(_, rest_gtf)| rest_gtf.rotation())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

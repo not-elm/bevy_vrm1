@@ -1,8 +1,8 @@
 use crate::prelude::*;
 use crate::system_set::VrmSystemSets;
 use crate::vrm::look_at::gaze_target::GazeResolveSet;
-use crate::vrm::look_at::{calc_yaw_pitch, root_rest_rotation, track_looking_target};
-use crate::vrm::{RestGlobalTransform, RestTransform};
+use crate::vrm::look_at::{calc_yaw_pitch, track_looking_target};
+use crate::vrm::{RestGlobalTransform, RestTransform, root_rest_rotation};
 use bevy::app::{App, Plugin};
 use bevy::prelude::*;
 use std::collections::HashMap;

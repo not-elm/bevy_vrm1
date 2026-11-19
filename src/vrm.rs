@@ -133,6 +133,21 @@ marker_component!(
     /// This component is automatically inserted after the [`VrmHandle`](crate::prelude::VrmHandle) is loaded.
     Initialized
 );
+
+#[cfg(test)]
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SkipPostSpringPropagation;
+
+#[cfg(test)]
+fn post_spring_propagation_enabled(skip: Option<Res<SkipPostSpringPropagation>>) -> bool {
+    skip.is_none()
+}
+
+#[cfg(not(test))]
+fn post_spring_propagation_enabled() -> bool {
+    true
+}
+
 /// The main plugin for VRM support in Bevy.
 ///
 /// Please refer to [`VrmHandle`](crate::prelude::VrmHandle) for more details.
@@ -183,7 +198,8 @@ impl Plugin for VrmPlugin {
                 sync_simple_transforms,
             )
                 .chain()
-                .after(VrmSystemSets::SpringBone),
+                .after(VrmSystemSets::SpringBone)
+                .run_if(post_spring_propagation_enabled),
         );
 
         app.register_type::<Vrm>()
@@ -220,6 +236,7 @@ mod tests {
     use bevy::app::PluginGroupBuilder;
     use bevy::render::RenderPlugin;
     use bevy::render::settings::WgpuSettings;
+    use std::f32::consts::FRAC_PI_2;
 
     fn headless_default_plugins() -> PluginGroupBuilder {
         DefaultPlugins
@@ -297,6 +314,370 @@ mod tests {
             moved,
             "gravity must actually swing the joint for the test to mean anything"
         );
+    }
+
+    struct SpringChainScene {
+        app: App,
+        root: Entity,
+        head: Entity,
+        eye: Entity,
+        joint: Entity,
+        tail: Entity,
+        leaf: Entity,
+    }
+
+    fn spring_chain_scene(skip_post_spring: bool) -> SpringChainScene {
+        use crate::vrm::spring_bone::{
+            SpringCenterNode, SpringColliders, SpringJointProps, SpringJointState, SpringJoints,
+            SpringRoot,
+        };
+        use bevy::time::TimeUpdateStrategy;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins((headless_default_plugins(), VrmPlugin));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            16,
+        )));
+        if skip_post_spring {
+            app.insert_resource(SkipPostSpringPropagation);
+        }
+        app.finish();
+        app.cleanup();
+
+        let props = SpringJointProps {
+            drag_force: 0.0,
+            gravity_dir: Vec3::NEG_X,
+            gravity_power: 50.0,
+            hit_radius: 0.0,
+            stiffness: 0.0,
+        };
+        let rest = Transform::from_xyz(0.0, 1.0, 0.0);
+        let root = app.world_mut().spawn(Transform::default()).id();
+        let head = app.world_mut().spawn((rest, ChildOf(root))).id();
+        let eye = app
+            .world_mut()
+            .spawn((Transform::from_xyz(0.0, 0.1, 0.0), ChildOf(head)))
+            .id();
+        let joint = app.world_mut().spawn((rest, ChildOf(head))).id();
+        let tail = app.world_mut().spawn((rest, ChildOf(joint))).id();
+        let leaf = app.world_mut().spawn((rest, ChildOf(tail))).id();
+        app.world_mut()
+            .entity_mut(joint)
+            .insert((props, SpringJointState::from_rest(Vec3::Y, 1.0, rest)));
+        app.world_mut()
+            .entity_mut(tail)
+            .insert((props, SpringJointState::from_rest(Vec3::Y, 1.0, rest)));
+        app.world_mut().entity_mut(root).insert(SpringRoot {
+            joints: SpringJoints(vec![joint, tail]),
+            colliders: SpringColliders::default(),
+            center_node: SpringCenterNode(None),
+        });
+        SpringChainScene {
+            app,
+            root,
+            head,
+            eye,
+            joint,
+            tail,
+            leaf,
+        }
+    }
+
+    fn install_collider(
+        scene: &mut SpringChainScene,
+        position: Vec3,
+    ) -> Entity {
+        use crate::prelude::{ColliderShape, Sphere};
+        use crate::vrm::spring_bone::{SpringColliders, SpringRoot};
+
+        let collider = scene
+            .app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(position),
+                GlobalTransform::from_translation(position),
+            ))
+            .id();
+        let mut spring_root = scene
+            .app
+            .world()
+            .get::<SpringRoot>(scene.root)
+            .unwrap()
+            .clone();
+        spring_root.colliders = SpringColliders(vec![(
+            collider,
+            ColliderShape::Sphere(Sphere {
+                offset: [0.0; 3],
+                radius: 1.5,
+            }),
+        )]);
+        scene
+            .app
+            .world_mut()
+            .entity_mut(scene.root)
+            .insert(spring_root);
+        collider
+    }
+
+    fn transform(
+        app: &App,
+        entity: Entity,
+    ) -> Transform {
+        *app.world().get::<Transform>(entity).unwrap()
+    }
+
+    fn global_transform(
+        app: &App,
+        entity: Entity,
+    ) -> GlobalTransform {
+        *app.world().get::<GlobalTransform>(entity).unwrap()
+    }
+
+    fn quat_angle(
+        a: Quat,
+        b: Quat,
+    ) -> f32 {
+        2.0 * a.dot(b).abs().clamp(-1.0, 1.0).acos()
+    }
+
+    fn quat_eq(
+        a: Quat,
+        b: Quat,
+    ) -> bool {
+        a.to_array()
+            .iter()
+            .zip(b.to_array())
+            .all(|(x, y)| (x - y).abs() < 1e-4)
+    }
+
+    fn assert_gtf_eq(
+        actual: GlobalTransform,
+        expected: GlobalTransform,
+        label: &str,
+    ) {
+        assert!(
+            actual
+                .translation()
+                .abs_diff_eq(expected.translation(), 1e-4)
+                && quat_eq(actual.rotation(), expected.rotation()),
+            "{label}: actual {actual:?}, expected {expected:?}"
+        );
+    }
+
+    fn assert_child_is_published(
+        app: &App,
+        parent: Entity,
+        child: Entity,
+        label: &str,
+    ) {
+        let expected = global_transform(app, parent).mul_transform(transform(app, child));
+        assert_gtf_eq(global_transform(app, child), expected, label);
+    }
+
+    fn assert_spring_reads_fresh_parent_rotation(skip_post_spring: bool) {
+        let mut moved = spring_chain_scene(skip_post_spring);
+        let mut still = spring_chain_scene(skip_post_spring);
+        moved.app.update();
+        still.app.update();
+        let before = global_transform(&moved.app, moved.head);
+        let rotation = Quat::from_rotation_z(FRAC_PI_2);
+        moved
+            .app
+            .world_mut()
+            .entity_mut(moved.head)
+            .get_mut::<Transform>()
+            .unwrap()
+            .rotation = rotation;
+        moved.app.update();
+        still.app.update();
+
+        let head = global_transform(&moved.app, moved.head);
+        assert!(
+            quat_eq(head.rotation(), rotation),
+            "the parent's GlobalTransform must follow its Transform: {head:?}"
+        );
+        assert!(
+            head.translation().abs_diff_eq(before.translation(), 1e-4),
+            "a pure rotation must not move the parent: {head:?}"
+        );
+        assert_child_is_published(
+            &moved.app,
+            moved.head,
+            moved.joint,
+            "joint after parent rotation",
+        );
+        assert_child_is_published(
+            &moved.app,
+            moved.joint,
+            moved.tail,
+            "tail after parent rotation",
+        );
+        assert!(
+            quat_angle(
+                transform(&moved.app, moved.joint).rotation,
+                transform(&still.app, still.joint).rotation
+            ) > 1e-2,
+            "the parent's new world rotation must reach the joint's spring evaluation"
+        );
+        assert!(
+            quat_angle(
+                transform(&moved.app, moved.tail).rotation,
+                transform(&still.app, still.tail).rotation
+            ) > 1e-2,
+            "the parent's new world rotation must reach the tail's spring evaluation"
+        );
+    }
+
+    fn assert_non_spring_bones_are_fresh(skip_post_spring: bool) {
+        let mut scene = spring_chain_scene(skip_post_spring);
+        scene.app.update();
+        let before_head = global_transform(&scene.app, scene.head);
+        let before_eye = global_transform(&scene.app, scene.eye);
+        scene
+            .app
+            .world_mut()
+            .entity_mut(scene.head)
+            .get_mut::<Transform>()
+            .unwrap()
+            .rotation = Quat::from_rotation_z(FRAC_PI_2);
+        scene.app.update();
+
+        assert_gtf_eq(
+            global_transform(&scene.app, scene.head),
+            GlobalTransform::from(transform(&scene.app, scene.head)),
+            "non-spring head",
+        );
+        assert!(
+            quat_angle(
+                global_transform(&scene.app, scene.head).rotation(),
+                before_head.rotation()
+            ) > 1.0,
+            "the head must publish its new rotation in the same frame"
+        );
+        assert_child_is_published(&scene.app, scene.head, scene.eye, "non-spring eye");
+        assert!(
+            global_transform(&scene.app, scene.eye)
+                .translation()
+                .abs_diff_eq(before_eye.translation(), 1e-4)
+                == false,
+            "the eye's world position must follow the head in the same frame"
+        );
+    }
+
+    #[test]
+    fn without_post_spring_chain_spring_uses_fresh_parent_rotation_on_next_frame() {
+        assert_spring_reads_fresh_parent_rotation(true);
+    }
+
+    #[test]
+    fn with_post_spring_chain_spring_uses_fresh_parent_rotation_on_next_frame() {
+        assert_spring_reads_fresh_parent_rotation(false);
+    }
+
+    #[test]
+    fn without_post_spring_chain_spring_reads_fresh_collider_world_matrix_on_next_frame() {
+        let mut moved = spring_chain_scene(true);
+        let mut still = spring_chain_scene(true);
+        let moved_collider = install_collider(&mut moved, Vec3::new(-0.5, 3.0, 0.0));
+        install_collider(&mut still, Vec3::new(-0.5, 3.0, 0.0));
+        moved.app.update();
+        still.app.update();
+
+        moved
+            .app
+            .world_mut()
+            .entity_mut(moved_collider)
+            .get_mut::<Transform>()
+            .unwrap()
+            .translation = Vec3::new(10.0, 10.0, 10.0);
+        moved.app.update();
+        still.app.update();
+
+        assert_gtf_eq(
+            global_transform(&moved.app, moved_collider),
+            GlobalTransform::from(transform(&moved.app, moved_collider)),
+            "moved collider",
+        );
+        assert!(
+            quat_angle(
+                transform(&moved.app, moved.joint).rotation,
+                transform(&still.app, still.joint).rotation
+            ) > 1e-2,
+            "the spring must react to the collider's new world matrix"
+        );
+    }
+
+    #[test]
+    fn without_post_spring_chain_non_spring_head_and_eye_global_transforms_are_fresh() {
+        assert_non_spring_bones_are_fresh(true);
+    }
+
+    #[test]
+    fn with_post_spring_chain_non_spring_head_and_eye_global_transforms_are_fresh() {
+        assert_non_spring_bones_are_fresh(false);
+    }
+
+    /// The leaf is not a spring joint, so only propagation publishes it; the
+    /// spring step moves its parent after Bevy's propagation has already run.
+    #[test]
+    fn without_post_spring_chain_unsimulated_leaf_global_transform_is_stale_for_the_frame() {
+        let mut scene = spring_chain_scene(true);
+        scene.app.update();
+
+        let actual = global_transform(&scene.app, scene.leaf);
+        let expected = global_transform(&scene.app, scene.tail)
+            .mul_transform(transform(&scene.app, scene.leaf));
+        assert!(
+            !actual
+                .translation()
+                .abs_diff_eq(expected.translation(), 1e-4),
+            "the leaf must lag the spring step: actual {actual:?}, current parent {expected:?}"
+        );
+        assert_child_is_published(&scene.app, scene.joint, scene.tail, "simulated tail");
+
+        let tail_after_first_frame = global_transform(&scene.app, scene.tail);
+        scene.app.update();
+        let actual = global_transform(&scene.app, scene.leaf);
+        let expected = tail_after_first_frame.mul_transform(transform(&scene.app, scene.leaf));
+        assert_gtf_eq(actual, expected, "leaf after the next frame's propagation");
+    }
+
+    #[test]
+    fn with_post_spring_chain_unsimulated_leaf_global_transform_is_fresh() {
+        let mut scene = spring_chain_scene(false);
+        scene.app.update();
+        assert_child_is_published(&scene.app, scene.tail, scene.leaf, "leaf");
+    }
+
+    #[test]
+    fn post_spring_chain_enabled_and_disabled_agree_on_spring_joints_and_non_spring_bones() {
+        let mut enabled = spring_chain_scene(false);
+        let mut disabled = spring_chain_scene(true);
+        for frame in 0..3 {
+            enabled.app.update();
+            disabled.app.update();
+            for ((on, off), label) in [
+                ((enabled.head, disabled.head), "head"),
+                ((enabled.eye, disabled.eye), "eye"),
+                ((enabled.joint, disabled.joint), "joint"),
+                ((enabled.tail, disabled.tail), "tail"),
+            ] {
+                assert_gtf_eq(
+                    global_transform(&disabled.app, off),
+                    global_transform(&enabled.app, on),
+                    &format!("frame {frame} {label} global"),
+                );
+                let enabled_tf = transform(&enabled.app, on);
+                let disabled_tf = transform(&disabled.app, off);
+                assert!(
+                    quat_eq(disabled_tf.rotation, enabled_tf.rotation),
+                    "frame {frame} {label} local rotation: {:?} vs {:?}",
+                    disabled_tf.rotation,
+                    enabled_tf.rotation
+                );
+            }
+        }
     }
 
     /// `VrmPlugin` alone brings the `.vrm` loader; no other plugin is needed.

@@ -33,8 +33,8 @@ use std::path::PathBuf;
 
 pub mod prelude {
     pub use crate::vrm::{
-        Initialized, RestGlobalTransform, RestTransform, RestWorldTransform, Vrm, VrmBone,
-        VrmExpression, VrmPath, VrmPlugin,
+        Initialized, RestGlobalTransform, RestTransform, RestWorldTransform,
+        SkipPostSpringPropagation, Vrm, VrmBone, VrmExpression, VrmPath, VrmPlugin,
         body_tracking::{BodyTracking, SmoothedGaze},
         components::{
             ConstraintExecutionOrder, PendingNodeConstraint, VrmConstraintKind, VrmHeadOnly,
@@ -134,18 +134,29 @@ marker_component!(
     Initialized
 );
 
-#[cfg(test)]
+/// Skips the extra transform propagation chain that `VrmPlugin` runs after
+/// [`VrmSystemSets::SpringBone`].
+///
+/// Insert this resource to avoid paying for that chain when the host already
+/// has a suitable propagation pass of its own, or when nodes below a spring
+/// joint that are not simulated do not need same-frame `GlobalTransform`.
+/// Spring joints publish their own world transforms at the spring step, so
+/// they stay in sync; only unsimulated descendants lag by one frame and catch
+/// up during the next frame's propagation. Without this resource the plugin's
+/// update order is unchanged.
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// # use bevy_vrm1::prelude::*;
+/// let mut app = App::new();
+/// app.insert_resource(SkipPostSpringPropagation);
+/// app.add_plugins((DefaultPlugins, VrmPlugin));
+/// ```
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SkipPostSpringPropagation;
+pub struct SkipPostSpringPropagation;
 
-#[cfg(test)]
 fn post_spring_propagation_enabled(skip: Option<Res<SkipPostSpringPropagation>>) -> bool {
     skip.is_none()
-}
-
-#[cfg(not(test))]
-fn post_spring_propagation_enabled() -> bool {
-    true
 }
 
 /// The main plugin for VRM support in Bevy.
@@ -233,6 +244,7 @@ fn root_rest_rotation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prelude::SkipPostSpringPropagation;
     use bevy::app::PluginGroupBuilder;
     use bevy::render::RenderPlugin;
     use bevy::render::settings::WgpuSettings;
@@ -557,10 +569,9 @@ mod tests {
         );
         assert_child_is_published(&scene.app, scene.head, scene.eye, "non-spring eye");
         assert!(
-            global_transform(&scene.app, scene.eye)
+            !global_transform(&scene.app, scene.eye)
                 .translation()
-                .abs_diff_eq(before_eye.translation(), 1e-4)
-                == false,
+                .abs_diff_eq(before_eye.translation(), 1e-4),
             "the eye's world position must follow the head in the same frame"
         );
     }

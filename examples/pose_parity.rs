@@ -755,7 +755,7 @@ fn main() {
         }
     }
     if failures.is_empty() {
-        println!("verdict PASS: the gate preserves pose correctness on both real models");
+        println!("verdict PASS: the gate preserves schedule parity on both real models");
     } else {
         println!("verdict FAIL: {}", failures.join(", "));
         std::process::exit(1);

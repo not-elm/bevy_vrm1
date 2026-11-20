@@ -63,6 +63,10 @@ semicolon_if_nothing_returned = "warn"
 name = "post_spring_bench"
 harness = false
 
+[[bench]]
+name = "deferred_prop_bench"
+harness = false
+
 [features]
 default = []
 serde = ["bevy/serialize"]

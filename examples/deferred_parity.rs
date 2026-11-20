@@ -88,9 +88,7 @@ fn collect_poses(
         ) else {
             return;
         };
-        let name = world
-            .get::<Name>(entity)
-            .map_or("-", |name| name.as_str());
+        let name = world.get::<Name>(entity).map_or("-", |name| name.as_str());
         let key = format!("{parent_key}/{name}#{index}");
         keys.insert(entity, key.clone());
         poses.insert(
@@ -176,7 +174,9 @@ fn build_scene(arm: Arm) -> Scene {
     let mut app = App::new();
     app.add_plugins(headless_default_plugins());
     app.add_plugins(VrmPlugin);
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(16)));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        16,
+    )));
     if arm != Arm::Default {
         app.insert_resource(SkipPostSpringPropagation);
     }
@@ -198,10 +198,7 @@ fn build_scene(arm: Arm) -> Scene {
         );
     }
 
-    let model_handle = app
-        .world()
-        .resource::<AssetServer>()
-        .load::<Gltf>(MODEL);
+    let model_handle = app.world().resource::<AssetServer>().load::<Gltf>(MODEL);
     let owner = app
         .world_mut()
         .spawn((VrmHandle(model_handle.clone()), Transform::default()))
@@ -240,7 +237,13 @@ fn build_scene(arm: Arm) -> Scene {
         let roots = query.iter(app.world()).collect::<Vec<_>>();
         let mut simulated = BTreeSet::new();
         for root in roots {
-            let members = app.world().get::<SpringRoot>(root).unwrap().joints.0.clone();
+            let members = app
+                .world()
+                .get::<SpringRoot>(root)
+                .unwrap()
+                .joints
+                .0
+                .clone();
             if members.len() >= 2 {
                 simulated.extend(members[..members.len() - 1].iter().copied());
             }
@@ -339,7 +342,10 @@ fn build_scene(arm: Arm) -> Scene {
     }
 }
 
-fn drive_frame(scene: &mut Scene, frame: usize) {
+fn drive_frame(
+    scene: &mut Scene,
+    frame: usize,
+) {
     let rotation = Quat::from_rotation_y(frame as f32 * 0.017);
     for entity in &scene.dirty {
         if let Some(mut transform) = scene
@@ -367,18 +373,30 @@ fn run_frames(scene: &mut Scene) {
         scene.app.update();
         if needed.contains(&frame) {
             let probe = *scene.app.world().resource::<Probe>();
-            scene
-                .probes
-                .insert(frame, (probe.before_error, probe.after_error, probe.samples));
+            scene.probes.insert(
+                frame,
+                (probe.before_error, probe.after_error, probe.samples),
+            );
             scene.app.world_mut().resource_mut::<Probe>().armed = false;
-            scene.poses.insert(frame, collect_poses(&scene.app, scene.owner, &mut scene.keys));
+            scene.poses.insert(
+                frame,
+                collect_poses(&scene.app, scene.owner, &mut scene.keys),
+            );
         }
     }
 }
 
-fn transform_diff(a: &Transform, b: &Transform) -> f32 {
+fn transform_diff(
+    a: &Transform,
+    b: &Transform,
+) -> f32 {
     let mut max = 0.0f32;
-    for (x, y) in a.translation.to_array().iter().zip(b.translation.to_array()) {
+    for (x, y) in a
+        .translation
+        .to_array()
+        .iter()
+        .zip(b.translation.to_array())
+    {
         max = max.max((x - y).abs());
     }
     for (x, y) in a.scale.to_array().iter().zip(b.scale.to_array()) {
@@ -390,7 +408,10 @@ fn transform_diff(a: &Transform, b: &Transform) -> f32 {
     max
 }
 
-fn global_diff(a: &GlobalTransform, b: &GlobalTransform) -> f32 {
+fn global_diff(
+    a: &GlobalTransform,
+    b: &GlobalTransform,
+) -> f32 {
     a.to_matrix()
         .to_cols_array()
         .iter()
@@ -429,11 +450,13 @@ fn propagated_global(
     Some(global)
 }
 
-fn compare(reference: &Scene, candidate: &Scene) -> bool {
+fn compare(
+    reference: &Scene,
+    candidate: &Scene,
+) -> bool {
     let mut failures = Vec::new();
     let label = candidate.arm.label();
-    if reference.joint_keys != candidate.joint_keys
-        || reference.stale_keys != candidate.stale_keys
+    if reference.joint_keys != candidate.joint_keys || reference.stale_keys != candidate.stale_keys
     {
         failures.push("entity classification differs between arms".to_string());
     }
@@ -448,7 +471,9 @@ fn compare(reference: &Scene, candidate: &Scene) -> bool {
             continue;
         };
         let Some(previous) = candidate.poses.get(&(frame - 1)) else {
-            failures.push(format!("frame {frame}: missing previous candidate snapshot"));
+            failures.push(format!(
+                "frame {frame}: missing previous candidate snapshot"
+            ));
             continue;
         };
 
@@ -466,7 +491,9 @@ fn compare(reference: &Scene, candidate: &Scene) -> bool {
             };
             let local = transform_diff(&reference_pose.transform, &candidate_pose.transform);
             if local > TOL {
-                failures.push(format!("frame {frame} {key} local Transform deviation {local:.3e}"));
+                failures.push(format!(
+                    "frame {frame} {key} local Transform deviation {local:.3e}"
+                ));
             }
             let global = global_diff(&reference_pose.global, &candidate_pose.global);
             if reference.joint_keys.contains(key) {
@@ -546,7 +573,9 @@ fn compare(reference: &Scene, candidate: &Scene) -> bool {
                 continue;
             };
             if *samples == 0 {
-                failures.push(format!("frame {frame}: deferred probe saw no stale entities"));
+                failures.push(format!(
+                    "frame {frame}: deferred probe saw no stale entities"
+                ));
             }
             if *after_error > TOL {
                 failures.push(format!(
@@ -588,7 +617,9 @@ fn main() {
         failures.push("deferred");
     }
     if failures.is_empty() {
-        println!("verdict PASS: deferred prototype keeps spring parity and publishes stale leaves at the head of PostUpdate");
+        println!(
+            "verdict PASS: deferred prototype keeps spring parity and publishes stale leaves at the head of PostUpdate"
+        );
     } else {
         println!("verdict FAIL: {}", failures.join(", "));
         std::process::exit(1);

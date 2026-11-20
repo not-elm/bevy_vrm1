@@ -33,20 +33,22 @@ struct Scene {
     spring_joint_count: usize,
 }
 
-fn build_scene(skip_post_spring: bool, instances: usize) -> Scene {
+fn build_scene(
+    skip_post_spring: bool,
+    instances: usize,
+) -> Scene {
     let mut app = App::new();
     app.add_plugins((headless_default_plugins(), VrmPlugin));
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(16)));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        16,
+    )));
     if skip_post_spring {
         app.insert_resource(SkipPostSpringPropagation);
     }
 
     let handles: Vec<Handle<Gltf>> = (0..instances)
         .map(|i| {
-            let handle = app
-                .world()
-                .resource::<AssetServer>()
-                .load::<Gltf>(MODEL);
+            let handle = app.world().resource::<AssetServer>().load::<Gltf>(MODEL);
             app.world_mut().spawn((
                 VrmHandle(handle.clone()),
                 Transform::from_xyz(i as f32 * 2.0, 0.0, 0.0),
@@ -89,7 +91,15 @@ fn build_scene(skip_post_spring: bool, instances: usize) -> Scene {
         let roots = query.iter(app.world()).collect::<Vec<_>>();
         let joints = roots
             .iter()
-            .flat_map(|root| app.world().get::<SpringRoot>(*root).unwrap().joints.0.iter().copied())
+            .flat_map(|root| {
+                app.world()
+                    .get::<SpringRoot>(*root)
+                    .unwrap()
+                    .joints
+                    .0
+                    .iter()
+                    .copied()
+            })
             .collect::<Vec<_>>();
         (roots, joints)
     };
@@ -97,7 +107,13 @@ fn build_scene(skip_post_spring: bool, instances: usize) -> Scene {
     let mut dirty = spring_roots
         .iter()
         .filter_map(|root| {
-            let first = app.world().get::<SpringRoot>(*root)?.joints.0.first().copied()?;
+            let first = app
+                .world()
+                .get::<SpringRoot>(*root)?
+                .joints
+                .0
+                .first()
+                .copied()?;
             let parent = app.world().get::<ChildOf>(first)?.parent();
             (!spring_joints.contains(&parent)).then_some(parent)
         })
@@ -125,7 +141,10 @@ fn build_scene(skip_post_spring: bool, instances: usize) -> Scene {
     }
 }
 
-fn dirty_transforms(scene: &mut Scene, frame: usize) {
+fn dirty_transforms(
+    scene: &mut Scene,
+    frame: usize,
+) {
     let angle = (frame as f32) * 0.017;
     let rotation = Quat::from_rotation_y(angle);
     for entity in &scene.dirty {
@@ -139,7 +158,11 @@ fn dirty_transforms(scene: &mut Scene, frame: usize) {
     }
 }
 
-fn timed_frames(scene: &mut Scene, warmup: usize, frames: usize) -> Vec<f64> {
+fn timed_frames(
+    scene: &mut Scene,
+    warmup: usize,
+    frames: usize,
+) -> Vec<f64> {
     for frame in 0..warmup {
         dirty_transforms(scene, frame);
         scene.app.update();
@@ -230,8 +253,14 @@ fn main() {
     }
 
     for (arm, name) in [(0, "default"), (1, "optout")] {
-        let medians = arms[arm].iter().map(|samples| stats(samples).median).collect::<Vec<_>>();
-        let means = arms[arm].iter().map(|samples| stats(samples).mean).collect::<Vec<_>>();
+        let medians = arms[arm]
+            .iter()
+            .map(|samples| stats(samples).median)
+            .collect::<Vec<_>>();
+        let means = arms[arm]
+            .iter()
+            .map(|samples| stats(samples).mean)
+            .collect::<Vec<_>>();
         let fps = means.iter().map(|mean| 1000.0 / mean).collect::<Vec<_>>();
         println!(
             "summary arm={name} reps={} median_of_frame_medians_ms={:.4} median_of_frame_means_ms={:.4} spread_of_frame_medians_ms={:.4}..{:.4} median_fps={:.2} spread_fps={:.2}..{:.2}",

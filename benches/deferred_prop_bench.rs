@@ -22,7 +22,7 @@ struct GateStats {
 }
 
 fn spring_joint_transform_changed(
-    joints: Query<(), (With<SpringJointProps>, Changed<Transform>)>,
+    joints: Query<(), (With<SpringJointProps>, Changed<Transform>)>
 ) -> bool {
     !joints.is_empty()
 }
@@ -83,10 +83,15 @@ struct Scene {
     spring_joint_count: usize,
 }
 
-fn build_scene(arm: Arm, instances: usize) -> Scene {
+fn build_scene(
+    arm: Arm,
+    instances: usize,
+) -> Scene {
     let mut app = App::new();
     app.add_plugins((headless_default_plugins(), VrmPlugin));
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(16)));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        16,
+    )));
     if arm != Arm::Default {
         app.insert_resource(SkipPostSpringPropagation);
     }
@@ -104,18 +109,12 @@ fn build_scene(arm: Arm, instances: usize) -> Scene {
                 .before(VrmSystemSets::Constraints)
                 .run_if(spring_joint_transform_changed),
         );
-        app.add_systems(
-            PostUpdate,
-            count_gate.before(VrmSystemSets::Constraints),
-        );
+        app.add_systems(PostUpdate, count_gate.before(VrmSystemSets::Constraints));
     }
 
     let handles: Vec<Handle<Gltf>> = (0..instances)
         .map(|i| {
-            let handle = app
-                .world()
-                .resource::<AssetServer>()
-                .load::<Gltf>(MODEL);
+            let handle = app.world().resource::<AssetServer>().load::<Gltf>(MODEL);
             app.world_mut().spawn((
                 VrmHandle(handle.clone()),
                 Transform::from_xyz(i as f32 * 2.0, 0.0, 0.0),
@@ -178,7 +177,13 @@ fn build_scene(arm: Arm, instances: usize) -> Scene {
     let mut dirty = spring_roots
         .iter()
         .filter_map(|root| {
-            let first = app.world().get::<SpringRoot>(*root)?.joints.0.first().copied()?;
+            let first = app
+                .world()
+                .get::<SpringRoot>(*root)?
+                .joints
+                .0
+                .first()
+                .copied()?;
             let parent = app.world().get::<ChildOf>(first)?.parent();
             (!simulated.contains(&parent)).then_some(parent)
         })
@@ -237,7 +242,10 @@ fn build_scene(arm: Arm, instances: usize) -> Scene {
     }
 }
 
-fn dirty_transforms(scene: &mut Scene, frame: usize) {
+fn dirty_transforms(
+    scene: &mut Scene,
+    frame: usize,
+) {
     let angle = (frame as f32) * 0.017;
     let rotation = Quat::from_rotation_y(angle);
     for entity in &scene.dirty {
@@ -251,7 +259,12 @@ fn dirty_transforms(scene: &mut Scene, frame: usize) {
     }
 }
 
-fn timed_frames(scene: &mut Scene, warmup: usize, frames: usize, dirty: bool) -> Vec<f64> {
+fn timed_frames(
+    scene: &mut Scene,
+    warmup: usize,
+    frames: usize,
+    dirty: bool,
+) -> Vec<f64> {
     for frame in 0..warmup {
         if dirty {
             dirty_transforms(scene, frame);
@@ -318,7 +331,10 @@ fn main() {
     }
     println!(
         "config: model={MODEL} instances={instances} reps={repetitions} warmup={warmup} frames={frames} arm_order={}",
-        arms.iter().map(|arm| arm.label()).collect::<Vec<_>>().join(",")
+        arms.iter()
+            .map(|arm| arm.label())
+            .collect::<Vec<_>>()
+            .join(",")
     );
 
     let mut active = vec![Vec::new(); arms.len()];
@@ -390,13 +406,20 @@ fn main() {
             median,
             stats(&active_means).median,
             active_medians.iter().copied().fold(f64::INFINITY, f64::min),
-            active_medians.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            active_medians
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max),
             stats(&idle_medians).median,
             idle_medians.iter().copied().fold(f64::INFINITY, f64::min),
-            idle_medians.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            idle_medians
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max),
         );
     }
-    let median_of = |arm: Arm| medians[arms.iter().position(|candidate| *candidate == arm).unwrap()];
+    let median_of =
+        |arm: Arm| medians[arms.iter().position(|candidate| *candidate == arm).unwrap()];
     println!(
         "delta deferred_vs_default_ms={:+.4} deferred_vs_optout_ms={:+.4} deferred_vs_marker_ms={:+.4} marker_vs_optout_ms={:+.4}",
         median_of(Arm::Deferred) - median_of(Arm::Default),

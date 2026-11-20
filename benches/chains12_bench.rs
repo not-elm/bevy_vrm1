@@ -41,7 +41,10 @@ impl Default for SegmentClock {
     }
 }
 
-fn stamp(mut clock: ResMut<SegmentClock>, index: usize) {
+fn stamp(
+    mut clock: ResMut<SegmentClock>,
+    index: usize,
+) {
     clock.stamps[index] = Some(Instant::now());
 }
 
@@ -115,7 +118,9 @@ fn build_scene(
     let mut app = App::new();
     app.insert_resource(flags);
     app.insert_resource(SkipPostSpringPropagation);
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(16)));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        16,
+    )));
     app.add_plugins((headless_default_plugins(), VrmPlugin));
     app.configure_sets(
         PostUpdate,
@@ -156,16 +161,16 @@ fn build_scene(
                 .after(VrmSystemSets::PropagateAfterExpressions)
                 .before(VrmSystemSets::SpringBone),
         );
-        app.add_systems(PostUpdate, stamp_post_spring.after(VrmSystemSets::SpringBone));
+        app.add_systems(
+            PostUpdate,
+            stamp_post_spring.after(VrmSystemSets::SpringBone),
+        );
         app.add_systems(PostUpdate, stamp_tail.after(stamp_post_spring));
     }
 
     let handles: Vec<Handle<Gltf>> = (0..instances)
         .map(|i| {
-            let handle = app
-                .world()
-                .resource::<AssetServer>()
-                .load::<Gltf>(MODEL);
+            let handle = app.world().resource::<AssetServer>().load::<Gltf>(MODEL);
             app.world_mut().spawn((
                 VrmHandle(handle.clone()),
                 Transform::from_xyz(i as f32 * 2.0, 0.0, 0.0),
@@ -275,7 +280,10 @@ fn build_scene(
     }
 }
 
-fn dirty_transforms(scene: &mut Scene, frame: usize) {
+fn dirty_transforms(
+    scene: &mut Scene,
+    frame: usize,
+) {
     let angle = (frame as f32) * 0.017;
     let rotation = Quat::from_rotation_y(angle);
     for entity in &scene.dirty {
@@ -298,7 +306,11 @@ fn dirty_transforms(scene: &mut Scene, frame: usize) {
     }
 }
 
-fn timed_frames(scene: &mut Scene, warmup: usize, frames: usize) -> Vec<f64> {
+fn timed_frames(
+    scene: &mut Scene,
+    warmup: usize,
+    frames: usize,
+) -> Vec<f64> {
     for frame in 0..warmup {
         dirty_transforms(scene, frame);
         scene.app.update();
@@ -313,7 +325,11 @@ fn timed_frames(scene: &mut Scene, warmup: usize, frames: usize) -> Vec<f64> {
     samples
 }
 
-fn timed_segments(scene: &mut Scene, warmup: usize, frames: usize) -> Vec<[f64; 6]> {
+fn timed_segments(
+    scene: &mut Scene,
+    warmup: usize,
+    frames: usize,
+) -> Vec<[f64; 6]> {
     for frame in 0..warmup {
         dirty_transforms(scene, frame);
         scene.app.update();
@@ -425,10 +441,13 @@ const ARMS: [(&str, BenchFlags); 8] = [
     ),
 ];
 
-fn env_number(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .map_or(default, |value| value.parse().expect("numeric environment value"))
+fn env_number(
+    name: &str,
+    default: usize,
+) -> usize {
+    std::env::var(name).ok().map_or(default, |value| {
+        value.parse().expect("numeric environment value")
+    })
 }
 
 #[test]
@@ -477,7 +496,10 @@ fn measure_chains12() {
 
     println!("summary frame_ms");
     for (name, samples) in ARMS.iter().map(|(name, _)| name).zip(arm_samples.iter()) {
-        let rep_medians = samples.iter().map(|samples| median(samples)).collect::<Vec<_>>();
+        let rep_medians = samples
+            .iter()
+            .map(|samples| median(samples))
+            .collect::<Vec<_>>();
         println!(
             "arm={name} median_of_rep_medians_ms={:.4} rep_medians_ms={:?}",
             median(&rep_medians),

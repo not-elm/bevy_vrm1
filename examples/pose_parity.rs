@@ -90,9 +90,7 @@ fn collect_poses(
         ) else {
             return;
         };
-        let name = world
-            .get::<Name>(entity)
-            .map_or("-", |name| name.as_str());
+        let name = world.get::<Name>(entity).map_or("-", |name| name.as_str());
         let key = format!("{parent_key}/{name}#{index}");
         keys.insert(entity, key.clone());
         poses.insert(
@@ -139,19 +137,19 @@ fn build_scene(
         app.add_plugins(VrmaPlugin);
     }
     app.add_plugins(VrmPlugin);
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(16)));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        16,
+    )));
     if skip_post_spring {
         app.insert_resource(SkipPostSpringPropagation);
     }
-    app.init_resource::<LoadedVrmas>()
-        .add_observer(|event: On<LoadedVrma>, mut loaded: ResMut<LoadedVrmas>| {
+    app.init_resource::<LoadedVrmas>().add_observer(
+        |event: On<LoadedVrma>, mut loaded: ResMut<LoadedVrmas>| {
             loaded.0.push(event.vrma);
-        });
+        },
+    );
 
-    let model_handle = app
-        .world()
-        .resource::<AssetServer>()
-        .load::<Gltf>(model);
+    let model_handle = app.world().resource::<AssetServer>().load::<Gltf>(model);
     let owner = app
         .world_mut()
         .spawn((VrmHandle(model_handle.clone()), Transform::default()))
@@ -193,11 +191,7 @@ fn build_scene(
         let vrma_ready = match (&vrma_handle, vrma) {
             (Some(handle), Some(entity)) => {
                 app.world().resource::<AssetServer>().is_loaded(handle)
-                    && app
-                        .world()
-                        .resource::<LoadedVrmas>()
-                        .0
-                        .contains(&entity)
+                    && app.world().resource::<LoadedVrmas>().0.contains(&entity)
             }
             _ => true,
         };
@@ -248,7 +242,10 @@ fn build_scene(
             let Some(first) = first else {
                 continue;
             };
-            if let Some(parent) = app.world().get::<ChildOf>(first).map(|child| child.parent())
+            if let Some(parent) = app
+                .world()
+                .get::<ChildOf>(first)
+                .map(|child| child.parent())
                 && !spring_joints.contains(&parent)
                 && !dirty.contains(&parent)
             {
@@ -269,12 +266,15 @@ fn build_scene(
             let angle = frame as f32 * 0.017;
             let rotation = Quat::from_rotation_y(angle);
             for entity in &dirty {
-                if let Some(mut transform) = app.world_mut().entity_mut(*entity).get_mut::<Transform>() {
+                if let Some(mut transform) =
+                    app.world_mut().entity_mut(*entity).get_mut::<Transform>()
+                {
                     transform.rotation = rotation;
                 }
             }
             if let Some(target) = look_target
-                && let Some(mut transform) = app.world_mut().entity_mut(target).get_mut::<Transform>()
+                && let Some(mut transform) =
+                    app.world_mut().entity_mut(target).get_mut::<Transform>()
             {
                 transform.translation = Vec3::new(
                     0.4 * (frame as f32 * 0.05).sin(),
@@ -307,7 +307,14 @@ fn build_scene(
             }
             colliders += spring.colliders.0.len();
         }
-        (roots.len(), declared, simulated, simulated_tails, leaf_tails, colliders)
+        (
+            roots.len(),
+            declared,
+            simulated,
+            simulated_tails,
+            leaf_tails,
+            colliders,
+        )
     };
     let (spring_roots, declared_joints, simulated_joints, simulated_tails, leaf_tails, colliders) =
         spring_info;
@@ -331,7 +338,9 @@ fn build_scene(
                 if joint_keys.contains(parent_key) {
                     return true;
                 }
-                parent = initial.get(parent_key).and_then(|pose| pose.parent.as_deref());
+                parent = initial
+                    .get(parent_key)
+                    .and_then(|pose| pose.parent.as_deref());
             }
             false
         })
@@ -362,7 +371,10 @@ fn build_scene(
     }
 }
 
-fn drive_frame(scene: &mut Scene, frame: usize) {
+fn drive_frame(
+    scene: &mut Scene,
+    frame: usize,
+) {
     if !scene.manual_drive {
         return;
     }
@@ -411,9 +423,17 @@ fn run_frames(scene: &mut Scene) {
     }
 }
 
-fn transform_diff(a: &Transform, b: &Transform) -> f32 {
+fn transform_diff(
+    a: &Transform,
+    b: &Transform,
+) -> f32 {
     let mut max = 0.0f32;
-    for (x, y) in a.translation.to_array().iter().zip(b.translation.to_array()) {
+    for (x, y) in a
+        .translation
+        .to_array()
+        .iter()
+        .zip(b.translation.to_array())
+    {
         max = max.max((x - y).abs());
     }
     for (x, y) in a.scale.to_array().iter().zip(b.scale.to_array()) {
@@ -456,7 +476,10 @@ fn propagated_global(
     Some(global)
 }
 
-fn global_diff(a: &GlobalTransform, b: &GlobalTransform) -> f32 {
+fn global_diff(
+    a: &GlobalTransform,
+    b: &GlobalTransform,
+) -> f32 {
     a.to_matrix()
         .to_cols_array()
         .iter()
@@ -464,7 +487,12 @@ fn global_diff(a: &GlobalTransform, b: &GlobalTransform) -> f32 {
         .fold(0.0f32, |max, (x, y)| max.max((x - y).abs()))
 }
 
-fn compare(model: &str, drive: Drive, enabled: &Scene, disabled: &Scene) -> bool {
+fn compare(
+    model: &str,
+    drive: Drive,
+    enabled: &Scene,
+    disabled: &Scene,
+) -> bool {
     let label = format!("{model}/{}", drive.label());
     let mut failures = Vec::new();
     println!(
@@ -510,7 +538,9 @@ fn compare(model: &str, drive: Drive, enabled: &Scene, disabled: &Scene) -> bool
 
         for (key, pose_a) in a {
             let Some(pose_b) = b.get(key) else {
-                failures.push(format!("frame {frame} {key}: entity missing in disabled arm"));
+                failures.push(format!(
+                    "frame {frame} {key}: entity missing in disabled arm"
+                ));
                 continue;
             };
             let local = transform_diff(&pose_a.transform, &pose_b.transform);
@@ -578,13 +608,18 @@ fn compare(model: &str, drive: Drive, enabled: &Scene, disabled: &Scene) -> bool
             };
             let arm_diff = global_diff(&tail_a.global, &tail_b.global);
             max_tail_arm_global = max_tail_arm_global.max(arm_diff);
-            if worst_tail.as_ref().is_none_or(|(_, worst)| arm_diff > *worst) {
+            if worst_tail
+                .as_ref()
+                .is_none_or(|(_, worst)| arm_diff > *worst)
+            {
                 worst_tail = Some((key.clone(), arm_diff));
             }
             for (arm, tail) in [(a, tail_a), (b, tail_b)] {
                 let parent_key = tail.parent.as_deref().unwrap_or("");
                 let Some(parent) = arm.get(parent_key) else {
-                    failures.push(format!("frame {frame} tail {key} parent {parent_key} missing"));
+                    failures.push(format!(
+                        "frame {frame} tail {key} parent {parent_key} missing"
+                    ));
                     continue;
                 };
                 let expected = parent.global.mul_transform(tail.transform);
@@ -639,9 +674,17 @@ fn compare(model: &str, drive: Drive, enabled: &Scene, disabled: &Scene) -> bool
                 global_diff(&parent_a.global, &parent_b.global),
                 transform_diff(&parent_a.transform, &parent_b.transform),
                 tail_a.global.to_matrix().to_cols_array(),
-                parent_a.global.mul_transform(tail_a.transform).to_matrix().to_cols_array(),
+                parent_a
+                    .global
+                    .mul_transform(tail_a.transform)
+                    .to_matrix()
+                    .to_cols_array(),
                 tail_b.global.to_matrix().to_cols_array(),
-                parent_b.global.mul_transform(tail_b.transform).to_matrix().to_cols_array(),
+                parent_b
+                    .global
+                    .mul_transform(tail_b.transform)
+                    .to_matrix()
+                    .to_cols_array(),
             );
         }
         if motion <= TOL {
@@ -689,7 +732,10 @@ fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let mut failures = Vec::new();
     for (model_name, model_path) in MODELS {
-        if args.first().is_some_and(|filter| !model_name.contains(filter)) {
+        if args
+            .first()
+            .is_some_and(|filter| !model_name.contains(filter))
+        {
             continue;
         }
         for drive in drives {

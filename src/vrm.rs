@@ -396,6 +396,46 @@ mod tests {
         }
     }
 
+    fn center_space_spring_scene(skip_post_spring: bool) -> SpringChainScene {
+        use crate::vrm::spring_bone::{
+            SpringCenterNode, SpringColliders, SpringJointProps, SpringJoints, SpringRoot,
+        };
+
+        let mut scene = spring_chain_scene(skip_post_spring);
+        let joint = scene.joint;
+        let tail = scene.tail;
+        let props = SpringJointProps {
+            drag_force: 0.0,
+            gravity_dir: Vec3::NEG_X,
+            gravity_power: 0.0,
+            hit_radius: 0.0,
+            stiffness: 0.0,
+        };
+        scene.app.world_mut().entity_mut(joint).insert(props);
+        scene.app.world_mut().entity_mut(tail).insert(props);
+        scene
+            .app
+            .world_mut()
+            .entity_mut(scene.root)
+            .insert(SpringRoot {
+                joints: SpringJoints(vec![joint, tail]),
+                colliders: SpringColliders::default(),
+                center_node: SpringCenterNode(Some(scene.root)),
+            });
+        scene
+    }
+
+    fn center_relative(
+        app: &App,
+        center: Entity,
+        entity: Entity,
+    ) -> (Quat, Vec3) {
+        let relative = global_transform(app, center).to_matrix().inverse()
+            * global_transform(app, entity).to_matrix();
+        let (_, rotation, translation) = relative.to_scale_rotation_translation();
+        (rotation, translation)
+    }
+
     fn install_collider(
         scene: &mut SpringChainScene,
         position: Vec3,
@@ -687,6 +727,100 @@ mod tests {
                     disabled_tf.rotation,
                     enabled_tf.rotation
                 );
+            }
+        }
+    }
+
+    /// Joints evaluate in the center node's space, so a joint's origin keeps its
+    /// center-relative position while its rotation follows the center. The
+    /// pre-spring chain publishes the center, so the opt-out cannot change the
+    /// evaluation in either frame.
+    #[test]
+    fn with_center_space_post_spring_chain_gate_preserves_center_evaluation() {
+        use crate::vrm::spring_bone::SpringRoot;
+
+        let poses = [
+            (Vec3::new(0.5, 0.25, -0.75), Quat::from_rotation_y(0.15)),
+            (Vec3::new(-1.5, 1.0, 0.5), Quat::from_rotation_y(0.85)),
+            (Vec3::new(2.0, -0.5, 1.25), Quat::from_rotation_y(1.4)),
+        ];
+        let mut enabled = center_space_spring_scene(false);
+        let mut disabled = center_space_spring_scene(true);
+
+        for scene in [&enabled, &disabled] {
+            let root = scene.root;
+            let center = scene
+                .app
+                .world()
+                .get::<SpringRoot>(root)
+                .unwrap()
+                .center_node
+                .0
+                .expect("the center entity is present");
+            assert_eq!(center, root);
+            assert!(scene.app.world().get::<Transform>(center).is_some());
+        }
+
+        let mut previous_center: Option<GlobalTransform> = None;
+        let mut joint_anchor: Option<Vec3> = None;
+        for (frame, (translation, rotation)) in poses.into_iter().enumerate() {
+            for scene in [&mut enabled, &mut disabled] {
+                let mut tf = scene
+                    .app
+                    .world_mut()
+                    .get_mut::<Transform>(scene.root)
+                    .unwrap();
+                tf.translation = translation;
+                tf.rotation = rotation;
+            }
+            enabled.app.update();
+            disabled.app.update();
+
+            let center = global_transform(&enabled.app, enabled.root);
+            assert_gtf_eq(
+                global_transform(&disabled.app, disabled.root),
+                center,
+                &format!("frame {frame} center"),
+            );
+            if let Some(previous) = previous_center {
+                assert!(
+                    quat_angle(center.rotation(), previous.rotation()) > 0.1,
+                    "the center must rotate between checkpoints: {center:?} vs {previous:?}"
+                );
+            }
+            previous_center = Some(center);
+
+            for ((on, off), label) in [
+                ((enabled.joint, disabled.joint), "joint"),
+                ((enabled.tail, disabled.tail), "tail"),
+            ] {
+                assert_gtf_eq(
+                    global_transform(&disabled.app, off),
+                    global_transform(&enabled.app, on),
+                    &format!("frame {frame} {label} global"),
+                );
+                assert!(
+                    quat_eq(
+                        transform(&disabled.app, off).rotation,
+                        transform(&enabled.app, on).rotation
+                    ),
+                    "frame {frame} {label} local rotation"
+                );
+                let (_, disabled_relative) = center_relative(&disabled.app, disabled.root, off);
+                let (_, enabled_relative) = center_relative(&enabled.app, enabled.root, on);
+                assert!(
+                    enabled_relative.abs_diff_eq(disabled_relative, 1e-4),
+                    "frame {frame} {label} center-relative position: {enabled_relative:?} vs {disabled_relative:?}"
+                );
+            }
+
+            let (_, anchor) = center_relative(&enabled.app, enabled.root, enabled.joint);
+            match joint_anchor {
+                None => joint_anchor = Some(anchor),
+                Some(expected) => assert!(
+                    anchor.abs_diff_eq(expected, 1e-4),
+                    "the joint origin keeps its center-relative position across frames: {anchor:?} vs {expected:?}"
+                ),
             }
         }
     }

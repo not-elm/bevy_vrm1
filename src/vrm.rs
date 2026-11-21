@@ -429,11 +429,10 @@ mod tests {
         app: &App,
         center: Entity,
         entity: Entity,
-    ) -> (Quat, Vec3) {
+    ) -> Vec3 {
         let relative = global_transform(app, center).to_matrix().inverse()
             * global_transform(app, entity).to_matrix();
-        let (_, rotation, translation) = relative.to_scale_rotation_translation();
-        (rotation, translation)
+        relative.w_axis.truncate()
     }
 
     fn install_collider(
@@ -806,15 +805,15 @@ mod tests {
                     ),
                     "frame {frame} {label} local rotation"
                 );
-                let (_, disabled_relative) = center_relative(&disabled.app, disabled.root, off);
-                let (_, enabled_relative) = center_relative(&enabled.app, enabled.root, on);
+                let disabled_relative = center_relative(&disabled.app, disabled.root, off);
+                let enabled_relative = center_relative(&enabled.app, enabled.root, on);
                 assert!(
                     enabled_relative.abs_diff_eq(disabled_relative, 1e-4),
                     "frame {frame} {label} center-relative position: {enabled_relative:?} vs {disabled_relative:?}"
                 );
             }
 
-            let (_, anchor) = center_relative(&enabled.app, enabled.root, enabled.joint);
+            let anchor = center_relative(&enabled.app, enabled.root, enabled.joint);
             match joint_anchor {
                 None => joint_anchor = Some(anchor),
                 Some(expected) => assert!(

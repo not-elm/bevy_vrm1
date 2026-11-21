@@ -30,15 +30,9 @@ fn default_prop_enabled(flags: Res<BenchFlags>) -> bool {
     flags.default_prop
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct SegmentClock {
     stamps: [Option<Instant>; 7],
-}
-
-impl Default for SegmentClock {
-    fn default() -> Self {
-        Self { stamps: [None; 7] }
-    }
 }
 
 fn stamp(

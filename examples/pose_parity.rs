@@ -298,7 +298,7 @@ fn build_scene(
         let mut colliders = 0;
         for root in &roots {
             let spring = app.world().get::<SpringRoot>(*root).unwrap();
-            let members = spring.joints.0.iter().copied().collect::<Vec<_>>();
+            let members = spring.joints.0.to_vec();
             declared.extend(members.iter().copied());
             if members.len() >= 2 {
                 simulated.extend(members[..members.len() - 1].iter().copied());

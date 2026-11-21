@@ -319,7 +319,7 @@ fn main() {
     let frames = number(3, 600);
     let reverse = number(4, 0) != 0;
 
-    let mut arms = vec![
+    let mut arms = [
         Arm::Default,
         Arm::Optout,
         Arm::Marker,

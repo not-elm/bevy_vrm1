@@ -105,10 +105,12 @@ VrmSystemSets::PropagateAfterExpressions (manual transform propagation)
     ↓
 VrmSystemSets::SpringBone
     ↓
+Post-spring propagation (manual, skippable via SkipPostSpringPropagation)
+    ↓
 VrmSystemSets::DetermineRedraw (triggers RequestRedraw if needed)
 ```
 
-**Important**: Manual transform propagation is inserted at two points to ensure `GlobalTransform` is updated before downstream systems use it. This is critical for correct rendering and physics.
+**Important**: Manual transform propagation is inserted at three points to ensure `GlobalTransform` is updated before downstream systems use it. This is critical for correct rendering and physics. The first two are unconditional; the third publishes the world transforms changed by the spring step and can be opted out of.
 
 ### Key Architectural Patterns
 
@@ -158,20 +160,44 @@ Updates `Head`, `LeftEye`, `RightEye` bone rotations based on `LookAtProperties`
 
 ## Transform Propagation Strategy
 
-Bevy's default `TransformPropagate` runs once in `PostUpdate`. This crate manually invokes transform propagation **twice** to comply with VRM spec:
+Bevy's default `TransformPropagate` runs once in `PostUpdate`. This crate manually invokes transform propagation **three times**:
 
-1. **After Constraints**: Ensures constraint changes propagate to `GlobalTransform` before LookAt reads positions
-2. **After Expressions**: Ensures expression changes propagate before SpringBone physics reads positions
+1. **After Constraints** (`VrmSystemSets::PropagateAfterConstraints`): Ensures constraint changes propagate to `GlobalTransform` before LookAt reads positions
+2. **After Expressions** (`VrmSystemSets::PropagateAfterExpressions`): Ensures expression changes propagate before SpringBone physics reads positions
+3. **After SpringBone**: Re-publishes world transforms after the spring step moves joints, so descendants that are not themselves spring joints are fresh for rendering. Spring joints publish their own world transforms during the spring step; this pass is for their unsimulated descendants, which Bevy's default propagation would otherwise leave one frame behind.
+
+The first two passes are unconditional. The third costs an extra full propagation pass and is the only one that can be skipped: insert `SkipPostSpringPropagation` (re-exported in `bevy_vrm1::prelude`) to opt out. The default behavior is unchanged when the resource is absent. A host should opt out only when it runs its own propagation after spring bones, or when unsimulated descendants of spring joints do not need same-frame `GlobalTransform`; spring joints, non-spring bones, and spring evaluation of fresh parent/collider transforms are unaffected.
 
 This is implemented in `src/vrm.rs` using:
 ```rust
-use bevy::transform::systems::{propagate_parent_transforms, sync_simple_transforms};
+use bevy::transform::systems::{
+    mark_dirty_trees, propagate_parent_transforms, sync_simple_transforms,
+};
 
 app.add_systems(
     PostUpdate,
     (sync_simple_transforms, propagate_parent_transforms)
         .chain()
-        .in_set(VrmSystemSets::PropagateAfterConstraints)
+        .in_set(VrmSystemSets::PropagateAfterConstraints),
+);
+
+app.add_systems(
+    PostUpdate,
+    (sync_simple_transforms, propagate_parent_transforms)
+        .chain()
+        .in_set(VrmSystemSets::PropagateAfterExpressions),
+);
+
+app.add_systems(
+    PostUpdate,
+    (
+        mark_dirty_trees,
+        propagate_parent_transforms,
+        sync_simple_transforms,
+    )
+        .chain()
+        .after(VrmSystemSets::SpringBone)
+        .run_if(post_spring_propagation_enabled),
 );
 ```
 

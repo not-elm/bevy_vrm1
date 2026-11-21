@@ -69,10 +69,6 @@ harness = false
 
 [profile.dev]
 opt-level = 1
-# Debuginfo: line tables only, so the test binaries keep file and line numbers in
-# panics while dropping the type and variable detail. A full-debuginfo dev build
-# inflates both target dir and the RAM each test process needs; bevy is the bulk
-# of the 1400-crate closure this test suite links.
 debug = "line-tables-only"
 
 [profile.dev.package."*"]

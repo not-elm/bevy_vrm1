@@ -178,7 +178,14 @@ app.add_systems(
     PostUpdate,
     (sync_simple_transforms, propagate_parent_transforms)
         .chain()
-        .in_set(VrmSystemSets::PropagateAfterConstraints)
+        .in_set(VrmSystemSets::PropagateAfterConstraints),
+);
+
+app.add_systems(
+    PostUpdate,
+    (sync_simple_transforms, propagate_parent_transforms)
+        .chain()
+        .in_set(VrmSystemSets::PropagateAfterExpressions),
 );
 
 app.add_systems(

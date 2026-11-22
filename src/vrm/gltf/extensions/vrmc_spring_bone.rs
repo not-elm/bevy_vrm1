@@ -141,11 +141,67 @@ impl ColliderShape {
         }
     }
 
+    pub fn apply_endpoint_collision(
+        &self,
+        next_tail: &mut Vec3,
+        collider: &GlobalTransform,
+        head_global_pos: Vec3,
+        joint_radius: f32,
+        bone_length: f32,
+    ) {
+        let (scale, _, _) = collider.to_scale_rotation_translation();
+        let max_collider_scale = scale.abs().max_element();
+        match self {
+            Self::Sphere(sphere) => {
+                let center = collider.transform_point(Vec3::from(sphere.offset));
+                let r = joint_radius + sphere.radius * max_collider_scale;
+                push_out_of_sphere(next_tail, center, r, head_global_pos, bone_length);
+            }
+            Self::Capsule(capsule) => {
+                let r = joint_radius + capsule.radius * max_collider_scale;
+                let start = collider.transform_point(Vec3::from(capsule.offset));
+                let end = collider.transform_point(Vec3::from(capsule.tail));
+                let closest = closest_point_on_segment(*next_tail, start, end);
+                push_out_of_sphere(next_tail, closest, r, head_global_pos, bone_length);
+            }
+        }
+    }
+
     #[inline]
     pub const fn radius(&self) -> f32 {
         match self {
             Self::Sphere(sphere) => sphere.radius,
             Self::Capsule(capsule) => capsule.radius,
+        }
+    }
+
+    pub fn segment_is_clear(
+        &self,
+        tail: Vec3,
+        collider: &GlobalTransform,
+        head_global_pos: Vec3,
+        joint_radius: f32,
+    ) -> bool {
+        let (scale, _, _) = collider.to_scale_rotation_translation();
+        let max_collider_scale = scale.abs().max_element();
+        // Re-projection onto the bone sphere approaches r from below, so a
+        // resolved contact needs slack to count as clear.
+        let clear_radius = |radius: f32| radius * (1.0 - 1e-2);
+        match self {
+            Self::Sphere(sphere) => {
+                let center = collider.transform_point(Vec3::from(sphere.offset));
+                let r = clear_radius(joint_radius + sphere.radius * max_collider_scale);
+                let closest = closest_point_on_segment(center, head_global_pos, tail);
+                closest.distance_squared(center) >= r * r
+            }
+            Self::Capsule(capsule) => {
+                let r = clear_radius(joint_radius + capsule.radius * max_collider_scale);
+                let start = collider.transform_point(Vec3::from(capsule.offset));
+                let end = collider.transform_point(Vec3::from(capsule.tail));
+                let (closest, collider_point) =
+                    closest_points_between_segments(head_global_pos, tail, start, end);
+                closest.distance_squared(collider_point) >= r * r
+            }
         }
     }
 }

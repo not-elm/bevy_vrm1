@@ -85,6 +85,6 @@ fn play_vrma<const I: usize>(
         repeat: RepeatAnimation::Forever,
         transition_duration: Duration::from_millis(300),
         vrma: vrma_entity,
-        reset_spring_bones: false,
+        reset_spring_bones: true,
     });
 }

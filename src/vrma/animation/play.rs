@@ -1,6 +1,6 @@
 use crate::prelude::ChildSearcher;
 use crate::vrm::Vrm;
-use crate::vrm::spring_bone::{SpringJointState, SpringRoot};
+use crate::vrm::spring_bone::{SpringJointState, SpringRoot, reseed_spring_bones};
 use crate::vrma::animation::animation_graph::{NeedsBake, VrmaBake};
 use crate::vrma::animation::expressions::reset_animated_expression_weights;
 use crate::vrma::{
@@ -28,8 +28,9 @@ pub struct PlayVrma {
     /// A time until the existing animation fades out.
     pub transition_duration: Duration,
 
-    /// If true, resets all `SpringBone` velocities on the parent VRM entity
-    /// to prevent bouncing caused by sudden bone movements during animation transitions.
+    /// If true, reseeds all `SpringBone` joints under the parent VRM entity at
+    /// their live tail positions, clearing inertia to prevent snapping during
+    /// animation transitions between differing poses.
     pub reset_spring_bones: bool,
 }
 
@@ -99,6 +100,7 @@ fn apply_play_vrma(
     graphs: Query<&VrmAnimationGraphState>,
     spring_roots: Query<&SpringRoot>,
     mut joint_states: Query<&mut SpringJointState>,
+    transforms: Query<&GlobalTransform>,
     mut playback: Query<&mut VrmaPlaybackState>,
 ) {
     let vrma_entity = trigger.event_target();
@@ -126,7 +128,13 @@ fn apply_play_vrma(
         None
     };
     if trigger.reset_spring_bones {
-        reset_spring_bone_velocities(*vrm_entity, &spring_roots, &mut joint_states, &childrens);
+        reseed_spring_bones(
+            *vrm_entity,
+            &spring_roots,
+            &mut joint_states,
+            &transforms,
+            &childrens,
+        );
     }
     for sibling in childrens.get(*vrm_entity).into_iter().flatten() {
         if let Ok(mut state) = playback.get_mut(*sibling)
@@ -150,29 +158,6 @@ fn apply_play_vrma(
         commands.entity(vrma_entity).remove::<VrmaNeedsRestore>();
     } else {
         commands.entity(vrma_entity).insert(VrmaNeedsRestore);
-    }
-}
-
-/// Recursively traverses descendants of `entity` to find all [`SpringRoot`] components
-/// and resets the velocity of their [`SpringJointState`]s.
-fn reset_spring_bone_velocities(
-    entity: Entity,
-    spring_roots: &Query<&SpringRoot>,
-    joint_states: &mut Query<&mut SpringJointState>,
-    children: &Query<&Children>,
-) {
-    let Ok(entity_children) = children.get(entity) else {
-        return;
-    };
-    for child in entity_children.into_iter().copied() {
-        if let Ok(root) = spring_roots.get(child) {
-            for &joint in root.joints.iter() {
-                if let Ok(mut state) = joint_states.get_mut(joint) {
-                    state.reset_velocity();
-                }
-            }
-        }
-        reset_spring_bone_velocities(child, spring_roots, joint_states, children);
     }
 }
 
@@ -335,6 +320,7 @@ mod tests {
     use crate::prelude::*;
     use crate::success;
     use crate::tests::{TestResult, test_app};
+    use crate::vrm::spring_bone::SpringJointState;
     use crate::vrma::animation::animation_graph::NeedsBake;
     use crate::vrma::animation::play::VrmaAnimationPlayPlugin;
     use crate::vrma::{
@@ -382,6 +368,63 @@ mod tests {
                 assert!(!player.all_finished());
             })
             .unwrap();
+    }
+
+    /// A clip switch with a different initial pose reseeds the joints instead
+    /// of leaving them pulling toward the outgoing pose.
+    #[test]
+    fn a_pose_switch_with_reset_spring_bones_reseeds_the_live_tail() -> TestResult {
+        let mut app = test_app();
+        app.add_plugins(VrmaAnimationPlayPlugin);
+        let node = AnimationNodeIndex::new(1);
+        let (vrm, _) = spawn_owner(app.world_mut());
+        let vrma = spawn_bound_vrma(app.world_mut(), vrm, node);
+        let world = app.world_mut();
+        let head = world
+            .spawn((Transform::IDENTITY, GlobalTransform::IDENTITY, ChildOf(vrm)))
+            .id();
+        let tail = world
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                GlobalTransform::from_xyz(5.0, 1.0, 0.0),
+                ChildOf(head),
+            ))
+            .id();
+        let props = SpringJointProps {
+            drag_force: 0.0,
+            gravity_dir: Vec3::NEG_X,
+            gravity_power: 1.0,
+            hit_radius: 0.0,
+            stiffness: 0.0,
+        };
+        world.entity_mut(head).insert((
+            props,
+            SpringJointState::from_rest(Vec3::Y, 1.0, Transform::IDENTITY),
+            SpringRoot {
+                joints: SpringJoints(vec![head, tail]),
+                ..default()
+            },
+        ));
+        world
+            .get_mut::<SpringJointState>(head)
+            .unwrap()
+            .set_tails(Vec3::new(2.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
+        app.world_mut()
+            .commands()
+            .entity(vrma)
+            .trigger(|entity| PlayVrma {
+                reset_spring_bones: true,
+                ..PlayVrma::new(entity)
+            });
+        app.update();
+
+        let (prev_tail, current_tail) = app.world().get::<SpringJointState>(head).unwrap().tails();
+        assert!(
+            current_tail.abs_diff_eq(Vec3::new(5.0, 1.0, 0.0), 1e-5),
+            "the joint must start at the live tail: {current_tail:?}"
+        );
+        assert_eq!(prev_tail, current_tail, "reseeding must clear the inertia");
+        success!()
     }
 
     #[test]

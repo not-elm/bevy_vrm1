@@ -53,15 +53,86 @@ impl SpringJointState {
         self.current_tail = tail;
     }
 
-    /// Resets the velocity by setting `prev_tail` to `current_tail`.
-    ///
-    /// This eliminates the inertia term `(current_tail - prev_tail)` in
-    /// the Verlet integration, preventing spring bones from bouncing
-    /// after sudden bone movements (e.g. animation transitions).
-    pub(crate) fn reset_velocity(&mut self) {
-        self.prev_tail = self.current_tail;
+    #[cfg(test)]
+    pub(crate) fn tails(&self) -> (Vec3, Vec3) {
+        (self.prev_tail, self.current_tail)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_tails(
+        &mut self,
+        prev_tail: Vec3,
+        current_tail: Vec3,
+    ) {
+        self.prev_tail = prev_tail;
+        self.current_tail = current_tail;
     }
 }
+
+/// Reseeds every spring joint under `entity`, including the entity itself.
+///
+/// Each joint takes the live position of its tail node, in center space when
+/// its spring root has a center node. This is the same seeding used when a
+/// joint state is added, so a teleport or pose switch starts with no inertia
+/// pointing at the previous pose.
+pub(crate) fn reseed_spring_bones(
+    entity: Entity,
+    spring_roots: &Query<&SpringRoot>,
+    joint_states: &mut Query<&mut SpringJointState>,
+    transforms: &Query<&GlobalTransform>,
+    children: &Query<&Children>,
+) {
+    if let Ok(root) = spring_roots.get(entity) {
+        let center_gtf = root
+            .center_node
+            .and_then(|center| transforms.get(center).ok())
+            .copied();
+        for (index, &joint) in root.joints.iter().enumerate() {
+            let (Ok(mut state), Some(&tail)) =
+                (joint_states.get_mut(joint), root.joints.get(index + 1))
+            else {
+                continue;
+            };
+            let Ok(tail_gtf) = transforms.get(tail) else {
+                continue;
+            };
+            state.seed_tail(global_to_center_local(tail_gtf.translation(), &center_gtf));
+        }
+    }
+    let Ok(entity_children) = children.get(entity) else {
+        return;
+    };
+    for child in entity_children.iter() {
+        reseed_spring_bones(child, spring_roots, joint_states, transforms, children);
+    }
+}
+
+/// Converts a world tail position into the spring root's center space.
+pub(crate) fn global_to_center_local(
+    tail_pos: Vec3,
+    center_gtf: &Option<GlobalTransform>,
+) -> Vec3 {
+    if let Some(gtf) = center_gtf.as_ref() {
+        gtf.to_matrix().inverse().transform_point3(tail_pos)
+    } else {
+        tail_pos
+    }
+}
+
+/// Reseeds the spring joints under the target entity at their live tail positions.
+///
+/// Trigger this after teleporting a rig or switching its pose outside VRMA
+/// playback. It is a no-op for an entity without spring joints in its subtree.
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// # use bevy_vrm1::prelude::*;
+/// fn teleport(mut commands: Commands, vrm: Entity) {
+///     commands.entity(vrm).trigger(ReseedSpringBones);
+/// }
+/// ```
+#[derive(EntityEvent, Debug, Reflect)]
+pub struct ReseedSpringBones(pub Entity);
 
 #[derive(Component, Debug, Clone, PartialEq, Default, Reflect)]
 #[reflect(Component, Default)]
@@ -135,6 +206,211 @@ impl Plugin for VrmSpringBonePlugin {
             .register_type::<SpringColliders>()
             .register_type::<SpringCenterNode>()
             .register_type::<SpringJointProps>()
+            .register_type::<ReseedSpringBones>()
+            .add_observer(apply_reseed_spring_bones)
             .add_plugins(SpringBoneUpdatePlugin);
+    }
+}
+
+fn apply_reseed_spring_bones(
+    trigger: On<ReseedSpringBones>,
+    spring_roots: Query<&SpringRoot>,
+    mut joint_states: Query<&mut SpringJointState>,
+    transforms: Query<&GlobalTransform>,
+    children: Query<&Children>,
+) {
+    reseed_spring_bones(
+        trigger.event_target(),
+        &spring_roots,
+        &mut joint_states,
+        &transforms,
+        &children,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::test_app;
+    use bevy::time::TimeUpdateStrategy;
+    use std::f32::consts::FRAC_PI_2;
+    use std::time::Duration;
+
+    struct ReseedStrand {
+        app: App,
+        root: Entity,
+        head: Entity,
+        tail: Entity,
+    }
+
+    fn reseed_strand(with_center: bool) -> ReseedStrand {
+        let mut app = test_app();
+        app.add_plugins((bevy::transform::TransformPlugin, VrmSpringBonePlugin));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            16,
+        )));
+        app.finish();
+        app.cleanup();
+        let world = app.world_mut();
+        let root = world
+            .spawn((Transform::IDENTITY, GlobalTransform::IDENTITY))
+            .id();
+        let head = world
+            .spawn((
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                ChildOf(root),
+            ))
+            .id();
+        let tail = world
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                GlobalTransform::from_xyz(0.0, 1.0, 0.0),
+                ChildOf(head),
+            ))
+            .id();
+        let center = with_center.then(|| {
+            let transform = Transform {
+                translation: Vec3::new(100.0, 0.0, 0.0),
+                rotation: Quat::from_rotation_z(FRAC_PI_2),
+                ..default()
+            };
+            world
+                .spawn((transform, GlobalTransform::from(transform)))
+                .id()
+        });
+        let props = SpringJointProps {
+            drag_force: 0.0,
+            gravity_dir: Vec3::NEG_X,
+            gravity_power: 50.0,
+            hit_radius: 0.0,
+            stiffness: 0.0,
+        };
+        world.entity_mut(head).insert((
+            props,
+            SpringJointState::from_rest(Vec3::Y, 1.0, Transform::IDENTITY),
+            SpringRoot {
+                joints: SpringJoints(vec![head, tail]),
+                center_node: SpringCenterNode(center),
+                ..default()
+            },
+        ));
+        world.entity_mut(tail).insert(props);
+        ReseedStrand {
+            app,
+            root,
+            head,
+            tail,
+        }
+    }
+
+    fn joint_state(strand: &ReseedStrand) -> &SpringJointState {
+        strand
+            .app
+            .world()
+            .get::<SpringJointState>(strand.head)
+            .expect("the head keeps its spring state")
+    }
+
+    fn teleport_root(strand: &mut ReseedStrand) {
+        let world = strand.app.world_mut();
+        world.entity_mut(strand.root).insert((
+            Transform::from_xyz(100.0, 0.0, 0.0),
+            GlobalTransform::from_xyz(100.0, 0.0, 0.0),
+        ));
+        world
+            .entity_mut(strand.head)
+            .insert(GlobalTransform::from_xyz(100.0, 0.0, 0.0));
+        world
+            .entity_mut(strand.tail)
+            .insert(GlobalTransform::from_xyz(100.0, 1.0, 0.0));
+    }
+
+    /// A teleport must not leave the joint simulating against the old pose:
+    /// without the trigger the stale position and inertia survive the jump.
+    #[test]
+    fn a_reseed_after_a_teleport_puts_the_joint_at_the_live_tail() {
+        let mut reseeded = reseed_strand(false);
+        let mut stale = reseed_strand(false);
+        for strand in [&mut reseeded, &mut stale] {
+            strand.app.update();
+            strand.app.update();
+            teleport_root(strand);
+        }
+
+        reseeded
+            .app
+            .world_mut()
+            .trigger(ReseedSpringBones(reseeded.root));
+
+        let state = joint_state(&reseeded);
+        assert!(
+            state
+                .current_tail
+                .abs_diff_eq(Vec3::new(100.0, 1.0, 0.0), 1e-5),
+            "the joint must start at the live tail: {:?}",
+            state.current_tail
+        );
+        assert_eq!(
+            state.prev_tail, state.current_tail,
+            "reseeding must clear the inertia"
+        );
+        let stale_state = joint_state(&stale);
+        assert!(
+            stale_state.current_tail.x.abs() < 1.0,
+            "without the trigger the state stays at the old pose: {:?}",
+            stale_state.current_tail
+        );
+        assert_ne!(
+            stale_state.prev_tail, stale_state.current_tail,
+            "without the trigger the old inertia survives"
+        );
+
+        reseeded.app.update();
+        let tail = reseeded
+            .app
+            .world()
+            .get::<GlobalTransform>(reseeded.tail)
+            .unwrap()
+            .translation();
+        assert!(
+            (tail.x - 100.0).abs() < 1.0 && tail.y > 0.5,
+            "the next spring step must start from the live tail: {tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_reseed_uses_center_local_tail_positions() {
+        let mut strand = reseed_strand(true);
+        strand.app.update();
+        strand
+            .app
+            .world_mut()
+            .entity_mut(strand.tail)
+            .insert(GlobalTransform::from_xyz(100.0, 1.0, 0.0));
+
+        strand
+            .app
+            .world_mut()
+            .trigger(ReseedSpringBones(strand.root));
+
+        let state = joint_state(&strand);
+        assert!(
+            state.current_tail.abs_diff_eq(Vec3::X, 1e-5),
+            "the tail must be stored in center space: {:?}",
+            state.current_tail
+        );
+        assert_eq!(state.prev_tail, state.current_tail);
+    }
+
+    #[test]
+    fn a_reseed_trigger_on_an_entity_without_springs_is_a_no_op() {
+        let mut app = test_app();
+        app.add_plugins(VrmSpringBonePlugin);
+        let entity = app.world_mut().spawn_empty().id();
+
+        app.world_mut().trigger(ReseedSpringBones(entity));
+
+        assert!(app.world().get_entity(entity).is_ok());
     }
 }

@@ -53,7 +53,7 @@ pub mod prelude {
         instance::VrmHandle,
         look_at::{CursorGazeDepth, GazeTarget, LookAt},
         mtoon::prelude::*,
-        spring_bone::{SpringJointProps, SpringJoints, SpringRoot},
+        spring_bone::{ReseedSpringBones, SpringJointProps, SpringJoints, SpringRoot},
     };
 }
 

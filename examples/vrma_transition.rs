@@ -1,7 +1,8 @@
 //! Key 2 plays `VRMA_02`, whose bent knees make the skirt sink through the legs:
 //! `AliciaSolid` has thigh colliders but nothing below mid-thigh.
-//! Press L to add capsules parented to the animated upper legs, then press 2 again
-//! (or replay the pose): the skirt springs now stay outside the legs.
+//! Press L to add capsules parented to the animated upper legs; they bracket the
+//! measured hip-to-knee axis. Replay the pose to see the skirt visibly deflected;
+//! extreme deep poses may still intersect (point-vs-collider collision).
 //!
 //! 1. `VRMA_01.vrma`
 //! 2. `VRMA_02.vrma`
@@ -118,7 +119,7 @@ fn play_vrma<const I: usize>(
 
 fn help_text(enabled: bool) -> String {
     let state = if enabled {
-        "ON - replay 2: skirt stays outside the legs"
+        "ON - replay 2: skirt is pushed out of the bent knees"
     } else {
         "OFF - press 2: skirt sinks through bent knees"
     };
@@ -165,11 +166,12 @@ fn toggle_leg_colliders(
             }
             let original_len = spring_root.colliders.0.len();
             for (bone, side) in bones {
-                let offset_x = 0.012 * side;
+                let offset_x = -0.0007 * side;
+                let tail_x = -0.0071 * side;
                 let shape = ColliderShape::Capsule(Capsule {
-                    offset: [offset_x, -0.06, 0.01],
-                    radius: 0.06,
-                    tail: [offset_x, -0.55, 0.01],
+                    offset: [offset_x, -0.0363, 0.0001],
+                    radius: 0.07,
+                    tail: [tail_x, -0.3815, 0.0014],
                 });
                 let collider = commands
                     .spawn((Transform::IDENTITY, ChildOf(bone), shape))

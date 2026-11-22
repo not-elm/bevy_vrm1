@@ -59,6 +59,10 @@ redundant_else = "warn"
 match_same_arms = "warn"
 semicolon_if_nothing_returned = "warn"
 
+[[bench]]
+name = "collider_bench"
+harness = false
+
 [features]
 default = []
 serde = ["bevy/serialize"]

@@ -308,8 +308,12 @@ fn push_out_of_sphere(
             return;
         };
         let pos_from_collider = collider_center + dir * r;
-        *next_tail =
-            head_global_pos + (pos_from_collider - head_global_pos).normalize() * bone_length;
+        let from_head = pos_from_collider - head_global_pos;
+        *next_tail = if from_head.length_squared() <= f32::EPSILON {
+            pos_from_collider
+        } else {
+            head_global_pos + from_head.normalize() * bone_length
+        };
     }
 }
 
@@ -523,6 +527,25 @@ mod tests {
         let expected = head_global_pos + (pos_from_collider - head_global_pos).normalize() * 1.0;
         assert!(
             next_tail.abs_diff_eq(expected, 1e-6),
+            "next_tail: {next_tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_surface_point_coincident_with_the_head_stays_finite() {
+        let sphere = ColliderShape::Sphere(Sphere {
+            offset: [0.0; 3],
+            radius: 0.5,
+        });
+        let collider = GlobalTransform::default();
+        let head_global_pos = Vec3::new(0.5, 0.0, 0.0);
+        let mut next_tail = Vec3::new(0.25, 0.0, 0.0);
+
+        sphere.apply_collision(&mut next_tail, &collider, head_global_pos, 0.0, 1.0);
+
+        assert!(next_tail.is_finite(), "next_tail: {next_tail:?}");
+        assert!(
+            next_tail.abs_diff_eq(head_global_pos, 1e-6),
             "next_tail: {next_tail:?}"
         );
     }

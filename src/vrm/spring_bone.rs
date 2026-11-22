@@ -119,7 +119,13 @@ pub(crate) fn global_to_center_local(
     }
 }
 
-/// Reseeds the spring joints under the target entity at their live tail positions.
+/// Queues the target entity for a spring reseed under its subtree.
+///
+/// Queued roots are reseeded once per frame in `PostUpdate`, after
+/// `VrmSystemSets::PropagateAfterExpressions` and immediately before
+/// `VrmSystemSets::SpringBone`, so the tails are placed at their live positions
+/// using this frame's propagated transforms, with inertia cleared. Repeated
+/// triggers for the same entity in one frame share a single reseed.
 ///
 /// Trigger this after teleporting a rig or switching its pose outside VRMA
 /// playback. It is a no-op for an entity without spring joints in its subtree.

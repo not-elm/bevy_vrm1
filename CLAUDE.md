@@ -106,6 +106,8 @@ VrmSystemSets::Expressions
     ↓
 VrmSystemSets::PropagateAfterExpressions (manual transform propagation)
     ↓
+drain_reseed_queue (queued spring reseeds)
+    ↓
 VrmSystemSets::SpringBone
     ↓
 VrmSystemSets::DetermineRedraw (triggers RequestRedraw if needed)
@@ -151,9 +153,9 @@ All use spherical linear interpolation (slerp) based on weight parameter (0.0-1.
 - Each `SpringRoot` contains a chain of joints with collision detection
 - Center node defines reference frame for inertia calculations
 - Sphere and capsule colliders both resolve contacts; a segment's head joint supplies `hitRadius`
-- Contact is tested over the whole bone segment `[head, next_tail]` with one bounded re-check after re-projecting to bone length; this is always on
-- `ReseedSpringBones(entity)` (prelude) reseeds spring joints in the entity's subtree at their live tail positions and clears inertia; trigger it after a teleport or a pose change outside VRMA
-- `PlayVrma::reset_spring_bones: true` performs the same reseed for the parent VRM when the animation plays
+- Contact is tested over the whole bone segment `[head, next_tail]` with up to two bounded pushes per collider; a 1%-slack clearance check keeps a push only when re-projection leaves the segment clear, otherwise the push is reverted and the endpoint-only collider rule is applied
+- `ReseedSpringBones(entity)` (prelude) queues the entity; queued roots are reseeded once per frame in PostUpdate after PropagateAfterExpressions and immediately before VrmSystemSets::SpringBone, using this frame's propagated transforms and clearing inertia; trigger it after a teleport or a pose change outside VRMA
+- `PlayVrma::reset_spring_bones: true` enqueues the parent VRM for the same drain-phase reseed when the animation plays
 
 ### LookAt System
 

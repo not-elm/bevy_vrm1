@@ -134,6 +134,20 @@ pub(crate) fn global_to_center_local(
 #[derive(EntityEvent, Debug, Reflect)]
 pub struct ReseedSpringBones(pub Entity);
 
+#[derive(Resource, Debug, Default)]
+pub(crate) struct ReseedQueue(pub Vec<Entity>);
+
+impl ReseedQueue {
+    pub(crate) fn push(
+        &mut self,
+        entity: Entity,
+    ) {
+        if !self.0.contains(&entity) {
+            self.0.push(entity);
+        }
+    }
+}
+
 #[derive(Component, Debug, Clone, PartialEq, Default, Reflect)]
 #[reflect(Component, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -214,25 +228,37 @@ impl Plugin for VrmSpringBonePlugin {
 
 fn apply_reseed_spring_bones(
     trigger: On<ReseedSpringBones>,
+    mut queue: ResMut<ReseedQueue>,
+) {
+    queue.push(trigger.event_target());
+}
+
+pub(crate) fn drain_reseed_queue(
+    mut queue: ResMut<ReseedQueue>,
     spring_roots: Query<&SpringRoot>,
     mut joint_states: Query<&mut SpringJointState>,
     transforms: Query<&GlobalTransform>,
     children: Query<&Children>,
 ) {
-    reseed_spring_bones(
-        trigger.event_target(),
-        &spring_roots,
-        &mut joint_states,
-        &transforms,
-        &children,
-    );
+    for root in queue.0.drain(..) {
+        reseed_spring_bones(
+            root,
+            &spring_roots,
+            &mut joint_states,
+            &transforms,
+            &children,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::system_set::VrmSystemSets;
     use crate::tests::test_app;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::time::TimeUpdateStrategy;
+    use bevy::transform::TransformSystems;
     use std::f32::consts::FRAC_PI_2;
     use std::time::Duration;
 
@@ -246,6 +272,10 @@ mod tests {
     fn reseed_strand(with_center: bool) -> ReseedStrand {
         let mut app = test_app();
         app.add_plugins((bevy::transform::TransformPlugin, VrmSpringBonePlugin));
+        app.configure_sets(
+            PostUpdate,
+            VrmSystemSets::PropagateAfterExpressions.after(TransformSystems::Propagate),
+        );
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
             16,
         )));
@@ -312,6 +342,14 @@ mod tests {
             .expect("the head keeps its spring state")
     }
 
+    fn drain(strand: &mut ReseedStrand) {
+        strand
+            .app
+            .world_mut()
+            .run_system_once(drain_reseed_queue)
+            .expect("the reseed drain runs");
+    }
+
     fn teleport_root(strand: &mut ReseedStrand) {
         let world = strand.app.world_mut();
         world.entity_mut(strand.root).insert((
@@ -342,6 +380,7 @@ mod tests {
             .app
             .world_mut()
             .trigger(ReseedSpringBones(reseeded.root));
+        drain(&mut reseeded);
 
         let state = joint_state(&reseeded);
         assert!(
@@ -393,6 +432,7 @@ mod tests {
             .app
             .world_mut()
             .trigger(ReseedSpringBones(strand.root));
+        drain(&mut strand);
 
         let state = joint_state(&strand);
         assert!(
@@ -403,6 +443,71 @@ mod tests {
         assert_eq!(state.prev_tail, state.current_tail);
     }
 
+    /// Seeding must see the pose this frame's propagation produces, not the
+    /// one left over from the previous frame.
+    #[test]
+    fn a_reseed_in_the_teleport_frame_seeds_from_the_new_pose() {
+        let mut strand = reseed_strand(false);
+        let neutral = SpringJointProps {
+            gravity_power: 0.0,
+            ..*strand
+                .app
+                .world()
+                .get::<SpringJointProps>(strand.head)
+                .unwrap()
+        };
+        let world = strand.app.world_mut();
+        world.entity_mut(strand.head).insert(neutral);
+        world.entity_mut(strand.tail).insert(neutral);
+        strand.app.update();
+        strand.app.update();
+        strand
+            .app
+            .world_mut()
+            .entity_mut(strand.root)
+            .insert(Transform::from_xyz(100.0, 0.0, 0.0));
+        strand
+            .app
+            .world_mut()
+            .trigger(ReseedSpringBones(strand.root));
+
+        strand.app.update();
+
+        let state = joint_state(&strand);
+        assert!(
+            state
+                .current_tail
+                .abs_diff_eq(Vec3::new(100.0, 1.0, 0.0), 1e-5),
+            "the seed must use this frame's tail: {:?}",
+            state.current_tail
+        );
+        assert_eq!(state.prev_tail, state.current_tail);
+        assert!(strand.app.world().resource::<ReseedQueue>().0.is_empty());
+    }
+
+    #[test]
+    fn repeated_triggers_in_one_frame_enqueue_one_walk() {
+        let mut strand = reseed_strand(false);
+        drain(&mut strand);
+        strand
+            .app
+            .world_mut()
+            .get_mut::<SpringJointState>(strand.head)
+            .unwrap()
+            .set_tails(Vec3::X, Vec3::ZERO);
+        let world = strand.app.world_mut();
+        world.trigger(ReseedSpringBones(strand.root));
+        world.trigger(ReseedSpringBones(strand.root));
+
+        assert_eq!(world.resource::<ReseedQueue>().0, vec![strand.root]);
+        drain(&mut strand);
+
+        assert!(strand.app.world().resource::<ReseedQueue>().0.is_empty());
+        let state = joint_state(&strand);
+        assert!(state.current_tail.abs_diff_eq(Vec3::Y, 1e-5));
+        assert_eq!(state.prev_tail, state.current_tail);
+    }
+
     #[test]
     fn a_reseed_trigger_on_an_entity_without_springs_is_a_no_op() {
         let mut app = test_app();
@@ -410,7 +515,11 @@ mod tests {
         let entity = app.world_mut().spawn_empty().id();
 
         app.world_mut().trigger(ReseedSpringBones(entity));
+        app.world_mut()
+            .run_system_once(drain_reseed_queue)
+            .expect("the reseed drain runs");
 
+        assert!(app.world().resource::<ReseedQueue>().0.is_empty());
         assert!(app.world().get_entity(entity).is_ok());
     }
 }

@@ -1,7 +1,8 @@
 use crate::system_set::VrmSystemSets;
 use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
 use crate::vrm::spring_bone::{
-    SpringJointProps, SpringJointState, SpringRoot, global_to_center_local,
+    ReseedQueue, SpringJointProps, SpringJointState, SpringRoot, drain_reseed_queue,
+    global_to_center_local,
 };
 use bevy::app::App;
 use bevy::math::{Mat4, Vec3};
@@ -15,6 +16,12 @@ impl Plugin for SpringBoneUpdatePlugin {
         &self,
         app: &mut App,
     ) {
+        app.init_resource::<ReseedQueue>().add_systems(
+            PostUpdate,
+            drain_reseed_queue
+                .after(VrmSystemSets::PropagateAfterExpressions)
+                .before(VrmSystemSets::SpringBone),
+        );
         app.add_systems(
             PostUpdate,
             update_spring_bones

@@ -1,6 +1,6 @@
 use crate::prelude::ChildSearcher;
 use crate::vrm::Vrm;
-use crate::vrm::spring_bone::{SpringJointState, SpringRoot, reseed_spring_bones};
+use crate::vrm::spring_bone::ReseedQueue;
 use crate::vrma::animation::animation_graph::{NeedsBake, VrmaBake};
 use crate::vrma::animation::expressions::reset_animated_expression_weights;
 use crate::vrma::{
@@ -62,7 +62,8 @@ impl Plugin for VrmaAnimationPlayPlugin {
         &self,
         app: &mut App,
     ) {
-        app.register_type::<PlayVrma>()
+        app.init_resource::<ReseedQueue>()
+            .register_type::<PlayVrma>()
             .add_observer(apply_play_vrma)
             .add_observer(apply_stop_vrma)
             .add_systems(Last, snapshot_vrma_playback)
@@ -98,9 +99,7 @@ fn apply_play_vrma(
         Has<NeedsBake>,
     )>,
     graphs: Query<&VrmAnimationGraphState>,
-    spring_roots: Query<&SpringRoot>,
-    mut joint_states: Query<&mut SpringJointState>,
-    transforms: Query<&GlobalTransform>,
+    mut queue: ResMut<ReseedQueue>,
     mut playback: Query<&mut VrmaPlaybackState>,
 ) {
     let vrma_entity = trigger.event_target();
@@ -128,13 +127,7 @@ fn apply_play_vrma(
         None
     };
     if trigger.reset_spring_bones {
-        reseed_spring_bones(
-            *vrm_entity,
-            &spring_roots,
-            &mut joint_states,
-            &transforms,
-            &childrens,
-        );
+        queue.push(*vrm_entity);
     }
     for sibling in childrens.get(*vrm_entity).into_iter().flatten() {
         if let Ok(mut state) = playback.get_mut(*sibling)
@@ -320,7 +313,7 @@ mod tests {
     use crate::prelude::*;
     use crate::success;
     use crate::tests::{TestResult, test_app};
-    use crate::vrm::spring_bone::SpringJointState;
+    use crate::vrm::spring_bone::{SpringJointState, drain_reseed_queue};
     use crate::vrma::animation::animation_graph::NeedsBake;
     use crate::vrma::animation::play::VrmaAnimationPlayPlugin;
     use crate::vrma::{
@@ -417,6 +410,9 @@ mod tests {
                 ..PlayVrma::new(entity)
             });
         app.update();
+        app.world_mut()
+            .run_system_once(drain_reseed_queue)
+            .expect("the reseed drain runs");
 
         let (prev_tail, current_tail) = app.world().get::<SpringJointState>(head).unwrap().tails();
         assert!(

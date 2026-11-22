@@ -1,15 +1,18 @@
 //! Key 2 plays `VRMA_02`, whose bent knees make the skirt sink through the legs:
 //! `AliciaSolid` has thigh colliders but nothing below mid-thigh.
-//! Press L to add capsules parented to the animated upper legs; they bracket the
-//! measured hip-to-knee axis. Replay the pose to see the skirt visibly deflected;
-//! extreme deep poses may still intersect (point-vs-collider collision).
+//! Press L to add a full limb pack (upper legs, shins, upper arms, forearms)
+//! with bone-local capsules measured from the model's bone geometry. This is a
+//! mitigation, not a resolution: VRM point collision cannot fully resolve
+//! deep-pose skirt-vs-limb overlap, and `different_pose` still leaves arm
+//! overlap. Toggle before replaying pose 2 for the strongest effect; a held
+//! deep pose already has strands inside the limbs.
 //!
 //! 1. `VRMA_01.vrma`
 //! 2. `VRMA_02.vrma`
 //! 3. `VRMA_03.vrma`
 //! 4. `different_pose.vrma`
 //!
-//! L: toggle leg capsules for the skirt springs
+//! L: toggle the skirt limb pack
 
 use bevy::animation::RepeatAnimation;
 use bevy::input::common_conditions::input_just_pressed;
@@ -24,7 +27,7 @@ struct VrmaNo<const I: usize>;
 struct HelpText;
 
 #[derive(Resource, Default)]
-struct LegColliders {
+struct LimbColliders {
     enabled: bool,
     spawned: Vec<Entity>,
     original_lengths: Vec<(Entity, usize)>,
@@ -33,7 +36,7 @@ struct LegColliders {
 fn main() {
     App::new()
         .add_plugins((DefaultPlugins, VrmPlugin, VrmaPlugin))
-        .init_resource::<LegColliders>()
+        .init_resource::<LimbColliders>()
         .add_systems(Startup, (spawn_directional_light, spawn_camera, spawn_vrm))
         .add_systems(
             Update,
@@ -42,7 +45,7 @@ fn main() {
                 play_vrma::<2>.run_if(input_just_pressed(KeyCode::Digit2)),
                 play_vrma::<3>.run_if(input_just_pressed(KeyCode::Digit3)),
                 play_vrma::<4>.run_if(input_just_pressed(KeyCode::Digit4)),
-                toggle_leg_colliders.run_if(input_just_pressed(KeyCode::KeyL)),
+                toggle_limb_colliders.run_if(input_just_pressed(KeyCode::KeyL)),
             ),
         )
         .run();
@@ -119,16 +122,16 @@ fn play_vrma<const I: usize>(
 
 fn help_text(enabled: bool) -> String {
     let state = if enabled {
-        "ON - replay 2: skirt is pushed out of the bent knees"
+        "leg/arm capsules ON - replay 2: strands pushed out during the bend (held deep poses still touch)"
     } else {
-        "OFF - press 2: skirt sinks through bent knees"
+        "leg/arm capsules OFF - press 2: skirt sinks through bent knees"
     };
-    format!("1: VRMA_01   2: VRMA_02   3: VRMA_03   4: different_pose\nL: leg capsules {state}")
+    format!("1: VRMA_01   2: VRMA_02   3: VRMA_03   4: different_pose\nL: {state}")
 }
 
-fn toggle_leg_colliders(
+fn toggle_limb_colliders(
     mut commands: Commands,
-    mut state: ResMut<LegColliders>,
+    mut state: ResMut<LimbColliders>,
     mut roots: Query<(Entity, &mut SpringRoot, &Name)>,
     searcher: ChildSearcher,
     parents: ParentSearcher,
@@ -152,31 +155,81 @@ fn toggle_leg_colliders(
         else {
             return;
         };
-        let Some(left_leg) = searcher.find_from_name(vrm, "LeftUpLeg") else {
-            return;
-        };
-        let Some(right_leg) = searcher.find_from_name(vrm, "RightUpLeg") else {
-            return;
-        };
-        let bones = [(left_leg, 1.0), (right_leg, -1.0)];
+        let limb_bones = [
+            (
+                "LeftUpLeg",
+                [-0.0007, -0.0363, 0.0001],
+                [-0.0071, -0.3815, 0.0014],
+                0.07,
+            ),
+            (
+                "RightUpLeg",
+                [0.0007, -0.0363, 0.0001],
+                [0.0071, -0.3815, 0.0014],
+                0.07,
+            ),
+            (
+                "LeftLeg",
+                [-0.0006, -0.0210, -0.0010],
+                [-0.0132, -0.4405, -0.0212],
+                0.050,
+            ),
+            (
+                "RightLeg",
+                [0.0006, -0.0210, -0.0010],
+                [0.0132, -0.4405, -0.0212],
+                0.050,
+            ),
+            (
+                "LeftArm",
+                [0.0104, -0.0003, 0.0000],
+                [0.2194, -0.0060, 0.0008],
+                0.045,
+            ),
+            (
+                "RightArm",
+                [-0.0104, -0.0003, 0.0000],
+                [-0.2194, -0.0070, 0.0010],
+                0.045,
+            ),
+            (
+                "LeftForeArm",
+                [0.0109, 0.0000, 0.0001],
+                [0.2286, -0.0010, 0.0012],
+                0.035,
+            ),
+            (
+                "RightForeArm",
+                [-0.0109, -0.0001, 0.0001],
+                [-0.2286, -0.0011, 0.0014],
+                0.035,
+            ),
+        ];
+        let mut capsules = Vec::with_capacity(limb_bones.len());
+        for (name, offset, tail, radius) in limb_bones {
+            let Some(bone) = searcher.find_from_name(vrm, name) else {
+                return;
+            };
+            capsules.push((
+                bone,
+                ColliderShape::Capsule(Capsule {
+                    offset,
+                    radius,
+                    tail,
+                }),
+            ));
+        }
 
         for (root_entity, mut spring_root, name) in roots.iter_mut() {
             if !name.as_str().starts_with("skirt_") {
                 continue;
             }
             let original_len = spring_root.colliders.0.len();
-            for (bone, side) in bones {
-                let offset_x = -0.0007 * side;
-                let tail_x = -0.0071 * side;
-                let shape = ColliderShape::Capsule(Capsule {
-                    offset: [offset_x, -0.0363, 0.0001],
-                    radius: 0.07,
-                    tail: [tail_x, -0.3815, 0.0014],
-                });
+            for (bone, shape) in &capsules {
                 let collider = commands
-                    .spawn((Transform::IDENTITY, ChildOf(bone), shape))
+                    .spawn((Transform::IDENTITY, ChildOf(*bone), *shape))
                     .id();
-                spring_root.colliders.0.push((collider, shape));
+                spring_root.colliders.0.push((collider, *shape));
                 state.spawned.push(collider);
             }
             state.original_lengths.push((root_entity, original_len));

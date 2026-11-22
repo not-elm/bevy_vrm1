@@ -42,6 +42,9 @@ cargo run --example simple
 # Spring bone physics demo
 cargo run --example spring_bone
 
+# Spring bone contact and reseed demo
+cargo run --example collider_contact
+
 # LookAt demos
 cargo run --example look_at_cursor
 cargo run --example look_at_target
@@ -147,6 +150,10 @@ All use spherical linear interpolation (slerp) based on weight parameter (0.0-1.
 - Uses Verlet integration for physics simulation
 - Each `SpringRoot` contains a chain of joints with collision detection
 - Center node defines reference frame for inertia calculations
+- Sphere and capsule colliders both resolve contacts; a segment's head joint supplies `hitRadius`
+- Contact is tested over the whole bone segment `[head, next_tail]` with one bounded re-check after re-projecting to bone length; this is always on
+- `ReseedSpringBones(entity)` (prelude) reseeds spring joints in the entity's subtree at their live tail positions and clears inertia; trigger it after a teleport or a pose change outside VRMA
+- `PlayVrma::reset_spring_bones: true` performs the same reseed for the parent VRM when the animation plays
 
 ### LookAt System
 

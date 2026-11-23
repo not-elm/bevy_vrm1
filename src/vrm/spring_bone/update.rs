@@ -170,6 +170,7 @@ fn apply_collision(
 mod tests {
     use super::*;
     use crate::tests::test_app;
+    use crate::vrm::gltf::extensions::vrmc_spring_bone::Capsule;
     use crate::vrm::spring_bone::{SpringCenterNode, SpringColliders, SpringJoints};
 
     /// The load-time rest pose knows nothing about where the application put the
@@ -290,6 +291,134 @@ mod tests {
         assert_eq!(
             tail_rotation_or_identity(Vec3::Y, Mat4::IDENTITY, Vec3::ZERO),
             Quat::IDENTITY
+        );
+    }
+
+    struct CapsuleStrand {
+        app: App,
+        head: Entity,
+        tail: Entity,
+        collider: Option<Entity>,
+    }
+
+    fn capsule_strand(collider: Option<(GlobalTransform, ColliderShape)>) -> CapsuleStrand {
+        let mut app = test_app();
+        app.add_plugins((bevy::transform::TransformPlugin, SpringBoneUpdatePlugin));
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+        app.finish();
+        app.cleanup();
+        let world = app.world_mut();
+        let root = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::from_xyz(0.0, 0.0, 0.0),
+            ))
+            .id();
+        let head = world
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                GlobalTransform::from_xyz(0.0, 1.0, 0.0),
+                ChildOf(root),
+            ))
+            .id();
+        let tail = world
+            .spawn((
+                Transform::from_xyz(0.0, -0.1, 0.0),
+                GlobalTransform::from_xyz(0.0, 0.9, 0.0),
+                ChildOf(head),
+            ))
+            .id();
+        let props = SpringJointProps {
+            drag_force: 0.0,
+            gravity_dir: Vec3::NEG_X,
+            gravity_power: 50.0,
+            hit_radius: 0.0,
+            stiffness: 0.0,
+        };
+        let collider =
+            collider.map(|(gtf, shape)| world.spawn((Transform::default(), gtf, shape)).id());
+        let colliders = collider
+            .map(|entity| vec![(entity, *world.get::<ColliderShape>(entity).unwrap())])
+            .unwrap_or_default();
+        world.entity_mut(head).insert((
+            props,
+            SpringJointState::from_rest(Vec3::NEG_Y, 0.1, Transform::from_xyz(0.0, 1.0, 0.0)),
+            SpringRoot {
+                joints: SpringJoints(vec![head, tail]),
+                colliders: SpringColliders(colliders),
+                center_node: SpringCenterNode(None),
+            },
+        ));
+        world.entity_mut(tail).insert(props);
+        CapsuleStrand {
+            app,
+            head,
+            tail,
+            collider,
+        }
+    }
+
+    fn tail_translation(strand: &CapsuleStrand) -> Vec3 {
+        strand
+            .app
+            .world()
+            .get::<GlobalTransform>(strand.tail)
+            .unwrap()
+            .translation()
+    }
+
+    #[test]
+    fn a_spring_joint_reacts_to_a_moving_capsule_collider_world_matrix() {
+        let capsule = ColliderShape::Capsule(Capsule {
+            offset: [0.0, -0.05, 0.0],
+            radius: 0.1,
+            tail: [0.0, 0.05, 0.0],
+        });
+        let far_away = GlobalTransform::from_xyz(1.0, 1.0, 0.0);
+        let in_the_way = GlobalTransform::from_xyz(-0.05, 1.0, 0.0);
+
+        let mut free = capsule_strand(None);
+        let mut blocked = capsule_strand(Some((far_away, capsule)));
+
+        free.app.update();
+        blocked.app.update();
+        free.app.update();
+        blocked.app.update();
+        let free_tail = tail_translation(&free);
+        assert!(
+            free_tail.x.abs() > 1e-3,
+            "gravity must actually swing the strand: {free_tail:?}"
+        );
+        assert!(
+            tail_translation(&blocked).abs_diff_eq(free_tail, 1e-6),
+            "a distant capsule must not deflect the strand: blocked {:?}, free {free_tail:?}",
+            tail_translation(&blocked)
+        );
+
+        blocked
+            .app
+            .world_mut()
+            .entity_mut(blocked.collider.unwrap())
+            .insert(in_the_way);
+        free.app.update();
+        blocked.app.update();
+        let free_tail = tail_translation(&free);
+        let blocked_tail = tail_translation(&blocked);
+        assert!(
+            !blocked_tail.abs_diff_eq(free_tail, 1e-4),
+            "the strand must react to the capsule moved into its path: blocked {blocked_tail:?}, free {free_tail:?}"
+        );
+        assert!(
+            blocked
+                .app
+                .world()
+                .get::<GlobalTransform>(blocked.head)
+                .unwrap()
+                .translation()
+                .abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-6),
+            "the head joint keeps its place"
         );
     }
 }

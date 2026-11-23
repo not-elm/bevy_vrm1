@@ -73,7 +73,7 @@ fn update_spring_bones(
 
             apply_collision(
                 &mut next_tail,
-                spring_root.colliders.iter().copied(),
+                &spring_root.colliders.0,
                 props.hit_radius,
                 head_global_pos,
                 state.bone_length,
@@ -146,23 +146,37 @@ fn global_to_center_local(
 
 fn apply_collision(
     next_tail: &mut Vec3,
-    collider_entities: impl Iterator<Item = (Entity, ColliderShape)>,
+    collider_entities: &[(Entity, ColliderShape)],
     joint_radius: f32,
     head_global_pos: Vec3,
     bone_length: f32,
     transforms: &Query<(&mut Transform, &mut GlobalTransform)>,
 ) {
-    for (collider, collider_shape) in collider_entities {
+    for (collider, collider_shape) in collider_entities.iter().copied() {
         let Ok((_, collider_gtf)) = transforms.get(collider) else {
             continue;
         };
-        collider_shape.apply_collision(
-            next_tail,
-            collider_gtf,
-            head_global_pos,
-            joint_radius,
-            bone_length,
-        );
+        let before = *next_tail;
+        for _ in 0..2 {
+            collider_shape.apply_collision(
+                next_tail,
+                collider_gtf,
+                head_global_pos,
+                joint_radius,
+                bone_length,
+            );
+        }
+        if !collider_shape.segment_is_clear(*next_tail, collider_gtf, head_global_pos, joint_radius)
+        {
+            *next_tail = before;
+            collider_shape.apply_endpoint_collision(
+                next_tail,
+                collider_gtf,
+                head_global_pos,
+                joint_radius,
+                bone_length,
+            );
+        }
     }
 }
 
@@ -170,6 +184,7 @@ fn apply_collision(
 mod tests {
     use super::*;
     use crate::tests::test_app;
+    use crate::vrm::gltf::extensions::vrmc_spring_bone::Capsule;
     use crate::vrm::spring_bone::{SpringCenterNode, SpringColliders, SpringJoints};
 
     /// The load-time rest pose knows nothing about where the application put the
@@ -291,5 +306,401 @@ mod tests {
             tail_rotation_or_identity(Vec3::Y, Mat4::IDENTITY, Vec3::ZERO),
             Quat::IDENTITY
         );
+    }
+
+    struct CapsuleStrand {
+        app: App,
+        head: Entity,
+        tail: Entity,
+        collider: Option<Entity>,
+    }
+
+    fn capsule_strand(collider: Option<(GlobalTransform, ColliderShape)>) -> CapsuleStrand {
+        let mut app = test_app();
+        app.add_plugins((bevy::transform::TransformPlugin, SpringBoneUpdatePlugin));
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+        app.finish();
+        app.cleanup();
+        let world = app.world_mut();
+        let root = world
+            .spawn((
+                Transform::default(),
+                GlobalTransform::from_xyz(0.0, 0.0, 0.0),
+            ))
+            .id();
+        let head = world
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                GlobalTransform::from_xyz(0.0, 1.0, 0.0),
+                ChildOf(root),
+            ))
+            .id();
+        let tail = world
+            .spawn((
+                Transform::from_xyz(0.0, -0.1, 0.0),
+                GlobalTransform::from_xyz(0.0, 0.9, 0.0),
+                ChildOf(head),
+            ))
+            .id();
+        let props = SpringJointProps {
+            drag_force: 0.0,
+            gravity_dir: Vec3::NEG_X,
+            gravity_power: 50.0,
+            hit_radius: 0.0,
+            stiffness: 0.0,
+        };
+        let collider =
+            collider.map(|(gtf, shape)| world.spawn((Transform::default(), gtf, shape)).id());
+        let colliders = collider
+            .map(|entity| vec![(entity, *world.get::<ColliderShape>(entity).unwrap())])
+            .unwrap_or_default();
+        world.entity_mut(head).insert((
+            props,
+            SpringJointState::from_rest(Vec3::NEG_Y, 0.1, Transform::from_xyz(0.0, 1.0, 0.0)),
+            SpringRoot {
+                joints: SpringJoints(vec![head, tail]),
+                colliders: SpringColliders(colliders),
+                center_node: SpringCenterNode(None),
+            },
+        ));
+        world.entity_mut(tail).insert(props);
+        CapsuleStrand {
+            app,
+            head,
+            tail,
+            collider,
+        }
+    }
+
+    fn tail_translation(strand: &CapsuleStrand) -> Vec3 {
+        strand
+            .app
+            .world()
+            .get::<GlobalTransform>(strand.tail)
+            .unwrap()
+            .translation()
+    }
+
+    #[test]
+    fn a_spring_joint_reacts_to_a_moving_capsule_collider_world_matrix() {
+        let capsule = ColliderShape::Capsule(Capsule {
+            offset: [0.0, -0.05, 0.0],
+            radius: 0.1,
+            tail: [0.0, 0.05, 0.0],
+        });
+        let far_away = GlobalTransform::from_xyz(1.0, 1.0, 0.0);
+        let in_the_way = GlobalTransform::from_xyz(-0.05, 1.0, 0.0);
+
+        let mut free = capsule_strand(None);
+        let mut blocked = capsule_strand(Some((far_away, capsule)));
+
+        free.app.update();
+        blocked.app.update();
+        free.app.update();
+        blocked.app.update();
+        let free_tail = tail_translation(&free);
+        assert!(
+            free_tail.x.abs() > 1e-3,
+            "gravity must actually swing the strand: {free_tail:?}"
+        );
+        assert!(
+            tail_translation(&blocked).abs_diff_eq(free_tail, 1e-6),
+            "a distant capsule must not deflect the strand: blocked {:?}, free {free_tail:?}",
+            tail_translation(&blocked)
+        );
+
+        blocked
+            .app
+            .world_mut()
+            .entity_mut(blocked.collider.unwrap())
+            .insert(in_the_way);
+        free.app.update();
+        blocked.app.update();
+        let free_tail = tail_translation(&free);
+        let blocked_tail = tail_translation(&blocked);
+        assert!(
+            !blocked_tail.abs_diff_eq(free_tail, 1e-4),
+            "the strand must react to the capsule moved into its path: blocked {blocked_tail:?}, free {free_tail:?}"
+        );
+        assert!(
+            blocked
+                .app
+                .world()
+                .get::<GlobalTransform>(blocked.head)
+                .unwrap()
+                .translation()
+                .abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-6),
+            "the head joint keeps its place"
+        );
+    }
+
+    struct TunnelingStrand {
+        app: App,
+        head: Entity,
+        tail: Entity,
+    }
+
+    fn tunneling_strand() -> TunnelingStrand {
+        let mut app = test_app();
+        app.add_plugins((bevy::transform::TransformPlugin, SpringBoneUpdatePlugin));
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+        app.finish();
+        app.cleanup();
+        let world = app.world_mut();
+        let root = world
+            .spawn((Transform::default(), GlobalTransform::IDENTITY))
+            .id();
+        let head = world
+            .spawn((
+                Transform::IDENTITY,
+                GlobalTransform::IDENTITY,
+                ChildOf(root),
+            ))
+            .id();
+        let tail = world
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                GlobalTransform::from_xyz(0.0, 1.0, 0.0),
+                ChildOf(head),
+            ))
+            .id();
+        let props = SpringJointProps {
+            drag_force: 0.0,
+            gravity_dir: Vec3::ZERO,
+            gravity_power: 0.0,
+            hit_radius: 0.05,
+            stiffness: 0.0,
+        };
+        world.entity_mut(head).insert((
+            props,
+            SpringJointState::from_rest(Vec3::Y, 1.0, Transform::IDENTITY),
+            SpringRoot {
+                joints: SpringJoints(vec![head, tail]),
+                colliders: SpringColliders::default(),
+                center_node: SpringCenterNode(None),
+            },
+        ));
+        world.entity_mut(tail).insert(props);
+        TunnelingStrand { app, head, tail }
+    }
+
+    fn tunneling_tail_translation(strand: &TunnelingStrand) -> Vec3 {
+        strand
+            .app
+            .world()
+            .get::<GlobalTransform>(strand.tail)
+            .unwrap()
+            .translation()
+    }
+
+    fn closest_point_to_segment(
+        point: Vec3,
+        start: Vec3,
+        end: Vec3,
+    ) -> Vec3 {
+        let segment = end - start;
+        let t = (point - start).dot(segment) / segment.length_squared();
+        start + segment * t.clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn a_collider_on_the_bone_segment_catches_a_tail_that_lands_past_it() {
+        let mut blocked = tunneling_strand();
+        let mut free = tunneling_strand();
+        blocked.app.update();
+        free.app.update();
+
+        for strand in [&mut blocked, &mut free] {
+            let mut state = strand
+                .app
+                .world_mut()
+                .get_mut::<SpringJointState>(strand.head)
+                .expect("the head keeps its spring state");
+            state.current_tail = Vec3::new(0.0, 2.0, 0.0);
+            state.prev_tail = Vec3::new(0.0, 2.1, 0.0);
+        }
+
+        let center = Vec3::new(0.03, 0.95, 0.0);
+        let shape = ColliderShape::Sphere(crate::prelude::Sphere {
+            offset: [0.0; 3],
+            radius: 0.0,
+        });
+        let collider = blocked
+            .app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(center),
+                GlobalTransform::from_translation(center),
+                shape,
+            ))
+            .id();
+        blocked
+            .app
+            .world_mut()
+            .entity_mut(blocked.head)
+            .get_mut::<SpringRoot>()
+            .expect("the spring root exists")
+            .colliders
+            .0
+            .push((collider, shape));
+
+        blocked.app.update();
+        free.app.update();
+
+        let free_tail = tunneling_tail_translation(&free);
+        let blocked_tail = tunneling_tail_translation(&blocked);
+        assert!(
+            free_tail.abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-3),
+            "the free strand lands past the collider: {free_tail:?}"
+        );
+        assert!(
+            blocked_tail.distance(free_tail) > 1e-3,
+            "the segment's mid-bone contact must deflect the tail: blocked {blocked_tail:?}, free {free_tail:?}"
+        );
+        let closest = closest_point_to_segment(center, Vec3::ZERO, blocked_tail);
+        assert!(
+            closest.distance(center) >= 0.05 - 1e-3,
+            "the segment must not stay inside the collider: closest {closest:?}, center {center:?}"
+        );
+    }
+
+    fn add_sphere_collider(
+        strand: &mut TunnelingStrand,
+        center: Vec3,
+    ) {
+        let shape = ColliderShape::Sphere(crate::prelude::Sphere {
+            offset: [0.0; 3],
+            radius: 0.0,
+        });
+        let collider = strand
+            .app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(center),
+                GlobalTransform::from_translation(center),
+                shape,
+            ))
+            .id();
+        strand
+            .app
+            .world_mut()
+            .entity_mut(strand.head)
+            .get_mut::<SpringRoot>()
+            .expect("the spring root exists")
+            .colliders
+            .0
+            .push((collider, shape));
+    }
+
+    #[test]
+    fn a_push_that_stays_in_contact_after_re_projection_reverts_to_the_endpoint_resolution() {
+        let mut unresolved = tunneling_strand();
+        add_sphere_collider(&mut unresolved, Vec3::new(0.04, 0.5, 0.0));
+        unresolved.app.update();
+
+        let tail = tunneling_tail_translation(&unresolved);
+        assert!(
+            tail.abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-3),
+            "an unresolvable segment push must leave the endpoint-rule tail: {tail:?}"
+        );
+
+        let mut resolved = tunneling_strand();
+        add_sphere_collider(&mut resolved, Vec3::new(0.03, 0.95, 0.0));
+        resolved.app.update();
+
+        let tail = tunneling_tail_translation(&resolved);
+        assert!(
+            tail.x < -0.01,
+            "a push whose re-projection clears the segment must stay applied: {tail:?}"
+        );
+    }
+
+    struct RestingOverlapStrand {
+        app: App,
+        tail: Entity,
+    }
+
+    fn resting_overlap_strand() -> RestingOverlapStrand {
+        let mut app = test_app();
+        app.add_plugins((bevy::transform::TransformPlugin, SpringBoneUpdatePlugin));
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(16),
+        ));
+        app.finish();
+        app.cleanup();
+        let world = app.world_mut();
+        let root = world
+            .spawn((Transform::default(), GlobalTransform::IDENTITY))
+            .id();
+        let head = world
+            .spawn((
+                Transform::from_xyz(0.0, 1.0, 0.0),
+                GlobalTransform::from_xyz(0.0, 1.0, 0.0),
+                ChildOf(root),
+            ))
+            .id();
+        let tail = world
+            .spawn((
+                Transform::from_xyz(0.0, -0.1, 0.0),
+                GlobalTransform::from_xyz(0.0, 0.9, 0.0),
+                ChildOf(head),
+            ))
+            .id();
+        let props = SpringJointProps {
+            drag_force: 0.5,
+            gravity_dir: Vec3::NEG_Y,
+            gravity_power: 0.0,
+            hit_radius: 0.1,
+            stiffness: 1.0,
+        };
+        let center = Vec3::new(0.095, 0.99, 0.0);
+        let shape = ColliderShape::Sphere(crate::prelude::Sphere {
+            offset: [0.0; 3],
+            radius: 0.0,
+        });
+        let collider = world
+            .spawn((
+                Transform::from_translation(center),
+                GlobalTransform::from_translation(center),
+                shape,
+            ))
+            .id();
+        world.entity_mut(head).insert((
+            props,
+            SpringJointState::from_rest(Vec3::NEG_Y, 0.1, Transform::from_xyz(0.0, 1.0, 0.0)),
+            SpringRoot {
+                joints: SpringJoints(vec![head, tail]),
+                colliders: SpringColliders(vec![(collider, shape)]),
+                center_node: SpringCenterNode(None),
+            },
+        ));
+        world.entity_mut(tail).insert(props);
+        RestingOverlapStrand { app, tail }
+    }
+
+    #[test]
+    fn a_resting_segment_overlap_settles_to_a_zero_frame_delta() {
+        let mut strand = resting_overlap_strand();
+        let mut previous = None;
+        for _ in 0..24 {
+            strand.app.update();
+            let tail = strand
+                .app
+                .world()
+                .get::<GlobalTransform>(strand.tail)
+                .unwrap()
+                .translation();
+            if let Some(previous) = previous {
+                assert!(
+                    tail.distance(previous) <= 1e-9,
+                    "resting overlap must not oscillate: {previous:?} -> {tail:?}"
+                );
+            }
+            previous = Some(tail);
+        }
     }
 }

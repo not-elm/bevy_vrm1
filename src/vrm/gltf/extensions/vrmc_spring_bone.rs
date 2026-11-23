@@ -27,18 +27,6 @@ impl VRMCSpringBone {
             .flat_map(|spring| spring.joints.clone())
             .collect()
     }
-
-    pub fn spring_colliders(
-        &self,
-        collider_group_indices: &[usize],
-    ) -> Vec<Collider> {
-        collider_group_indices
-            .iter()
-            .filter_map(|index| self.collider_groups.get(*index))
-            .flat_map(|group| group.colliders.clone())
-            .flat_map(|index| self.colliders.get(index as usize).cloned())
-            .collect()
-    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -127,7 +115,7 @@ impl Default for ColliderShape {
 }
 
 impl ColliderShape {
-    /// Returns the collision vector from the collider to the target position.
+    /// Pushes `next_tail` out of the collider and re-projects it onto the bone-length sphere, handling endpoint and segment contact.
     pub fn apply_collision(
         &self,
         next_tail: &mut Vec3,
@@ -140,19 +128,41 @@ impl ColliderShape {
         let max_collider_scale = scale.abs().max_element();
         match self {
             Self::Sphere(sphere) => {
-                let translation = collider.transform_point(Vec3::from(sphere.offset));
+                let center = collider.transform_point(Vec3::from(sphere.offset));
                 let r = joint_radius + sphere.radius * max_collider_scale;
-                let delta = *next_tail - translation;
-                let distance_squared = delta.length_squared();
-                if distance_squared > 0.0 && distance_squared <= r * r {
-                    let dir = delta.normalize();
-                    let pos_from_collider = translation + dir * r;
-                    *next_tail = head_global_pos
-                        + (pos_from_collider - head_global_pos).normalize() * bone_length;
-                }
+                apply_sphere_collision(next_tail, center, r, head_global_pos, bone_length);
             }
-            Self::Capsule(_) => {
-                //TODO: Not supported yet
+            Self::Capsule(capsule) => {
+                let r = joint_radius + capsule.radius * max_collider_scale;
+                let start = collider.transform_point(Vec3::from(capsule.offset));
+                let end = collider.transform_point(Vec3::from(capsule.tail));
+                apply_capsule_collision(next_tail, start, end, r, head_global_pos, bone_length);
+            }
+        }
+    }
+
+    pub fn apply_endpoint_collision(
+        &self,
+        next_tail: &mut Vec3,
+        collider: &GlobalTransform,
+        head_global_pos: Vec3,
+        joint_radius: f32,
+        bone_length: f32,
+    ) {
+        let (scale, _, _) = collider.to_scale_rotation_translation();
+        let max_collider_scale = scale.abs().max_element();
+        match self {
+            Self::Sphere(sphere) => {
+                let center = collider.transform_point(Vec3::from(sphere.offset));
+                let r = joint_radius + sphere.radius * max_collider_scale;
+                push_out_of_sphere(next_tail, center, r, head_global_pos, bone_length);
+            }
+            Self::Capsule(capsule) => {
+                let r = joint_radius + capsule.radius * max_collider_scale;
+                let start = collider.transform_point(Vec3::from(capsule.offset));
+                let end = collider.transform_point(Vec3::from(capsule.tail));
+                let closest = closest_point_on_segment(*next_tail, start, end);
+                push_out_of_sphere(next_tail, closest, r, head_global_pos, bone_length);
             }
         }
     }
@@ -163,6 +173,203 @@ impl ColliderShape {
             Self::Sphere(sphere) => sphere.radius,
             Self::Capsule(capsule) => capsule.radius,
         }
+    }
+
+    pub fn segment_is_clear(
+        &self,
+        tail: Vec3,
+        collider: &GlobalTransform,
+        head_global_pos: Vec3,
+        joint_radius: f32,
+    ) -> bool {
+        let (scale, _, _) = collider.to_scale_rotation_translation();
+        let max_collider_scale = scale.abs().max_element();
+        // Re-projection onto the bone sphere approaches r from below, so a
+        // resolved contact needs slack to count as clear.
+        let clear_radius = |radius: f32| radius * (1.0 - 1e-2);
+        match self {
+            Self::Sphere(sphere) => {
+                let center = collider.transform_point(Vec3::from(sphere.offset));
+                let r = clear_radius(joint_radius + sphere.radius * max_collider_scale);
+                let closest = closest_point_on_segment(center, head_global_pos, tail);
+                closest.distance_squared(center) >= r * r
+            }
+            Self::Capsule(capsule) => {
+                let r = clear_radius(joint_radius + capsule.radius * max_collider_scale);
+                let start = collider.transform_point(Vec3::from(capsule.offset));
+                let end = collider.transform_point(Vec3::from(capsule.tail));
+                let (closest, collider_point) =
+                    closest_points_between_segments(head_global_pos, tail, start, end);
+                closest.distance_squared(collider_point) >= r * r
+            }
+        }
+    }
+}
+
+fn closest_point_on_segment(
+    point: Vec3,
+    start: Vec3,
+    end: Vec3,
+) -> Vec3 {
+    let segment = end - start;
+    let length_squared = segment.length_squared();
+    if length_squared == 0.0 {
+        return start;
+    }
+    let t = (point - start).dot(segment) / length_squared;
+    start + segment * t.clamp(0.0, 1.0)
+}
+
+fn closest_points_between_segments(
+    p1: Vec3,
+    q1: Vec3,
+    p2: Vec3,
+    q2: Vec3,
+) -> (Vec3, Vec3) {
+    let d1 = q1 - p1;
+    let d2 = q2 - p2;
+    let r = p1 - p2;
+    let a = d1.length_squared();
+    let e = d2.length_squared();
+    let f = d2.dot(r);
+    const EPS: f32 = 1e-12;
+    let (s, t) = if a <= EPS && e <= EPS {
+        (0.0, 0.0)
+    } else if a <= EPS {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(r);
+        if e <= EPS {
+            ((-c / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.dot(d2);
+            let denom = a * e - b * b;
+            let mut s = if denom > EPS {
+                (b * f - c * e) / denom
+            } else {
+                0.0
+            };
+            s = s.clamp(0.0, 1.0);
+            let mut t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            (s, t)
+        }
+    };
+    (p1 + d1 * s, p2 + d2 * t)
+}
+
+fn apply_sphere_collision(
+    next_tail: &mut Vec3,
+    center: Vec3,
+    r: f32,
+    head_global_pos: Vec3,
+    bone_length: f32,
+) {
+    let endpoint_delta = *next_tail - center;
+    if endpoint_delta.length_squared() <= r * r {
+        push_out_of_sphere(next_tail, center, r, head_global_pos, bone_length);
+        return;
+    }
+    let closest = closest_point_on_segment(center, head_global_pos, *next_tail);
+    let delta = closest - center;
+    if delta.length_squared() >= r * r {
+        return;
+    }
+    push_out_of_segment(
+        next_tail,
+        closest,
+        center,
+        delta,
+        r,
+        head_global_pos,
+        bone_length,
+    );
+}
+
+fn apply_capsule_collision(
+    next_tail: &mut Vec3,
+    start: Vec3,
+    end: Vec3,
+    r: f32,
+    head_global_pos: Vec3,
+    bone_length: f32,
+) {
+    let endpoint_closest = closest_point_on_segment(*next_tail, start, end);
+    let endpoint_delta = *next_tail - endpoint_closest;
+    if endpoint_delta.length_squared() <= r * r {
+        push_out_of_sphere(next_tail, endpoint_closest, r, head_global_pos, bone_length);
+        return;
+    }
+    let (closest, collider_point) =
+        closest_points_between_segments(head_global_pos, *next_tail, start, end);
+    let delta = closest - collider_point;
+    if delta.length_squared() >= r * r {
+        return;
+    }
+    push_out_of_segment(
+        next_tail,
+        closest,
+        collider_point,
+        delta,
+        r,
+        head_global_pos,
+        bone_length,
+    );
+}
+
+fn push_out_of_segment(
+    next_tail: &mut Vec3,
+    closest: Vec3,
+    collider_point: Vec3,
+    delta: Vec3,
+    r: f32,
+    head_global_pos: Vec3,
+    bone_length: f32,
+) {
+    if (closest - head_global_pos).length_squared() <= f32::EPSILON {
+        push_out_of_sphere(next_tail, collider_point, r, head_global_pos, bone_length);
+        return;
+    }
+    let distance = delta.length();
+    let Some(direction) = delta
+        .try_normalize()
+        .or_else(|| (head_global_pos - collider_point).try_normalize())
+    else {
+        return;
+    };
+    let displaced = *next_tail + direction * (r - distance);
+    *next_tail = head_global_pos + (displaced - head_global_pos).normalize_or_zero() * bone_length;
+}
+
+fn push_out_of_sphere(
+    next_tail: &mut Vec3,
+    collider_center: Vec3,
+    r: f32,
+    head_global_pos: Vec3,
+    bone_length: f32,
+) {
+    let delta = *next_tail - collider_center;
+    let distance_squared = delta.length_squared();
+    if distance_squared <= r * r {
+        let Some(dir) = delta
+            .try_normalize()
+            .or_else(|| (head_global_pos - collider_center).try_normalize())
+        else {
+            return;
+        };
+        let pos_from_collider = collider_center + dir * r;
+        let from_head = pos_from_collider - head_global_pos;
+        *next_tail = if from_head.length_squared() <= f32::EPSILON {
+            pos_from_collider
+        } else {
+            head_global_pos + from_head.normalize() * bone_length
+        };
     }
 }
 
@@ -196,6 +403,8 @@ mod tests {
     use crate::vrm::gltf::extensions::vrmc_spring_bone::{
         Capsule, ColliderShape, Sphere, VRMCSpringBone,
     };
+    use bevy::math::Vec3;
+    use bevy::prelude::GlobalTransform;
 
     #[test]
     fn deserialize_vrmc_spring_bone() -> TestResult {
@@ -291,5 +500,144 @@ mod tests {
         );
 
         success!()
+    }
+
+    #[test]
+    fn a_capsule_pushes_a_point_inside_it_out_along_the_segment_normal() {
+        let capsule = ColliderShape::Capsule(Capsule {
+            offset: [0.0, -1.0, 0.0],
+            radius: 0.5,
+            tail: [0.0, 1.0, 0.0],
+        });
+        let collider = GlobalTransform::default();
+        let head_global_pos = Vec3::new(0.0, 0.0, 0.0);
+        let mut next_tail = Vec3::new(0.2, 0.0, 0.0);
+
+        capsule.apply_collision(&mut next_tail, &collider, head_global_pos, 0.0, 1.0);
+
+        assert!(
+            next_tail.abs_diff_eq(Vec3::new(1.0, 0.0, 0.0), 1e-6),
+            "next_tail: {next_tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_capsule_pushes_a_point_inside_near_its_end_out_through_the_hemisphere() {
+        let capsule = ColliderShape::Capsule(Capsule {
+            offset: [0.0, -1.0, 0.0],
+            radius: 0.5,
+            tail: [0.0, 1.0, 0.0],
+        });
+        let collider = GlobalTransform::default();
+        let head_global_pos = Vec3::new(0.0, 0.0, 0.0);
+        let mut next_tail = Vec3::new(0.1, 1.2, 0.0);
+
+        capsule.apply_collision(&mut next_tail, &collider, head_global_pos, 0.0, 1.0);
+
+        let delta = Vec3::new(0.1, 0.2, 0.0);
+        let expected = head_global_pos
+            + (Vec3::new(0.0, 1.0, 0.0) + delta.normalize() * 0.5 - head_global_pos).normalize()
+                * 1.0;
+        assert!(
+            next_tail.abs_diff_eq(expected, 1e-6),
+            "next_tail: {next_tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_point_exactly_on_the_capsule_segment_gets_the_fallback_direction() {
+        let capsule = ColliderShape::Capsule(Capsule {
+            offset: [0.0, -1.0, 0.0],
+            radius: 0.5,
+            tail: [0.0, 1.0, 0.0],
+        });
+        let collider = GlobalTransform::default();
+        let head_global_pos = Vec3::new(1.0, 0.0, 0.0);
+        let mut next_tail = Vec3::new(0.0, 0.5, 0.0);
+
+        capsule.apply_collision(&mut next_tail, &collider, head_global_pos, 0.0, 1.0);
+
+        let fallback = (head_global_pos - Vec3::new(0.0, 0.5, 0.0)).normalize();
+        let pos_from_collider = Vec3::new(0.0, 0.5, 0.0) + fallback * 0.5;
+        let expected = head_global_pos + (pos_from_collider - head_global_pos).normalize() * 1.0;
+        assert!(
+            next_tail.abs_diff_eq(expected, 1e-6),
+            "next_tail: {next_tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_point_at_the_sphere_center_gets_the_fallback_direction() {
+        let sphere = ColliderShape::Sphere(Sphere {
+            offset: [0.0; 3],
+            radius: 0.5,
+        });
+        let collider = GlobalTransform::default();
+        let head_global_pos = Vec3::new(1.0, 0.0, 0.0);
+        let mut next_tail = Vec3::new(0.0, 0.0, 0.0);
+
+        sphere.apply_collision(&mut next_tail, &collider, head_global_pos, 0.0, 1.0);
+
+        let fallback = (head_global_pos - Vec3::ZERO).normalize();
+        let pos_from_collider = Vec3::ZERO + fallback * 0.5;
+        let expected = head_global_pos + (pos_from_collider - head_global_pos).normalize() * 1.0;
+        assert!(
+            next_tail.abs_diff_eq(expected, 1e-6),
+            "next_tail: {next_tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_surface_point_coincident_with_the_head_stays_finite() {
+        let sphere = ColliderShape::Sphere(Sphere {
+            offset: [0.0; 3],
+            radius: 0.5,
+        });
+        let collider = GlobalTransform::default();
+        let head_global_pos = Vec3::new(0.5, 0.0, 0.0);
+        let mut next_tail = Vec3::new(0.25, 0.0, 0.0);
+
+        sphere.apply_collision(&mut next_tail, &collider, head_global_pos, 0.0, 1.0);
+
+        assert!(next_tail.is_finite(), "next_tail: {next_tail:?}");
+        assert!(
+            next_tail.abs_diff_eq(head_global_pos, 1e-6),
+            "next_tail: {next_tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_capsule_touching_the_middle_of_a_bone_segment_pushes_its_tail_away() {
+        let capsule = ColliderShape::Capsule(Capsule {
+            offset: [-0.5, 0.5, 0.03],
+            radius: 0.0,
+            tail: [0.5, 0.5, 0.03],
+        });
+        let collider = GlobalTransform::default();
+        let mut next_tail = Vec3::new(0.0, 1.0, 0.0);
+
+        capsule.apply_collision(&mut next_tail, &collider, Vec3::ZERO, 0.05, 1.0);
+
+        assert!(
+            next_tail.z < -0.01 && next_tail.y > 0.99,
+            "next_tail: {next_tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_head_inside_contact_keeps_the_endpoint_behavior() {
+        let sphere = ColliderShape::Sphere(Sphere {
+            offset: [-0.03, -0.01, 0.0],
+            radius: 0.0,
+        });
+        let collider = GlobalTransform::default();
+        let mut next_tail = Vec3::new(0.0, 1.0, 0.0);
+
+        sphere.apply_collision(&mut next_tail, &collider, Vec3::ZERO, 0.5, 1.0);
+
+        assert!(
+            next_tail.abs_diff_eq(Vec3::new(0.0, 1.0, 0.0), 1e-6),
+            "the head-side contact must fall back to the endpoint test: {next_tail:?}"
+        );
     }
 }

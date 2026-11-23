@@ -28,9 +28,13 @@ pub struct PlayVrma {
     /// A time until the existing animation fades out.
     pub transition_duration: Duration,
 
-    /// If true, enqueues the parent VRM entity for the drain-phase spring
-    /// reseed when the animation plays, clearing inertia to prevent snapping
-    /// during animation transitions between differing poses.
+    /// If true, resets all `SpringBone` velocities on the parent VRM entity
+    /// to prevent bouncing caused by sudden bone movements during animation transitions.
+    ///
+    /// The reset is enqueued for the drain-phase spring reseed when the
+    /// animation plays, clearing inertia to prevent snapping during transitions
+    /// between differing poses. Each joint is reseeded at its full live-tail
+    /// state rather than only its velocity.
     pub reset_spring_bones: bool,
 }
 

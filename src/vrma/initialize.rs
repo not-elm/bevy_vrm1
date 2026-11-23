@@ -1,6 +1,6 @@
 //! This module inserts [`SceneRoot`] and VRMA-related components from the loaded [`VrmaHandle`].
 
-use crate::error::vrm_error;
+use crate::error::{vrm_error, vrm_warn};
 use crate::system_param::prelude::*;
 use crate::vrm::Initialized;
 use crate::vrm::humanoid_bone::{HumanoidBoneRegistry, insert_bone_holders};
@@ -95,6 +95,9 @@ fn spawn_vrma(
                 continue;
             }
         };
+        if extensions.vrmc_vrm_animation.humanoid.is_none() {
+            vrm_warn!("[VRMA] No humanoid definition in {name}; skipping bone retargeting");
+        }
         let Some(animation_clip_handle) = vrma.gltf.animations.first() else {
             vrm_error!("[VRMA] Not found vrma animations in {name}");
             continue;
@@ -114,14 +117,23 @@ fn spawn_vrma(
             VrmaDuration(obtain_vrma_duration(&clip_assets, &vrma.gltf.animations)),
             VrmaPath(vrma_path),
             VrmaExpressionRegistry::new(&extensions, &node_assets, &vrma.gltf.nodes),
-            HumanoidBoneRegistry::new(
-                &extensions.vrmc_vrm_animation.humanoid.human_bones,
-                &node_assets,
-                &vrma.gltf.nodes,
-            ),
+            humanoid_registry_from_extensions(&extensions, &node_assets, &vrma.gltf.nodes),
             VrmaPlaybackState::default(),
         ));
     }
+}
+
+/// An omitted `humanoid` is valid VRMA: keep the rig loadable and leave its
+/// bone registry empty so no humanoid curves are retargeted.
+fn humanoid_registry_from_extensions(
+    extensions: &VrmaExtensions,
+    node_assets: &Assets<GltfNode>,
+    nodes: &[Handle<GltfNode>],
+) -> HumanoidBoneRegistry {
+    let Some(humanoid) = extensions.vrmc_vrm_animation.humanoid.as_ref() else {
+        return HumanoidBoneRegistry::default();
+    };
+    HumanoidBoneRegistry::new(&humanoid.human_bones, node_assets, nodes)
 }
 
 /// Captures the source rig's rest pose, puts the bone markers and holders on
@@ -217,6 +229,19 @@ mod tests {
         let handle = clips.add(clip);
 
         assert_eq!(obtain_vrma_duration(&clips, &[handle]), Duration::MAX);
+    }
+
+    #[test]
+    fn a_vrma_without_humanoid_keeps_an_empty_bone_registry() -> crate::tests::TestResult {
+        use crate::success;
+
+        let extensions: VrmaExtensions = serde_json::from_value(serde_json::json!({
+            "VRMC_vrm_animation": { "specVersion": "1.0" }
+        }))?;
+        let node_assets = Assets::<GltfNode>::default();
+        let registry = humanoid_registry_from_extensions(&extensions, &node_assets, &[]);
+        assert!(registry.is_empty());
+        success!()
     }
 
     #[test]

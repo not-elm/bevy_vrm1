@@ -19,8 +19,11 @@ pub(crate) struct VrmaHumanoid {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct VRMCVrmAnimation {
+    #[serde(default)]
     pub expressions: Option<VrmaExpressions>,
-    pub humanoid: VrmaHumanoid,
+    /// Optional per the `VRMC_vrm_animation` spec; a lookAt-only VRMA is valid.
+    #[serde(default)]
+    pub humanoid: Option<VrmaHumanoid>,
     #[serde(rename = "specVersion")]
     pub spec_version: Option<String>,
 }
@@ -40,5 +43,36 @@ impl VrmaExtensions {
 
     pub fn from_gltf(gltf: &Gltf) -> AppResult<Self> {
         Self::new(obtain_extensions(gltf)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::success;
+    use crate::tests::TestResult;
+
+    #[test]
+    fn deserialize_vrma_animation_with_only_a_spec_version() -> TestResult {
+        let extensions: VrmaExtensions = serde_json::from_value(serde_json::json!({
+            "VRMC_vrm_animation": { "specVersion": "1.0" }
+        }))?;
+
+        assert!(extensions.vrmc_vrm_animation.humanoid.is_none());
+        assert!(extensions.vrmc_vrm_animation.expressions.is_none());
+        success!()
+    }
+
+    #[test]
+    fn deserialize_a_look_at_only_vrma_animation_without_humanoid() -> TestResult {
+        let extensions: VrmaExtensions = serde_json::from_value(serde_json::json!({
+            "VRMC_vrm_animation": {
+                "specVersion": "1.0",
+                "lookAt": { "type": "expression" }
+            }
+        }))?;
+
+        assert!(extensions.vrmc_vrm_animation.humanoid.is_none());
+        success!()
     }
 }

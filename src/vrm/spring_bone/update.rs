@@ -1,6 +1,9 @@
 use crate::system_set::VrmSystemSets;
 use crate::vrm::gltf::extensions::vrmc_spring_bone::ColliderShape;
-use crate::vrm::spring_bone::{SpringJointProps, SpringJointState, SpringRoot};
+use crate::vrm::spring_bone::{
+    ReseedQueue, SpringJointProps, SpringJointState, SpringRoot, drain_reseed_queue,
+    global_to_center_local,
+};
 use bevy::app::App;
 use bevy::math::{Mat4, Vec3};
 use bevy::prelude::*;
@@ -13,6 +16,12 @@ impl Plugin for SpringBoneUpdatePlugin {
         &self,
         app: &mut App,
     ) {
+        app.init_resource::<ReseedQueue>().add_systems(
+            PostUpdate,
+            drain_reseed_queue
+                .after(VrmSystemSets::PropagateAfterExpressions)
+                .before(VrmSystemSets::SpringBone),
+        );
         app.add_systems(
             PostUpdate,
             update_spring_bones
@@ -128,17 +137,6 @@ fn center_local_to_global(
 ) -> Vec3 {
     if let Some(gtf) = center_gtf.as_ref() {
         gtf.transform_point(tail_pos)
-    } else {
-        tail_pos
-    }
-}
-
-fn global_to_center_local(
-    tail_pos: Vec3,
-    center_gtf: &Option<GlobalTransform>,
-) -> Vec3 {
-    if let Some(gtf) = center_gtf.as_ref() {
-        gtf.to_matrix().inverse().transform_point3(tail_pos)
     } else {
         tail_pos
     }
